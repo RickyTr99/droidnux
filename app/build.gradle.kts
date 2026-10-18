@@ -1,6 +1,19 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+}
+
+// Release signing: set "signing.properties" in local.properties to the path of a file with
+// storeFile, storePassword, keyAlias and keyPassword. Without it, release builds are unsigned.
+// Debug builds use the standard debug key (~/.android/debug.keystore); CI restores the same one.
+val signingProps = Properties().apply {
+    val local = rootProject.file("local.properties")
+    if (local.exists()) {
+        val path = Properties().apply { local.inputStream().use { load(it) } }.getProperty("signing.properties")
+        if (path != null && file(path).exists()) file(path).inputStream().use { load(it) }
+    }
 }
 
 android {
@@ -19,11 +32,23 @@ android {
         }
     }
 
+    signingConfigs {
+        if (!signingProps.isEmpty) {
+            create("release") {
+                storeFile = file(signingProps.getProperty("storeFile"))
+                storePassword = signingProps.getProperty("storePassword")
+                keyAlias = signingProps.getProperty("keyAlias")
+                keyPassword = signingProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
         }
         release {
+            if (!signingProps.isEmpty) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")

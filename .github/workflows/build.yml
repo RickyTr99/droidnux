@@ -47,6 +47,13 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # The same debug key as the developer's PC, so CI APKs install over local builds.
+      - name: Debug key
+        env:
+          DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
+        if: env.DEBUG_KEYSTORE != ''
+        run: mkdir -p ~/.android && echo "$DEBUG_KEYSTORE" | base64 -d > ~/.android/debug.keystore
+
       - name: Build debug APK
         env:
           DROIDNUX_CCACHE: ccache
