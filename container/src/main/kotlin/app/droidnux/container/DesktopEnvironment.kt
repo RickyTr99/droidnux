@@ -98,9 +98,11 @@ object DesktopEnvironment {
                 export MESA_LOADER_DRIVER_OVERRIDE=zink
                 export GALLIUM_DRIVER=zink
             else
-                # Debian's llvmpipe hangs creating its screen when it presents
-                # through DRI3 (kopper); GTK opens GLX at startup, so the whole
-                # session would stop. Plain software GLX, as before DRI3.
+                # With DRI3 but no device, Debian's GLX tries Zink; with no
+                # Vulkan driver Zink fails and Mesa 25.0 deadlocks on its own
+                # instance_lock in the error path (zink_destroy_screen). GTK
+                # opens GLX at startup, so the whole session would stop.
+                # Plain software GLX (llvmpipe over MIT-SHM) instead.
                 export LIBGL_DRI3_DISABLE=1
             fi
             mkdir -p "${'$'}XDG_RUNTIME_DIR" && chmod 700 "${'$'}XDG_RUNTIME_DIR"
