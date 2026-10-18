@@ -151,7 +151,9 @@ public:
         ANativeWindow_acquire(window);
         window_ = window;
         surface_ = ASurfaceControl_createFromWindow(window, "droidnux-desktop");
-        cursorSurface_ = surface_ ? ASurfaceControl_create(surface_, "droidnux-cursor") : nullptr;
+        // A sibling of the desktop layer, not a child: children inherit the
+        // desktop's buffer-to-window scale, which applyCursorLocked applies itself.
+        cursorSurface_ = surface_ ? ASurfaceControl_createFromWindow(window, "droidnux-cursor") : nullptr;
         if (surface_ == nullptr || cursorSurface_ == nullptr) {
             LOGE("cannot create surface controls");
             detachLocked();

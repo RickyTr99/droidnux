@@ -47,7 +47,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
         window.setDecorFitsSystemWindows(false)
 
-        surfaceView = SurfaceView(this).apply {
+        surfaceView = DesktopSurfaceView().apply {
             holder.addCallback(this@DesktopActivity)
             isFocusable = true
             isFocusableInTouchMode = true
@@ -122,18 +122,30 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     // -- Keyboard ----------------------------------------------------------
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        // Physical keys go to X by scan code: the X keymap (setxkbmap) applies
-        // the layout, as on a PC. Volume keys and the virtual Back stay with Android.
+    /**
+     * Takes physical keys before the IME sees them: some IMEs (Samsung Keyboard)
+     * consume hardware key events and re-inject copies without a scan code.
+     */
+    private inner class DesktopSurfaceView : SurfaceView(this@DesktopActivity) {
+        override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean =
+            sendPhysicalKey(event) || super.dispatchKeyEventPreIme(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        sendPhysicalKey(event) || super.dispatchKeyEvent(event)
+
+    /**
+     * Physical keys go to X by scan code: the X keymap (setxkbmap) applies the
+     * layout, as on a PC. Volume and power keys stay with Android.
+     */
+    private fun sendPhysicalKey(event: KeyEvent): Boolean {
         val scanCode = event.scanCode
-        if (scanCode > 0 && X11Server.running && !isSystemKey(event.keyCode)) {
-            when (event.action) {
-                KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) X11Server.key(scanCode, true)
-                KeyEvent.ACTION_UP -> X11Server.key(scanCode, false)
-            }
-            return true
+        if (scanCode <= 0 || !X11Server.running || isSystemKey(event.keyCode)) return false
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) X11Server.key(scanCode, true)
+            KeyEvent.ACTION_UP -> X11Server.key(scanCode, false)
         }
-        return super.dispatchKeyEvent(event)
+        return true
     }
 
     private fun isSystemKey(keyCode: Int) = keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
