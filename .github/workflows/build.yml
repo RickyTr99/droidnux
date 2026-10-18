@@ -26,13 +26,15 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
-
       - name: Install NDK and CMake
         run: |
           NDK=$(sed -n 's/^ndk = "\(.*\)"/\1/p' gradle/libs.versions.toml)
           CMAKE=$(sed -n 's/^cmake = "\(.*\)"/\1/p' gradle/libs.versions.toml)
-          sdkmanager --install "ndk;$NDK" "cmake;$CMAKE" "platforms;android-37.0" "build-tools;36.1.0" > /dev/null
+          # The runner image ships the Android SDK (ANDROID_HOME) and its cmdline-tools.
+          SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -n1)
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "ndk;$NDK" "cmake;$CMAKE" "platforms;android-37.0" "build-tools;36.1.0" > /dev/null
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
 
       - name: ccache
         uses: actions/cache@v4
