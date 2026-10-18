@@ -77,7 +77,6 @@ class ComponentInstaller(private val downloadDir: File) {
             }
             parent = parent.parentFile
         }
-        dir.parentFile?.mkdirs()
         return dir
     }
 

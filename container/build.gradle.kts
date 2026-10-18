@@ -9,6 +9,7 @@ android {
 
     defaultConfig {
         minSdk = libs.versions.minSdk.get().toInt()
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -41,4 +42,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.commons.compress)
     implementation(libs.xz)
+
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }

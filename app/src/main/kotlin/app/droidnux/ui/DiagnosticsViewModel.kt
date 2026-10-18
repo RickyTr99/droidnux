@@ -120,6 +120,7 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
                     _state.update { it.copy(rootfs = InstallState.Installing(progress)) }
                 }
                 _state.update { it.copy(rootfs = InstallState.Installed) }
+                refreshMesa() // a fresh rootfs has no components
             } catch (e: CancellationException) {
                 _state.update { it.copy(rootfs = InstallState.NotInstalled) }
                 throw e

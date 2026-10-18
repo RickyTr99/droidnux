@@ -57,7 +57,7 @@ static struct dmabuf* pixmapDmabuf(PixmapPtr pixmap) {
 
 static void dmabufFree(struct dmabuf* buffer) {
     if (buffer->map != MAP_FAILED) munmap(buffer->map, buffer->size);
-    close(buffer->fd);
+    if (buffer->fd >= 0) close(buffer->fd);
     free(buffer);
 }
 
@@ -110,7 +110,6 @@ static PixmapPtr pixmapFromFds(ScreenPtr pScreen, CARD8 num_fds, const int* fds,
     buffer->fd = dup(fds[0]);
     if (buffer->map == MAP_FAILED || buffer->fd < 0) {
         log(ERROR, "DRI3: cannot map buffer: %s", strerror(errno));
-        if (buffer->fd < 0) buffer->fd = open("/dev/null", O_RDONLY); /* so dmabufFree can close it */
         dmabufFree(buffer);
         return NULL;
     }

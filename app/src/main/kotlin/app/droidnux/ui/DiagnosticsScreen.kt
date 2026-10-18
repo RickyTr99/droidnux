@@ -80,7 +80,6 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
                     name = state.distro.displayName,
                     sizeBytes = state.distro.sizeBytes,
                     state = state.rootfs,
-                    installedLabel = stringResource(R.string.status_installed),
                     onInstall = viewModel::install,
                     onCancel = viewModel::cancelInstall,
                 )
@@ -118,8 +117,7 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
                             name = stringResource(R.string.gpu_mesa, Component.MESA.version),
                             sizeBytes = Component.MESA.sizeBytes,
                             state = state.mesa,
-                            installedLabel = stringResource(R.string.status_installed),
-                            onInstall = viewModel::installMesa,
+                                    onInstall = viewModel::installMesa,
                             onCancel = viewModel::cancelMesa,
                         )
                     }
@@ -150,7 +148,6 @@ private fun InstallSection(
     name: String,
     sizeBytes: Long,
     state: InstallState,
-    installedLabel: String,
     onInstall: () -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -187,7 +184,7 @@ private fun InstallSection(
             ActionRow { TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) } }
         }
         InstallState.Installed -> {
-            Status(installedLabel)
+            Status(stringResource(R.string.status_installed))
             ActionRow { FilledTonalButton(onClick = onInstall) { Text(stringResource(R.string.action_reinstall)) } }
         }
         is InstallState.Failed -> {
