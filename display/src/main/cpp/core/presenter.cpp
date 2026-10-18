@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
@@ -188,6 +189,7 @@ public:
 
     bool present(const void* pixels, uint32_t width, uint32_t height, uint32_t stride, dnx_pixel_format,
                  const dnx_box* rects, int count) {
+        auto start = std::chrono::steady_clock::now();
         std::lock_guard lock(mutex_);
         if (width != width_ || height != height_) {
             reallocateFramesLocked(width, height);
@@ -249,6 +251,11 @@ public:
         onScreen_ = index;
         pending_ = false;
         frameCount_++;
+        auto ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+        frameTimeTotalNs_ += ns;
+        uint64_t max = frameTimeMaxNs_.load();
+        while (ns > max && !frameTimeMaxNs_.compare_exchange_weak(max, ns)) {}
         return true;
     }
 
@@ -283,6 +290,8 @@ public:
     }
 
     uint64_t frameCount() const { return frameCount_.load(); }
+    uint64_t frameTimeTotalNs() const { return frameTimeTotalNs_.load(); }
+    uint64_t takeFrameTimeMaxNs() { return frameTimeMaxNs_.exchange(0); }
 
     static void onComplete(void* context, ASurfaceTransactionStats* stats) {
         auto* completion = static_cast<Completion*>(context);
@@ -507,6 +516,8 @@ private:
     bool geometryDirty_ = true;
     bool pending_ = false;
     std::atomic<uint64_t> frameCount_{0};
+    std::atomic<uint64_t> frameTimeTotalNs_{0};
+    std::atomic<uint64_t> frameTimeMaxNs_{0};
 
     CursorBuffer cursors_[2];
     int cursorOnScreen_ = -1;
@@ -558,5 +569,7 @@ void dnx_presenter_set_vsync_callback(dnx_vsync_callback callback, void* data) {
 void dnx_presenter_request_vsync(void) { vsyncClock().request(); }
 int dnx_presenter_refresh_rate(void) { return vsyncClock().refreshRate(); }
 uint64_t dnx_presenter_frame_count(void) { return presenter().frameCount(); }
+uint64_t dnx_presenter_frame_time_total_ns(void) { return presenter().frameTimeTotalNs(); }
+uint64_t dnx_presenter_take_frame_time_max_ns(void) { return presenter().takeFrameTimeMaxNs(); }
 
 }  // extern "C"

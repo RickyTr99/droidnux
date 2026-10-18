@@ -62,6 +62,16 @@ Java_app_droidnux_display_Presenter_nativeFrameCount(JNIEnv*, jclass) {
     return static_cast<jlong>(dnx_presenter_frame_count());
 }
 
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_droidnux_display_Presenter_nativeFrameTimeTotal(JNIEnv*, jclass) {
+    return static_cast<jlong>(dnx_presenter_frame_time_total_ns());
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_app_droidnux_display_Presenter_nativeTakeFrameTimeMax(JNIEnv*, jclass) {
+    return static_cast<jlong>(dnx_presenter_take_frame_time_max_ns());
+}
+
 // -- X11 front-end -----------------------------------------------------------
 
 #if DROIDNUX_HAVE_X11

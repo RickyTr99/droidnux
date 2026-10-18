@@ -208,11 +208,22 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     // -- Debug overlay -----------------------------------------------------
 
     private var lastFrames = 0L
+    private var lastFrameTime = 0L
     private val overlayUpdater = object : Runnable {
         override fun run() {
             val frames = Presenter.frameCount
-            overlay?.text = "${frames - lastFrames} fps · desktop ${(scale * 100).toInt()}%"
+            val frameTime = Presenter.frameTimeTotalNanos
+            val maxMs = Presenter.takeFrameTimeMaxNanos() / 1e6
+            val count = frames - lastFrames
+            // Frame time: copying the damage and submitting it, not the whole pipeline.
+            val time = if (count > 0) {
+                String.format(Locale.ROOT, " · frame %.1f ms (max %.1f)", (frameTime - lastFrameTime) / 1e6 / count, maxMs)
+            } else {
+                ""
+            }
+            overlay?.text = "$count fps$time · desktop ${(scale * 100).toInt()}%"
             lastFrames = frames
+            lastFrameTime = frameTime
             handler.postDelayed(this, 1000)
         }
     }
