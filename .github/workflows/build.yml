@@ -61,3 +61,21 @@ jobs:
           name: droidnux-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      # X server libraries and generated headers, so Windows hosts can build
+      # the X11 front-end without a Linux toolchain (tools/fetch-x11-prebuilt.sh).
+      - name: Package X server prebuilt
+        run: |
+          B=$(ls -d display/.cxx/Debug/*/arm64-v8a/termux-x11 | head -n1)
+          OUT=prebuilt/x11/arm64-v8a
+          mkdir -p "$OUT/lib" "$OUT/include"
+          find "$B" -name '*.a' -exec cp {} "$OUT/lib/" \;
+          (cd "$B" && find -L . -name '*.h' -not -path '*/CMakeFiles/*' -print0 | tar --null -chf - -T -) | tar -C "$OUT/include" -xf -
+          git -C third_party/termux-x11 rev-parse HEAD > "$OUT/termux-x11.commit"
+          echo "$(ls "$OUT/lib" | wc -l) libraries, $(find "$OUT/include" -name '*.h' | wc -l) headers"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x11-prebuilt-arm64-v8a
+          path: prebuilt/x11
+          retention-days: 30
