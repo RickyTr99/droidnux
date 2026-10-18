@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="phase0_title">Diagnostica</string>
+    <string name="phase0_subtitle">Fase 0 · fondamenta</string>
+    <string name="section_rootfs">File system della distro</string>
+    <string name="section_display">Core di presentazione</string>
+    <string name="action_install">Installa</string>
+    <string name="action_reinstall">Reinstalla</string>
+    <string name="action_cancel">Annulla</string>
+    <string name="action_run">Esegui uname -a</string>
+    <string name="status_checking">Controllo…</string>
+    <string name="status_not_installed">Non installato · %1$s</string>
+    <string name="status_installed">Installato</string>
+    <string name="status_downloading">Download %1$s / %2$s</string>
+    <string name="status_verifying">Verifica del checksum…</string>
+    <string name="status_extracting">Estrazione… %1$d%%</string>
+    <string name="status_failed">Errore: %1$s</string>
+    <string name="container_hint">Prima installa il file system della distro.</string>
+    <string name="exit_code">Codice di uscita %1$d</string>
+</resources>

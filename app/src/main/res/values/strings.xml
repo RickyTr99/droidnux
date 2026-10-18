@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">DroidNux</string>
+    <string name="phase0_title">Diagnostics</string>
+    <string name="phase0_subtitle">Phase 0 · foundations</string>
+    <string name="section_proot">proot</string>
+    <string name="section_rootfs">Root filesystem</string>
+    <string name="section_container">Container</string>
+    <string name="section_display">Display core</string>
+    <string name="action_install">Install</string>
+    <string name="action_reinstall">Reinstall</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_run">Run uname -a</string>
+    <string name="status_checking">Checking…</string>
+    <string name="status_not_installed">Not installed · %1$s</string>
+    <string name="status_installed">Installed</string>
+    <string name="status_downloading">Downloading %1$s / %2$s</string>
+    <string name="status_verifying">Verifying checksum…</string>
+    <string name="status_extracting">Extracting… %1$d%%</string>
+    <string name="status_failed">Failed: %1$s</string>
+    <string name="container_hint">Install the root filesystem first.</string>
+    <string name="exit_code">Exit code %1$d</string>
+    <string name="action_buffer_spike">Buffer spike</string>
+</resources>
