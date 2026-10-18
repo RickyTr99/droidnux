@@ -40,6 +40,8 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import app.droidnux.R
 import app.droidnux.container.CommandResult
 import app.droidnux.container.InstallProgress
+import app.droidnux.desktop.DesktopActivity
+import app.droidnux.display.X11Server
 import app.droidnux.spike.BufferSpikeActivity
 
 @Composable
@@ -93,6 +95,12 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
                         stringResource(R.string.container_hint),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                }
+            }
+
+            if (state.rootfs == RootfsState.Installed) {
+                Section(stringResource(R.string.section_desktop)) {
+                    DesktopSection(state, onInstall = viewModel::installDesktop)
                 }
             }
 
@@ -153,6 +161,34 @@ private fun RootfsSection(state: DiagnosticsState, onInstall: () -> Unit, onCanc
             Status(stringResource(R.string.status_failed, rootfs.message), error = true)
             ActionRow { Button(onClick = onInstall) { Text(stringResource(R.string.action_install)) } }
         }
+    }
+}
+
+@Composable
+private fun DesktopSection(state: DiagnosticsState, onInstall: () -> Unit) {
+    val context = LocalContext.current
+    when {
+        !X11Server.available -> Status(stringResource(R.string.desktop_no_x11), error = true)
+        state.desktopInstalling -> {
+            Status(stringResource(R.string.desktop_installing))
+            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+        }
+        state.desktopInstalled -> {
+            Status(stringResource(R.string.desktop_installed))
+            ActionRow {
+                Button(onClick = {
+                    context.startActivity(Intent(context, DesktopActivity::class.java))
+                }) { Text(stringResource(R.string.action_open_desktop)) }
+            }
+        }
+        else -> {
+            Status(stringResource(R.string.desktop_not_installed))
+            ActionRow { Button(onClick = onInstall) { Text(stringResource(R.string.action_install_desktop)) } }
+        }
+    }
+    if (state.desktopLog.isNotEmpty()) {
+        Spacer(Modifier.padding(top = 12.dp))
+        Mono(state.desktopLog)
     }
 }
 

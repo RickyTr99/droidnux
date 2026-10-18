@@ -46,6 +46,8 @@ class Proot(context: Context) {
             for (bind in DEFAULT_BINDS) {
                 add("-b"); add(bind)
             }
+            // Android has no /dev/shm; glibc shm_open() needs one.
+            add("-b"); add("${File(rootfs, SHM_DIR).apply { mkdirs() }.absolutePath}:/dev/shm")
             add("-w"); add(workDir)
             add("/usr/bin/env"); add("-i")
             addAll(GUEST_ENVIRONMENT.map { (k, v) -> "$k=$v" })
@@ -54,6 +56,7 @@ class Proot(context: Context) {
 
     private companion object {
         val DEFAULT_BINDS = listOf("/dev", "/proc", "/sys")
+        const val SHM_DIR = "tmp/.droidnux-shm"
 
         val GUEST_ENVIRONMENT = linkedMapOf(
             "HOME" to "/root",

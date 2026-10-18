@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.droidnux.container.CommandResult
 import app.droidnux.container.Container
+import app.droidnux.container.DesktopEnvironment
 import app.droidnux.container.Distro
 import app.droidnux.container.InstallProgress
 import app.droidnux.display.DisplayCore
@@ -33,6 +34,10 @@ data class DiagnosticsState(
     val running: Boolean = false,
     val guest: CommandResult? = null,
     val display: String? = null,
+    val desktopInstalled: Boolean = false,
+    val desktopInstalling: Boolean = false,
+    /** Last lines of the desktop install log. */
+    val desktopLog: String = "",
 )
 
 /** Phase 0 checks: proot runs, the rootfs installs, a command runs inside it. */
@@ -52,13 +57,42 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             val display = withContext(Dispatchers.Default) {
                 runCatching { DisplayCore.probe() }.getOrElse { it.toString() }
             }
+            val desktop = withContext(Dispatchers.IO) {
+                DesktopEnvironment.isInstalled(container.installer.rootfsDir(_state.value.distro))
+            }
             _state.update {
                 it.copy(
                     proot = proot,
                     rootfs = if (installed) RootfsState.Installed else RootfsState.NotInstalled,
                     display = display,
+                    desktopInstalled = desktop,
                 )
             }
+        }
+    }
+
+    /** Installs XFCE in the container with apt, streaming the log. */
+    fun installDesktop() {
+        if (_state.value.desktopInstalling) return
+        val distro = _state.value.distro
+        viewModelScope.launch {
+            _state.update { it.copy(desktopInstalling = true, desktopLog = "") }
+            val ok = withContext(Dispatchers.IO) {
+                val lines = ArrayDeque<String>()
+                var success = false
+                runCatching {
+                    val process = container.spawnShell(distro, DesktopEnvironment.installScript())
+                    process.inputStream.bufferedReader().forEachLine { line ->
+                        if (line == "DROIDNUX_INSTALL_OK") success = true
+                        lines.addLast(line)
+                        if (lines.size > LOG_LINES) lines.removeFirst()
+                        _state.update { it.copy(desktopLog = lines.joinToString("\n")) }
+                    }
+                    process.waitFor()
+                }.onFailure { e -> _state.update { it.copy(desktopLog = e.toString()) } }
+                success && DesktopEnvironment.isInstalled(container.installer.rootfsDir(distro))
+            }
+            _state.update { it.copy(desktopInstalling = false, desktopInstalled = ok) }
         }
     }
 
@@ -96,3 +130,5 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 }
+
+private const val LOG_LINES = 8

@@ -17,4 +17,13 @@
     <string name="status_failed">Errore: %1$s</string>
     <string name="container_hint">Prima installa il file system della distro.</string>
     <string name="exit_code">Codice di uscita %1$d</string>
+    <string name="desktop_not_installed">XFCE non è ancora installato.</string>
+    <string name="desktop_installed">XFCE è installato.</string>
+    <string name="desktop_no_x11">Questa build non ha il server X: usa una build della CI.</string>
+    <string name="action_install_desktop">Installa XFCE</string>
+    <string name="action_open_desktop">Apri il desktop</string>
+    <string name="desktop_installing">Installazione…</string>
+    <string name="session_channel">Sessione desktop</string>
+    <string name="session_running">Desktop Linux in esecuzione</string>
+    <string name="session_stop">Ferma</string>
 </resources>

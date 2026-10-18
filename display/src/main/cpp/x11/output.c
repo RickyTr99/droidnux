@@ -31,6 +31,7 @@
 #include "misyncshm.h"
 #include "opaque.h"
 #include "present.h"
+#include "present_priv.h"
 #include "randrstr.h"
 #include "shmint.h"
 #include "fbconfigs.h"
@@ -41,7 +42,6 @@
 #define log(prio, ...) __android_log_print(ANDROID_LOG_##prio, "DroidNux.X11", __VA_ARGS__)
 
 extern DeviceIntPtr lorieMouse;
-extern void xorgGlxCreateVendor(void);
 
 ScreenPtr pScreenPtr;
 

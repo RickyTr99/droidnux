@@ -21,4 +21,14 @@
     <string name="container_hint">Install the root filesystem first.</string>
     <string name="exit_code">Exit code %1$d</string>
     <string name="action_buffer_spike">Buffer spike</string>
+    <string name="section_desktop">Desktop</string>
+    <string name="desktop_not_installed">XFCE is not installed yet.</string>
+    <string name="desktop_installed">XFCE is installed.</string>
+    <string name="desktop_no_x11">This build has no X server: use a CI build.</string>
+    <string name="action_install_desktop">Install XFCE</string>
+    <string name="action_open_desktop">Open desktop</string>
+    <string name="desktop_installing">Installing…</string>
+    <string name="session_channel">Desktop session</string>
+    <string name="session_running">Linux desktop running</string>
+    <string name="session_stop">Stop</string>
 </resources>
