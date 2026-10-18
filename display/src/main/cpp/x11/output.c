@@ -74,7 +74,6 @@ static void VoidNoop() {}
 
 bool lorieConnectionAlive(void) { return true; }
 bool lorieRendererAvailable(void) { return true; }
-void lorieRecheckGpuCopies(void) {}
 Bool lorieGpuCopyIsDone(uint64_t serial) { return TRUE; }
 void lorieGpuCopyAck(PixmapPtr pixmap, void* dst_buffer) {}
 Bool lorieTryScheduleGpuCopy(PixmapPtr pixmap, PixmapPtr dst, RegionPtr update, int16_t x_off, int16_t y_off,
