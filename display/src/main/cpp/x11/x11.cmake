@@ -109,7 +109,9 @@ set_source_files_properties(${TX11_DIR}/lorie/workqueue.cpp PROPERTIES
     COMPILE_OPTIONS "-DHAVE_DIX_CONFIG_H;-D_XSERVER64=1;-fno-exceptions;-fno-rtti;-Wno-error")
 target_compile_definitions(droidnux-display PRIVATE DROIDNUX_HAVE_X11=1)
 target_include_directories(droidnux-display PRIVATE ${CMAKE_CURRENT_LIST_DIR})
-target_link_options(droidnux-display PRIVATE -Wl,--no-undefined)
+# --gc-sections drops the unused client-side libX11 code (and its references
+# to libX11 functions a server does not have) that some archives carry.
+target_link_options(droidnux-display PRIVATE -Wl,--no-undefined -Wl,--gc-sections)
 target_link_libraries(droidnux-display PRIVATE
     -Wl,--start-group ${X11_SERVER_LIBS} ${X11_DEPENDENCY_LIBS} -Wl,--end-group
     mediandk m z GLESv2)
