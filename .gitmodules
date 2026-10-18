@@ -1,3 +1,6 @@
 [submodule "third_party/proot"]
 	path = third_party/proot
 	url = https://github.com/termux/proot.git
+[submodule "third_party/termux-x11"]
+	path = third_party/termux-x11
+	url = https://github.com/termux/termux-x11.git

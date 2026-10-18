@@ -15,6 +15,10 @@ android {
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_static")
+                // CI sets DROIDNUX_CCACHE=ccache to cache native builds.
+                System.getenv("DROIDNUX_CCACHE")?.let {
+                    arguments += listOf("-DCMAKE_C_COMPILER_LAUNCHER=$it", "-DCMAKE_CXX_COMPILER_LAUNCHER=$it")
+                }
                 cppFlags += listOf("-std=c++20")
             }
         }
