@@ -6,6 +6,7 @@
 #include <android/looper.h>
 #include <android/surface_control.h>
 #include <poll.h>
+#include <pthread.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
 
@@ -57,6 +58,7 @@ public:
 
 private:
     void run() {
+        pthread_setname_np(pthread_self(), "dnx-present");
         ALooper* looper = ALooper_prepare(0);
         choreographer_ = AChoreographer_getInstance();
         ALooper_addFd(looper, eventFd_, ALOOPER_POLL_CALLBACK, ALOOPER_EVENT_INPUT, onRequest, this);

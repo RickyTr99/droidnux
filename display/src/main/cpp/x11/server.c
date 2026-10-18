@@ -74,6 +74,7 @@ static int server_argc;
 
 static void* server_main(void* unused) {
     (void) unused;
+    pthread_setname_np(pthread_self(), "dnx-xserver");
     int status = dix_main(server_argc, server_argv, (char*[]) {NULL});
     log(ERROR, "X server exited with %d", status);
     running = false;
