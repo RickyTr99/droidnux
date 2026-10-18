@@ -81,6 +81,10 @@ Bool lorieTryScheduleGpuCopy(PixmapPtr pixmap, PixmapPtr dst, RegionPtr update, 
     return FALSE;
 }
 
+/* Keyboard focus moved between windows (patched enterleave.c). Will drive the
+ * soft keyboard; nothing to do yet. */
+void DDXNotifyFocusChanged(void) {}
+
 /* -- DDX entry points ----------------------------------------------------- */
 
 void OsVendorInit(void) {}

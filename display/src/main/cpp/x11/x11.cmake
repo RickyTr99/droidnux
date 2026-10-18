@@ -12,7 +12,9 @@ set(TX11_DIR ${CMAKE_CURRENT_LIST_DIR}/../../../../../third_party/termux-x11/lor
 get_filename_component(TX11_DIR ${TX11_DIR} ABSOLUTE)
 get_filename_component(X11_PREBUILT_DIR ${CMAKE_CURRENT_LIST_DIR}/../../../../prebuilt/x11/${ANDROID_ABI} ABSOLUTE)
 
-# Linked whole: the DDX and the server reference each other in both directions.
+# Linked as a group: the DDX and the server libraries reference each other in
+# both directions, and only the objects actually needed are pulled in (some
+# archives carry client-side libX11 code a server never uses).
 set(X11_SERVER_LIBS
     tirpc Xdmcp Xau pixman Xfont2 fontenc xshmfence xkbcomp
     xserver_glx xserver_glxvnd xserver_fb xserver_mi xserver_dix xserver_composite
@@ -86,6 +88,7 @@ set(X11_SOURCES
     ${TX11_DIR}/lorie/shm/shmem.c
     ${TX11_DIR}/lorie/InitInput.c
     ${TX11_DIR}/lorie/InputXKB.c
+    ${TX11_DIR}/lorie/workqueue.cpp
     ${CMAKE_CURRENT_LIST_DIR}/output.c
     ${CMAKE_CURRENT_LIST_DIR}/server.c)
 
@@ -97,12 +100,16 @@ set(X11_C_OPTIONS
     -Wno-macro-redefined -Wno-unused-function -Wno-unused-variable)
 
 target_sources(droidnux-display PRIVATE ${X11_SOURCES})
-set_source_files_properties(${X11_SOURCES} PROPERTIES
-    INCLUDE_DIRECTORIES "${X11_INCLUDE_DIRS}"
-    COMPILE_OPTIONS "${X11_C_OPTIONS}")
+set(X11_C_SOURCES ${X11_SOURCES})
+list(FILTER X11_C_SOURCES INCLUDE REGEX "[.]c$")
+set_source_files_properties(${X11_SOURCES} PROPERTIES INCLUDE_DIRECTORIES "${X11_INCLUDE_DIRS}")
+set_source_files_properties(${X11_C_SOURCES} PROPERTIES COMPILE_OPTIONS "${X11_C_OPTIONS}")
+# workqueue.cpp (Termux:X11's thread-safe work queue): same defines, C++.
+set_source_files_properties(${TX11_DIR}/lorie/workqueue.cpp PROPERTIES
+    COMPILE_OPTIONS "-DHAVE_DIX_CONFIG_H;-D_XSERVER64=1;-fno-exceptions;-fno-rtti;-Wno-error")
 target_compile_definitions(droidnux-display PRIVATE DROIDNUX_HAVE_X11=1)
 target_include_directories(droidnux-display PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 target_link_options(droidnux-display PRIVATE -Wl,--no-undefined)
 target_link_libraries(droidnux-display PRIVATE
-    -Wl,--whole-archive ${X11_SERVER_LIBS} -Wl,--no-whole-archive
-    ${X11_DEPENDENCY_LIBS} mediandk m z GLESv2)
+    -Wl,--start-group ${X11_SERVER_LIBS} ${X11_DEPENDENCY_LIBS} -Wl,--end-group
+    mediandk m z GLESv2)
