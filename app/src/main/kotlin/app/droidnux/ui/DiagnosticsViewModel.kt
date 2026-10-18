@@ -35,6 +35,8 @@ data class DiagnosticsState(
     val guest: CommandResult? = null,
     val display: String? = null,
     val desktopInstalled: Boolean = false,
+    /** False when this app version needs packages the last desktop install did not have. */
+    val desktopUpToDate: Boolean = true,
     val desktopInstalling: Boolean = false,
     /** Last lines of the desktop install log. */
     val desktopLog: String = "",
@@ -57,8 +59,9 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             val display = withContext(Dispatchers.Default) {
                 runCatching { DisplayCore.probe() }.getOrElse { it.toString() }
             }
-            val desktop = withContext(Dispatchers.IO) {
-                DesktopEnvironment.isInstalled(container.installer.rootfsDir(_state.value.distro))
+            val rootfs = container.installer.rootfsDir(_state.value.distro)
+            val (desktop, upToDate) = withContext(Dispatchers.IO) {
+                DesktopEnvironment.isInstalled(rootfs) to DesktopEnvironment.isUpToDate(rootfs)
             }
             _state.update {
                 it.copy(
@@ -66,6 +69,7 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
                     rootfs = if (installed) RootfsState.Installed else RootfsState.NotInstalled,
                     display = display,
                     desktopInstalled = desktop,
+                    desktopUpToDate = upToDate,
                 )
             }
         }
@@ -90,9 +94,13 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
                     }
                     process.waitFor()
                 }.onFailure { e -> _state.update { it.copy(desktopLog = e.toString()) } }
-                success && DesktopEnvironment.isInstalled(container.installer.rootfsDir(distro))
+                val rootfs = container.installer.rootfsDir(distro)
+                (success && DesktopEnvironment.isInstalled(rootfs)) to DesktopEnvironment.isUpToDate(rootfs)
             }
-            _state.update { it.copy(desktopInstalling = false, desktopInstalled = ok) }
+            val (installed, upToDate) = ok
+            _state.update {
+                it.copy(desktopInstalling = false, desktopInstalled = installed, desktopUpToDate = upToDate)
+            }
         }
     }
 

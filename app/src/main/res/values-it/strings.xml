@@ -21,6 +21,8 @@
     <string name="desktop_installed">XFCE è installato.</string>
     <string name="desktop_no_x11">Questa build non ha il server X: usa una build della CI.</string>
     <string name="action_install_desktop">Installa XFCE</string>
+    <string name="desktop_update">XFCE è installato; questa versione dell\'app aggiunge dei pacchetti.</string>
+    <string name="action_update_desktop">Aggiorna</string>
     <string name="action_open_desktop">Apri il desktop</string>
     <string name="desktop_installing">Installazione…</string>
     <string name="session_channel">Sessione desktop</string>

@@ -174,11 +174,16 @@ private fun DesktopSection(state: DiagnosticsState, onInstall: () -> Unit) {
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
         }
         state.desktopInstalled -> {
-            Status(stringResource(R.string.desktop_installed))
+            Status(
+                stringResource(if (state.desktopUpToDate) R.string.desktop_installed else R.string.desktop_update),
+            )
             ActionRow {
                 Button(onClick = {
                     context.startActivity(Intent(context, DesktopActivity::class.java))
                 }) { Text(stringResource(R.string.action_open_desktop)) }
+                if (!state.desktopUpToDate) {
+                    FilledTonalButton(onClick = onInstall) { Text(stringResource(R.string.action_update_desktop)) }
+                }
             }
         }
         else -> {

@@ -18,5 +18,16 @@ target_compile_options(droidnux-display PRIVATE
 target_compile_definitions(droidnux-display PRIVATE __ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__)
 target_link_libraries(droidnux-display PRIVATE android log nativewindow EGL dl)
 
+# Preload library for the desktop session in the container: MIT-SHM segments
+# the X server can attach (shm/dnx_shm.c). It runs under glibc, so it links to
+# nothing from the NDK: its few libc symbols are resolved by glibc at load time.
+add_library(droidnux-guest-shm SHARED shm/dnx_shm.c)
+target_compile_definitions(droidnux-guest-shm PRIVATE DNX_SHM_GUEST=1)
+target_compile_options(droidnux-guest-shm PRIVATE
+    -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics
+    -fno-asynchronous-unwind-tables -fvisibility=hidden)
+target_link_options(droidnux-guest-shm PRIVATE
+    -nostdlib -Wl,--as-needed -Wl,-z,undefs -Wl,--pack-dyn-relocs=none -Wl,--hash-style=both)
+
 # X11 front-end (X server from Termux:X11 with our own DDX), see x11/x11.cmake.
 include(x11/x11.cmake)

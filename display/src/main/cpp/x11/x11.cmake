@@ -85,7 +85,6 @@ set(X11_SOURCES
     ${TX11_DIR}/xserver/mi/miinitext.c
     ${TX11_DIR}/xserver/hw/xquartz/keysym2ucs.c
     ${TX11_DIR}/libxcvt/lib/libxcvt.c
-    ${TX11_DIR}/lorie/shm/shmem.c
     ${TX11_DIR}/lorie/InitInput.c
     ${TX11_DIR}/lorie/InputXKB.c
     ${TX11_DIR}/lorie/workqueue.cpp
@@ -100,6 +99,11 @@ set(X11_C_OPTIONS
     -Wno-macro-redefined -Wno-unused-function -Wno-unused-variable)
 
 target_sources(droidnux-display PRIVATE ${X11_SOURCES})
+# MIT-SHM: our libandroid_shm* in place of Termux:X11's, shared with the
+# container through libdroidnux-guest-shm.so (see shm/dnx_shm.c).
+target_sources(droidnux-display PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../shm/dnx_shm.c)
+set_source_files_properties(${CMAKE_CURRENT_LIST_DIR}/../shm/dnx_shm.c PROPERTIES
+    COMPILE_DEFINITIONS DNX_SHM_SERVER=1 COMPILE_OPTIONS "-Wall;-Wextra;-Werror")
 set(X11_C_SOURCES ${X11_SOURCES})
 list(FILTER X11_C_SOURCES INCLUDE REGEX "[.]c$")
 set_source_files_properties(${X11_SOURCES} PROPERTIES INCLUDE_DIRECTORIES "${X11_INCLUDE_DIRS}")

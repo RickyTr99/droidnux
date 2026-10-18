@@ -53,7 +53,7 @@ class DesktopSessionService : Service() {
         val distro = Distro.DEBIAN_TRIXIE
         val container = Container(this)
         val rootfs = container.installer.rootfsDir(distro)
-        DesktopEnvironment.prepare(rootfs)
+        DesktopEnvironment.prepare(rootfs, java.io.File(applicationInfo.nativeLibraryDir))
         val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout))
         session = process
         Log.i(TAG, "session started (layout $layout)")
