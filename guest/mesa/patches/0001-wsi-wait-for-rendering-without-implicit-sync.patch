@@ -1,0 +1,47 @@
+wsi: wait for rendering before presenting when the driver has no implicit sync
+
+Turnip on KGSL (Android's GPU interface) never attaches fences to dma-bufs,
+so an X server reading a presented image may see it half rendered. Drivers
+set wsi_device::no_implicit_sync and the X11 WSI then waits for the image's
+fence before every present, as it already does for MAILBOX.
+
+--- a/src/vulkan/wsi/wsi_common.h
++++ b/src/vulkan/wsi/wsi_common.h
+@@ -157,6 +157,12 @@
+ 
+    bool sw;
+ 
++   /* Set to true if the kernel driver does not attach rendering fences to
++    * shared buffers (no implicit sync), so a presentation engine reading an
++    * image could see it before rendering finished. Window systems without
++    * explicit sync then wait for the image's fence before presenting it. */
++   bool no_implicit_sync;
++
+    /* Set to true if the implementation is ok with linear WSI images. */
+    bool wants_linear;
+ 
+--- a/src/vulkan/wsi/wsi_common_x11.c
++++ b/src/vulkan/wsi/wsi_common_x11.c
+@@ -1988,6 +1988,10 @@
+       return false;
+    }
+ 
++   /* Without implicit sync the server cannot tell when rendering is done. */
++   if (wsi_device->no_implicit_sync)
++      return true;
++
+    switch (present_mode) {
+       case VK_PRESENT_MODE_MAILBOX_KHR:
+          return true;
+--- a/src/freedreno/vulkan/tu_wsi.cc
++++ b/src/freedreno/vulkan/tu_wsi.cc
+@@ -50,6 +50,9 @@
+       return result;
+ 
+    physical_device->wsi_device.supports_modifiers = true;
++   /* KGSL never attaches fences to dma-bufs. */
++   physical_device->wsi_device.no_implicit_sync =
++      strcmp(physical_device->instance->knl->name, "kgsl") == 0;
+    physical_device->wsi_device.can_present_on_device =
+       tu_wsi_can_present_on_device;
+ 

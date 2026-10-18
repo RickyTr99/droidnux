@@ -88,6 +88,7 @@ set(X11_SOURCES
     ${TX11_DIR}/lorie/InitInput.c
     ${TX11_DIR}/lorie/InputXKB.c
     ${TX11_DIR}/lorie/workqueue.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/dri3.c
     ${CMAKE_CURRENT_LIST_DIR}/output.c
     ${CMAKE_CURRENT_LIST_DIR}/server.c)
 

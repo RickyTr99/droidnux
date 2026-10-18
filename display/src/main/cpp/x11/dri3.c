@@ -1,0 +1,190 @@
+/*
+ * DRI3 for the DroidNux X11 front-end: GPU clients in the container (Mesa
+ * Turnip on KGSL, Zink on top of it) hand their images to the server as
+ * dma-bufs.
+ *
+ * This is the generic path: any linear dma-buf becomes an fb pixmap backed by
+ * a CPU mapping of the buffer, and Present copies it like any other pixmap.
+ * DRI3Open has no device to give (the GPU is KGSL, not DRM), which Mesa takes
+ * as "the client's own GPU is the right one".
+ *
+ * Derived from Termux:X11 (lorie/InitOutput.c, GPL-3.0).
+ */
+#pragma clang diagnostic ignored "-Wstrict-prototypes"
+
+#ifdef HAVE_DIX_CONFIG_H
+#include <dix-config.h>
+#endif
+
+#include <android/log.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <linux/dma-buf.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include <X11/X.h>
+#include <X11/Xmd.h>
+
+#include "fb.h"
+#include "privates.h"
+#include "scrnintstr.h"
+#include "dri3.h"
+#include "drm_fourcc.h"
+
+#include "private.h"
+
+#define log(prio, ...) __android_log_print(ANDROID_LOG_##prio, "DroidNux.X11", __VA_ARGS__)
+
+/* A pixmap's view of an imported dma-buf. */
+struct dmabuf {
+    int fd;
+    void* map;
+    size_t size;
+};
+
+static DevPrivateKeyRec dmabufKeyRec;
+#define dmabufKey (&dmabufKeyRec)
+
+static DestroyPixmapProcPtr wrappedDestroyPixmap;
+
+static struct dmabuf* pixmapDmabuf(PixmapPtr pixmap) {
+    return dixLookupPrivate(&pixmap->devPrivates, dmabufKey);
+}
+
+static void dmabufFree(struct dmabuf* buffer) {
+    if (buffer->map != MAP_FAILED) munmap(buffer->map, buffer->size);
+    close(buffer->fd);
+    free(buffer);
+}
+
+static Bool destroyPixmap(PixmapPtr pixmap) {
+    ScreenPtr pScreen = pixmap->drawable.pScreen;
+    struct dmabuf* buffer = pixmap->refcnt == 1 ? pixmapDmabuf(pixmap) : NULL;
+
+    pScreen->DestroyPixmap = wrappedDestroyPixmap;
+    Bool result = pScreen->DestroyPixmap(pixmap);
+    wrappedDestroyPixmap = pScreen->DestroyPixmap;
+    pScreen->DestroyPixmap = destroyPixmap;
+
+    if (buffer) dmabufFree(buffer);
+    return result;
+}
+
+/* The drm_fourcc.h generated for the server has formats but no modifiers
+ * (its DRM_FORMAT_MOD_INVALID, -1, is what the DRI3 code passes for buffers
+ * sent without one). */
+#define MODIFIER_LINEAR 0ULL
+#define MODIFIER_INVALID 0x00ffffffffffffffULL
+
+static Bool isLinear(CARD64 modifier) {
+    return modifier == MODIFIER_LINEAR || modifier == MODIFIER_INVALID || modifier == (CARD64) DRM_FORMAT_MOD_INVALID;
+}
+
+static PixmapPtr pixmapFromFds(ScreenPtr pScreen, CARD8 num_fds, const int* fds, CARD16 width, CARD16 height,
+                               const CARD32* strides, const CARD32* offsets, CARD8 depth, CARD8 bpp,
+                               CARD64 modifier) {
+    if (num_fds != 1 || !isLinear(modifier) || bpp != 32 || (depth != 24 && depth != 32) ||
+        strides[0] < width * 4u) {
+        log(ERROR, "DRI3: unsupported buffer (%u planes, modifier 0x%llx, depth %u, bpp %u, stride %u)", num_fds,
+            (unsigned long long) modifier, depth, bpp, strides[0]);
+        return NULL;
+    }
+
+    /* The buffer may be larger than the image (alignment); map all of it. */
+    off_t end = lseek(fds[0], 0, SEEK_END);
+    size_t needed = (size_t) offsets[0] + (size_t) strides[0] * height;
+    if (end < 0 || (size_t) end < needed) {
+        log(ERROR, "DRI3: buffer of %lld bytes too small for %ux%u stride %u", (long long) end, width, height,
+            strides[0]);
+        return NULL;
+    }
+
+    struct dmabuf* buffer = calloc(1, sizeof(*buffer));
+    if (!buffer) return NULL;
+    buffer->size = (size_t) end;
+    buffer->map = mmap(NULL, buffer->size, PROT_READ | PROT_WRITE, MAP_SHARED, fds[0], 0);
+    buffer->fd = dup(fds[0]);
+    if (buffer->map == MAP_FAILED || buffer->fd < 0) {
+        log(ERROR, "DRI3: cannot map buffer: %s", strerror(errno));
+        if (buffer->fd < 0) buffer->fd = open("/dev/null", O_RDONLY); /* so dmabufFree can close it */
+        dmabufFree(buffer);
+        return NULL;
+    }
+
+    PixmapPtr pixmap = pScreen->CreatePixmap(pScreen, 0, 0, depth, 0);
+    if (!pixmap) {
+        dmabufFree(buffer);
+        return NULL;
+    }
+    if (!pScreen->ModifyPixmapHeader(pixmap, width, height, depth, bpp, strides[0],
+                                     (uint8_t*) buffer->map + offsets[0])) {
+        pScreen->DestroyPixmap(pixmap);
+        dmabufFree(buffer);
+        return NULL;
+    }
+    dixSetPrivate(&pixmap->devPrivates, dmabufKey, buffer);
+    return pixmap;
+}
+
+static int getFormats(ScreenPtr pScreen, CARD32* num_formats, CARD32** formats) {
+    static CARD32 supported[] = {DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888};
+    *num_formats = ARRAY_SIZE(supported);
+    *formats = supported;
+    return TRUE;
+}
+
+static int getModifiers(ScreenPtr pScreen, uint32_t format, uint32_t* num_modifiers, uint64_t** modifiers) {
+    static uint64_t linear = MODIFIER_LINEAR;
+    if (format != DRM_FORMAT_XRGB8888 && format != DRM_FORMAT_ARGB8888) {
+        *num_modifiers = 0;
+        *modifiers = NULL;
+        return TRUE;
+    }
+    *num_modifiers = 1;
+    *modifiers = &linear;
+    return TRUE;
+}
+
+static int getDrawableModifiers(DrawablePtr draw, uint32_t format, uint32_t* num_modifiers, uint64_t** modifiers) {
+    *num_modifiers = 0;
+    *modifiers = NULL;
+    return TRUE;
+}
+
+static int fdsFromPixmap(ScreenPtr pScreen, PixmapPtr pixmap, int* fds, uint32_t* strides, uint32_t* offsets,
+                         uint64_t* modifier) {
+    return 0; /* no exportable pixmaps yet */
+}
+
+static const dri3_screen_info_rec dri3Info = {
+    .version = 2,
+    .pixmap_from_fds = pixmapFromFds,
+    .fds_from_pixmap = fdsFromPixmap,
+    .get_formats = getFormats,
+    .get_modifiers = getModifiers,
+    .get_drawable_modifiers = getDrawableModifiers,
+};
+
+Bool dnx_dri3_init(ScreenPtr pScreen) {
+    if (!dixRegisterPrivateKey(&dmabufKeyRec, PRIVATE_PIXMAP, 0)) return FALSE;
+    wrappedDestroyPixmap = pScreen->DestroyPixmap;
+    pScreen->DestroyPixmap = destroyPixmap;
+    return dri3_screen_init(pScreen, &dri3Info);
+}
+
+void dnx_dri3_begin_cpu_read(PixmapPtr pixmap) {
+    struct dmabuf* buffer = pixmap ? pixmapDmabuf(pixmap) : NULL;
+    if (!buffer) return;
+    /* The GPU wrote the buffer behind the CPU caches. Start and end at once:
+     * the start invalidates the caches, the end only cleans lines nobody
+     * dirtied, and the copy that follows happens on the server thread
+     * before the client can render into the buffer again. */
+    struct dma_buf_sync sync = {.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ};
+    ioctl(buffer->fd, DMA_BUF_IOCTL_SYNC, &sync);
+    sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
+    ioctl(buffer->fd, DMA_BUF_IOCTL_SYNC, &sync);
+}

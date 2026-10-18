@@ -14,6 +14,7 @@ class Container(context: Context) {
 
     val proot = Proot(context)
     val installer = RootfsInstaller(context)
+    val components = ComponentInstaller(File(context.cacheDir, "downloads"))
 
     /** Runs proot itself, without a rootfs. */
     suspend fun prootVersion(): CommandResult = run(proot.versionCommand())

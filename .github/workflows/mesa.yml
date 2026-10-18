@@ -1,0 +1,51 @@
+name: Mesa component
+
+# Turnip + Zink for the container (guest/mesa). Built natively on an arm64
+# runner, inside the Debian release the app installs, so it links against the
+# same libraries the guest has. Tags named mesa-<version>-dn<revision> publish
+# the archive as a GitHub release the app downloads from.
+
+on:
+  push:
+    branches: [main, phase*]
+    paths: [guest/mesa/**, .github/workflows/mesa.yml]
+    tags: [mesa-*]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        env:
+          DROIDNUX_MESA_DEPS: install
+        run: sh guest/mesa/build.sh "$RUNNER_TEMP/mesa" out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: droidnux-mesa-arm64
+          path: out/*
+          if-no-files-found: error
+
+      - name: Check the tag matches the version
+        if: startsWith(github.ref, 'refs/tags/mesa-')
+        run: |
+          . guest/mesa/version.sh
+          test "$GITHUB_REF_NAME" = "mesa-$MESA_VERSION-dn$DROIDNUX_REVISION"
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/mesa-')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          name: Mesa ${{ github.ref_name }}
+          body: Turnip (KGSL) and Zink for the DroidNux container, built from guest/mesa.

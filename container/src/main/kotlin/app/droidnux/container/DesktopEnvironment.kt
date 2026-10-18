@@ -17,6 +17,9 @@ object DesktopEnvironment {
     private const val SHM_LIBRARY = "libdroidnux-guest-shm.so"
     private const val GUEST_LIB_DIR = "/usr/local/lib/droidnux"
 
+    /** Where the Mesa component (guest/mesa) is unpacked. */
+    const val MESA_PREFIX = "/opt/droidnux/mesa"
+
     private val PACKAGES = listOf(
         "xfce4", "xfce4-terminal", "dbus-x11", "x11-xserver-utils", "xkb-data",
         "adwaita-icon-theme", "fonts-dejavu-core",
@@ -84,6 +87,17 @@ object DesktopEnvironment {
             export SHELL=/bin/bash
             # MIT-SHM segments the X server can attach.
             export LD_PRELOAD=$GUEST_LIB_DIR/$SHM_LIBRARY${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}
+            # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed,
+            # otherwise the distro's software rendering.
+            MESA=$MESA_PREFIX
+            if [ -f "${'$'}MESA/droidnux-mesa.version" ]; then
+                export LD_LIBRARY_PATH=${'$'}MESA/lib/aarch64-linux-gnu${'$'}{LD_LIBRARY_PATH:+:${'$'}LD_LIBRARY_PATH}
+                export VK_DRIVER_FILES=${'$'}MESA/share/vulkan/icd.d/freedreno_icd.aarch64.json
+                export __GLX_VENDOR_LIBRARY_NAME=droidnux
+                export __EGL_VENDOR_LIBRARY_FILENAMES=${'$'}MESA/share/glvnd/egl_vendor.d/50_droidnux.json
+                export MESA_LOADER_DRIVER_OVERRIDE=zink
+                export GALLIUM_DRIVER=zink
+            fi
             mkdir -p "${'$'}XDG_RUNTIME_DIR" && chmod 700 "${'$'}XDG_RUNTIME_DIR"
             mkdir -p /tmp/.ICE-unix && chmod 1777 /tmp/.ICE-unix
 

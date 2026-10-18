@@ -70,7 +70,8 @@ static Bool FalseNoop() { return FALSE; }
 static void VoidNoop() {}
 
 /* -- Hooks the Termux:X11 xserver patch expects ----------------------------
- * Present copies always take the CPU path here (no separate renderer). */
+ * Present copies always take the CPU path here (no separate renderer); the
+ * copy hook only makes the source readable by the CPU. */
 
 bool lorieConnectionAlive(void) { return true; }
 bool lorieRendererAvailable(void) { return true; }
@@ -78,6 +79,7 @@ Bool lorieGpuCopyIsDone(uint64_t serial) { return TRUE; }
 void lorieGpuCopyAck(PixmapPtr pixmap, void* dst_buffer) {}
 Bool lorieTryScheduleGpuCopy(PixmapPtr pixmap, PixmapPtr dst, RegionPtr update, int16_t x_off, int16_t y_off,
                              uint64_t* out_serial, void** out_dst_buffer) {
+    dnx_dri3_begin_cpu_read(pixmap);
     return FALSE;
 }
 
@@ -460,7 +462,8 @@ static Bool screenInit(ScreenPtr pScreen, int argc, char** argv) {
         !randrInit(pScreen) ||
         !miPointerInitialize(pScreen, &spriteFuncs, &pointerScreenFuncs, TRUE) ||
         !fbCreateDefColormap(pScreen) ||
-        !present_screen_init(pScreen, &presentInfo))
+        !present_screen_init(pScreen, &presentInfo) ||
+        !dnx_dri3_init(pScreen))
         return FALSE;
 
     screen.CloseScreen = pScreen->CloseScreen;

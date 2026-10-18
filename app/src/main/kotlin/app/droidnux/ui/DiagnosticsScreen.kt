@@ -39,6 +39,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.droidnux.R
 import app.droidnux.container.CommandResult
+import app.droidnux.container.Component
 import app.droidnux.container.InstallProgress
 import app.droidnux.desktop.DesktopActivity
 import app.droidnux.display.X11Server
@@ -75,11 +76,18 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
             }
 
             Section(stringResource(R.string.section_rootfs)) {
-                RootfsSection(state, onInstall = viewModel::install, onCancel = viewModel::cancelInstall)
+                InstallSection(
+                    name = state.distro.displayName,
+                    sizeBytes = state.distro.sizeBytes,
+                    state = state.rootfs,
+                    installedLabel = stringResource(R.string.status_installed),
+                    onInstall = viewModel::install,
+                    onCancel = viewModel::cancelInstall,
+                )
             }
 
             Section(stringResource(R.string.section_container)) {
-                if (state.rootfs == RootfsState.Installed) {
+                if (state.rootfs == InstallState.Installed) {
                     Button(onClick = viewModel::runUname, enabled = !state.running) {
                         Text(stringResource(R.string.action_run))
                     }
@@ -98,15 +106,33 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
                 }
             }
 
-            if (state.rootfs == RootfsState.Installed) {
+            if (state.rootfs == InstallState.Installed) {
                 Section(stringResource(R.string.section_desktop)) {
                     DesktopSection(state, onInstall = viewModel::installDesktop)
+                }
+                Section(stringResource(R.string.section_gpu)) {
+                    if (Component.MESA.sha256.isEmpty()) {
+                        Status(stringResource(R.string.gpu_unreleased, Component.MESA.version))
+                    } else {
+                        InstallSection(
+                            name = stringResource(R.string.gpu_mesa, Component.MESA.version),
+                            sizeBytes = Component.MESA.sizeBytes,
+                            state = state.mesa,
+                            installedLabel = stringResource(R.string.status_installed),
+                            onInstall = viewModel::installMesa,
+                            onCancel = viewModel::cancelMesa,
+                        )
+                    }
+                    state.mesaVersion?.takeIf { state.mesa != InstallState.Installed }?.let {
+                        Spacer(Modifier.padding(top = 8.dp))
+                        Status(stringResource(R.string.gpu_installed_version, it))
+                    }
                 }
             }
 
             Section(stringResource(R.string.section_display)) {
                 Mono(state.display ?: stringResource(R.string.status_checking))
-                if (state.rootfs == RootfsState.Installed) {
+                if (state.rootfs == InstallState.Installed) {
                     val context = LocalContext.current
                     ActionRow {
                         FilledTonalButton(onClick = {
@@ -120,21 +146,28 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
 }
 
 @Composable
-private fun RootfsSection(state: DiagnosticsState, onInstall: () -> Unit, onCancel: () -> Unit) {
+private fun InstallSection(
+    name: String,
+    sizeBytes: Long,
+    state: InstallState,
+    installedLabel: String,
+    onInstall: () -> Unit,
+    onCancel: () -> Unit,
+) {
     val context = LocalContext.current
     fun size(bytes: Long) = Formatter.formatShortFileSize(context, bytes)
 
-    Text(state.distro.displayName, style = MaterialTheme.typography.titleMedium)
+    Text(name, style = MaterialTheme.typography.titleMedium)
     Spacer(Modifier.padding(top = 4.dp))
 
-    when (val rootfs = state.rootfs) {
-        RootfsState.Checking -> Status(stringResource(R.string.status_checking))
-        RootfsState.NotInstalled -> {
-            Status(stringResource(R.string.status_not_installed, size(state.distro.sizeBytes)))
+    when (state) {
+        InstallState.Checking -> Status(stringResource(R.string.status_checking))
+        InstallState.NotInstalled -> {
+            Status(stringResource(R.string.status_not_installed, size(sizeBytes)))
             ActionRow { Button(onClick = onInstall) { Text(stringResource(R.string.action_install)) } }
         }
-        is RootfsState.Installing -> {
-            val progress = rootfs.progress
+        is InstallState.Installing -> {
+            val progress = state.progress
             val (label, fraction) = when (progress) {
                 is InstallProgress.Downloading -> stringResource(
                     R.string.status_downloading, size(progress.bytes), size(progress.total),
@@ -153,12 +186,12 @@ private fun RootfsSection(state: DiagnosticsState, onInstall: () -> Unit, onCanc
             }
             ActionRow { TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) } }
         }
-        RootfsState.Installed -> {
-            Status(stringResource(R.string.status_installed))
+        InstallState.Installed -> {
+            Status(installedLabel)
             ActionRow { FilledTonalButton(onClick = onInstall) { Text(stringResource(R.string.action_reinstall)) } }
         }
-        is RootfsState.Failed -> {
-            Status(stringResource(R.string.status_failed, rootfs.message), error = true)
+        is InstallState.Failed -> {
+            Status(stringResource(R.string.status_failed, state.message), error = true)
             ActionRow { Button(onClick = onInstall) { Text(stringResource(R.string.action_install)) } }
         }
     }

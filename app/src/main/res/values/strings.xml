@@ -22,6 +22,10 @@
     <string name="exit_code">Exit code %1$d</string>
     <string name="action_buffer_spike">Buffer spike</string>
     <string name="section_desktop">Desktop</string>
+    <string name="section_gpu">GPU</string>
+    <string name="gpu_mesa">Mesa %1$s (Turnip + Zink)</string>
+    <string name="gpu_unreleased">Mesa %1$s is not published yet.</string>
+    <string name="gpu_installed_version">Installed: %1$s</string>
     <string name="desktop_not_installed">XFCE is not installed yet.</string>
     <string name="desktop_installed">XFCE is installed.</string>
     <string name="desktop_no_x11">This build has no X server: use a CI build.</string>
