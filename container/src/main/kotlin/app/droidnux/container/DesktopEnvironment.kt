@@ -97,6 +97,11 @@ object DesktopEnvironment {
                 export __EGL_VENDOR_LIBRARY_FILENAMES=${'$'}MESA/share/glvnd/egl_vendor.d/50_droidnux.json
                 export MESA_LOADER_DRIVER_OVERRIDE=zink
                 export GALLIUM_DRIVER=zink
+            else
+                # Debian's llvmpipe hangs creating its screen when it presents
+                # through DRI3 (kopper); GTK opens GLX at startup, so the whole
+                # session would stop. Plain software GLX, as before DRI3.
+                export LIBGL_DRI3_DISABLE=1
             fi
             mkdir -p "${'$'}XDG_RUNTIME_DIR" && chmod 700 "${'$'}XDG_RUNTIME_DIR"
             mkdir -p /tmp/.ICE-unix && chmod 1777 /tmp/.ICE-unix
