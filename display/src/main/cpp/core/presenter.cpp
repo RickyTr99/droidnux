@@ -161,12 +161,16 @@ struct Completion {
     int cursorPrevious = -1;
     External external{};          // the client buffer the transaction set
     External externalPrevious{};  // the client buffer it replaced
+    External window{};            // the same for the window layer
+    External windowPrevious{};
+    bool windowHidden = false;  // the transaction hid the window layer instead of replacing its buffer
 };
 
 class Presenter {
 public:
-    void attach(ANativeWindow* window) {
+    void attach(ANativeWindow* window, float maxRefreshRate) {
         std::lock_guard lock(mutex_);
+        maxRefreshRate_ = maxRefreshRate;
         detachLocked();
         ANativeWindow_acquire(window);
         window_ = window;
@@ -174,7 +178,8 @@ public:
         // A sibling of the desktop layer, not a child: children inherit the
         // desktop's buffer-to-window scale, which applyCursorLocked applies itself.
         cursorSurface_ = surface_ ? ASurfaceControl_createFromWindow(window, "droidnux-cursor") : nullptr;
-        if (surface_ == nullptr || cursorSurface_ == nullptr) {
+        windowSurface_ = surface_ ? ASurfaceControl_createFromWindow(window, "droidnux-window") : nullptr;
+        if (surface_ == nullptr || cursorSurface_ == nullptr || windowSurface_ == nullptr) {
             LOGE("cannot create surface controls");
             detachLocked();
             return;
@@ -190,6 +195,7 @@ public:
         for (CursorBuffer& c : cursors_) c.busy = false;
         onScreen_ = -1;
         cursorOnScreen_ = -1;
+        hideWindow_ = false;
         geometryDirty_ = true;
         cursorDirty_ = true;
         pending_ = true;  // repaint everything on the new surface
@@ -260,7 +266,8 @@ public:
             ASurfaceTransaction_setGeometry(t, surface_, source, destination, ANATIVEWINDOW_TRANSFORM_IDENTITY);
             ASurfaceTransaction_setBufferTransparency(t, surface_, ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE);
             ASurfaceTransaction_setVisibility(t, surface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
-            ASurfaceTransaction_setZOrder(t, cursorSurface_, 1);
+            ASurfaceTransaction_setZOrder(t, windowSurface_, 1);
+            ASurfaceTransaction_setZOrder(t, cursorSurface_, 2);
             geometryDirty_ = false;
             cursorDirty_ = true;  // cursor geometry depends on the scale
         }
@@ -269,6 +276,7 @@ public:
         completion->framePrevious = onScreen_;
         completion->externalPrevious = external_;
         external_ = External{};
+        applyHideWindowLocked(t, completion);
         if (cursorDirty_) applyCursorLocked(t, completion);
         ASurfaceTransaction_setOnComplete(t, completion, onComplete);
         ASurfaceTransaction_apply(t);
@@ -301,7 +309,8 @@ public:
             ASurfaceTransaction_setGeometry(t, surface_, source, destination, ANATIVEWINDOW_TRANSFORM_IDENTITY);
             ASurfaceTransaction_setBufferTransparency(t, surface_, ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE);
             ASurfaceTransaction_setVisibility(t, surface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
-            ASurfaceTransaction_setZOrder(t, cursorSurface_, 1);
+            ASurfaceTransaction_setZOrder(t, windowSurface_, 1);
+            ASurfaceTransaction_setZOrder(t, cursorSurface_, 2);
             // Our own frames set it back at their size.
             geometryDirty_ = width != width_ || height != height_;
             cursorDirty_ = true;
@@ -316,6 +325,7 @@ public:
         onScreen_ = -1;
         // Our buffers missed this frame entirely.
         for (FrameBuffer& b : frames_) b.fullDamage = true;
+        applyHideWindowLocked(t, completion);
         if (cursorDirty_) applyCursorLocked(t, completion);
         ASurfaceTransaction_setOnComplete(t, completion, onComplete);
         ASurfaceTransaction_apply(t);
@@ -326,6 +336,47 @@ public:
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
         frameTimeTotalNs_ += ns;
         return true;
+    }
+
+    bool showWindow(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_box where,
+                    dnx_buffer_callback callback, void* data) {
+        std::lock_guard lock(mutex_);
+        if (surface_ == nullptr || width_ == 0 || height_ == 0) return false;
+        // Framebuffer to surface scale, as for the cursor.
+        float sx = static_cast<float>(windowWidth_) / static_cast<float>(width_);
+        float sy = static_cast<float>(windowHeight_) / static_cast<float>(height_);
+        ARect source{0, 0, static_cast<int32_t>(width), static_cast<int32_t>(height)};
+        ARect destination{static_cast<int32_t>(where.x1 * sx), static_cast<int32_t>(where.y1 * sy),
+                          static_cast<int32_t>(where.x2 * sx), static_cast<int32_t>(where.y2 * sy)};
+        ASurfaceTransaction* t = ASurfaceTransaction_create();
+        // No acquire fence, as in presentBuffer().
+        ASurfaceTransaction_setBuffer(t, windowSurface_, buffer, -1);
+        ASurfaceTransaction_setGeometry(t, windowSurface_, source, destination, ANATIVEWINDOW_TRANSFORM_IDENTITY);
+        ASurfaceTransaction_setBufferTransparency(t, windowSurface_, ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE);
+        ASurfaceTransaction_setVisibility(t, windowSurface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
+        ASurfaceTransaction_setZOrder(t, windowSurface_, 1);
+        // SurfaceFlinger picks the refresh rate from the layers that change;
+        // a window smaller than the screen alone would leave it at 60 Hz.
+        // The client renders at the display's rate (Present follows the vsync).
+        if (__builtin_available(android 30, *)) {
+            ASurfaceTransaction_setFrameRate(t, windowSurface_, maxRefreshRate_,
+                                             ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
+        }
+        AHardwareBuffer_acquire(buffer);
+        auto* completion = new Completion{this, generation_};
+        completion->window = External{buffer, callback, data};
+        completion->windowPrevious = windowBuffer_;
+        windowBuffer_ = completion->window;
+        hideWindow_ = false;
+        ASurfaceTransaction_setOnComplete(t, completion, onComplete);
+        ASurfaceTransaction_apply(t);
+        ASurfaceTransaction_delete(t);
+        return true;
+    }
+
+    void hideWindow() {
+        std::lock_guard lock(mutex_);
+        hideWindow_ = static_cast<bool>(windowBuffer_);
     }
 
     void setCursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot) {
@@ -372,6 +423,7 @@ private:
     void complete(const Completion& completion, ASurfaceTransactionStats* stats) {
         int frameFence = -1;
         int cursorFence = -1;
+        int windowFence = -1;
         bool releaseFrame = completion.frame && (completion.framePrevious >= 0 || completion.externalPrevious);
         bool releaseCursor = completion.cursor && completion.cursorPrevious >= 0;
         bool current;
@@ -382,22 +434,25 @@ private:
             if (current && releaseCursor) {
                 cursorFence = ASurfaceTransactionStats_getPreviousReleaseFenceFd(stats, cursorSurface_);
             }
-        }
-        // Client buffers are reported whatever happened to the surface:
-        // their clients wait for these events.
-        if (!current || (!releaseFrame && !releaseCursor)) {
-            finishExternal(completion);
-            return;
+            if (current && completion.windowPrevious) {
+                // A hidden buffer is not replaced, so it has no release fence:
+                // it is no longer read once the frame without it is on screen.
+                windowFence = completion.windowHidden
+                                  ? ASurfaceTransactionStats_getPresentFenceFd(stats)
+                                  : ASurfaceTransactionStats_getPreviousReleaseFenceFd(stats, windowSurface_);
+            }
         }
         // The replaced buffers may still be read by the display until their
-        // release fences signal; wait outside the lock.
-        for (int fence : {frameFence, cursorFence}) {
+        // fences signal; wait outside the lock. Client buffers are reported
+        // whatever happened to the surface: their clients wait for these events.
+        for (int fence : {frameFence, cursorFence, windowFence}) {
             if (fence < 0) continue;
             pollfd pfd{fence, POLLIN, 0};
             poll(&pfd, 1, 1000);
             close(fence);
         }
         finishExternal(completion);
+        if (!current || (!releaseFrame && !releaseCursor)) return;
         std::lock_guard lock(mutex_);
         if (completion.generation != generation_) return;
         if (releaseFrame && completion.framePrevious >= 0) frames_[completion.framePrevious].busy = false;
@@ -412,20 +467,37 @@ private:
             AHardwareBuffer_release(completion.externalPrevious.buffer);
         }
         if (completion.external) completion.external.report(DNX_BUFFER_SHOWN);
+        if (completion.windowPrevious) {
+            completion.windowPrevious.report(DNX_BUFFER_RELEASED);
+            AHardwareBuffer_release(completion.windowPrevious.buffer);
+        }
+        if (completion.window) completion.window.report(DNX_BUFFER_SHOWN);
+    }
+
+    void applyHideWindowLocked(ASurfaceTransaction* t, Completion* completion) {
+        if (!hideWindow_) return;
+        ASurfaceTransaction_setVisibility(t, windowSurface_, ASURFACE_TRANSACTION_VISIBILITY_HIDE);
+        completion->windowPrevious = windowBuffer_;
+        completion->windowHidden = true;
+        windowBuffer_ = External{};
+        hideWindow_ = false;
     }
 
     void detachLocked() {
         if (surface_ != nullptr) {
             ASurfaceTransaction* t = ASurfaceTransaction_create();
             if (cursorSurface_ != nullptr) ASurfaceTransaction_reparent(t, cursorSurface_, nullptr);
+            if (windowSurface_ != nullptr) ASurfaceTransaction_reparent(t, windowSurface_, nullptr);
             ASurfaceTransaction_reparent(t, surface_, nullptr);
             ASurfaceTransaction_apply(t);
             ASurfaceTransaction_delete(t);
         }
         if (cursorSurface_ != nullptr) ASurfaceControl_release(cursorSurface_);
+        if (windowSurface_ != nullptr) ASurfaceControl_release(windowSurface_);
         if (surface_ != nullptr) ASurfaceControl_release(surface_);
         if (window_ != nullptr) ANativeWindow_release(window_);
         cursorSurface_ = nullptr;
+        windowSurface_ = nullptr;
         surface_ = nullptr;
         window_ = nullptr;
         generation_++;  // pending completions refer to the old surface
@@ -436,6 +508,12 @@ private:
             AHardwareBuffer_release(external_.buffer);
             external_ = External{};
         }
+        if (windowBuffer_) {
+            windowBuffer_.report(DNX_BUFFER_RELEASED);
+            AHardwareBuffer_release(windowBuffer_.buffer);
+            windowBuffer_ = External{};
+        }
+        hideWindow_ = false;
         for (CursorBuffer& c : cursors_) c.busy = false;
     }
 
@@ -605,6 +683,8 @@ private:
     ANativeWindow* window_ = nullptr;
     ASurfaceControl* surface_ = nullptr;
     ASurfaceControl* cursorSurface_ = nullptr;
+    ASurfaceControl* windowSurface_ = nullptr;  // a client window's buffer, between the desktop and the cursor
+    float maxRefreshRate_ = 0;  // Hz, 0: unknown (no vote)
     int32_t windowWidth_ = 0;
     int32_t windowHeight_ = 0;
     uint64_t generation_ = 0;
@@ -615,6 +695,8 @@ private:
     bool swizzle_ = false;
     int onScreen_ = -1;
     External external_;  // client buffer on screen (or about to be), instead of frames_[onScreen_]
+    External windowBuffer_;    // client buffer on the window layer
+    bool hideWindow_ = false;  // hide the window layer with the next desktop frame
     bool geometryDirty_ = true;
     bool pending_ = false;
     std::atomic<uint64_t> frameCount_{0};
@@ -650,7 +732,9 @@ VsyncClock& vsyncClock() {
 
 extern "C" {
 
-void dnx_presenter_attach(ANativeWindow* window) { presenter().attach(window); }
+void dnx_presenter_attach(ANativeWindow* window, float max_refresh_rate) {
+    presenter().attach(window, max_refresh_rate);
+}
 void dnx_presenter_detach(void) { presenter().detach(); }
 bool dnx_presenter_attached(void) { return presenter().attached(); }
 
@@ -664,6 +748,12 @@ bool dnx_presenter_present_buffer(AHardwareBuffer* buffer, uint32_t width, uint3
                                   void* data) {
     return presenter().presentBuffer(buffer, width, height, callback, data);
 }
+
+bool dnx_presenter_show_window(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_box where,
+                               dnx_buffer_callback callback, void* data) {
+    return presenter().showWindow(buffer, width, height, where, callback, data);
+}
+void dnx_presenter_hide_window(void) { presenter().hideWindow(); }
 
 void dnx_presenter_set_cursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot) {
     presenter().setCursor(rgba, width, height, xhot, yhot);

@@ -121,7 +121,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
         surfaceWidth = width
         surfaceHeight = height
-        Presenter.attach(holder.surface)
+        Presenter.attach(holder.surface, window.decorView.display?.supportedModes?.maxOf { it.refreshRate } ?: 0f)
         resizeDesktop()
     }
 

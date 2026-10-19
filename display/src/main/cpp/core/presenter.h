@@ -32,8 +32,9 @@ typedef enum dnx_pixel_format {
 /* Called on the vsync thread for each requested frame. */
 typedef void (*dnx_vsync_callback)(int64_t frame_time_ns, void* data);
 
-/* Surface lifecycle (Android main thread). The window is acquired. */
-void dnx_presenter_attach(ANativeWindow* window);
+/* Surface lifecycle (Android main thread). The window is acquired.
+ * max_refresh_rate: the display's highest refresh rate, in Hz. */
+void dnx_presenter_attach(ANativeWindow* window, float max_refresh_rate);
 void dnx_presenter_detach(void);
 bool dnx_presenter_attached(void);
 
@@ -69,6 +70,21 @@ typedef void (*dnx_buffer_callback)(dnx_buffer_event event, void* data);
  */
 bool dnx_presenter_present_buffer(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_buffer_callback callback,
                                   void* data);
+
+/*
+ * Shows the top-left width x height of a client's buffer (BGRA) on a layer
+ * above the desktop, at `where` (framebuffer pixels), without copying it:
+ * a window the X server would otherwise copy into the screen. Events and
+ * references as for dnx_presenter_present_buffer(). Returns false, reporting
+ * nothing, without a surface or before the first frame.
+ */
+bool dnx_presenter_show_window(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_box where,
+                               dnx_buffer_callback callback, void* data);
+
+/* Hides that layer together with the next desktop frame, which should show
+ * the window's content by then. Its buffer is RELEASED once that frame is on
+ * screen. */
+void dnx_presenter_hide_window(void);
 
 /* Cursor image in RGBA8888 (straight alpha), NULL or 0x0 hides it. Coordinates are framebuffer pixels. */
 void dnx_presenter_set_cursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot);

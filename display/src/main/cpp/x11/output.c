@@ -58,7 +58,8 @@ struct vblank {
 struct buffer_event {
     struct buffer_event* next;
     dnx_buffer_event event;
-    uint64_t flip;
+    uint64_t flip;               /* a flip's buffer... */
+    struct layer_buffer* layer;  /* ...or a window layer's */
 };
 
 static struct {
@@ -89,6 +90,10 @@ static struct {
     int bufferFd;
     pthread_mutex_t bufferLock;
     struct buffer_event* bufferEvents; /* pushed by binder threads, under bufferLock */
+    /* Window layer (dnx_present_copy). */
+    struct layer_buffer* layerLatest; /* newest buffer on the layer; NULL: no window on it */
+    XID layerWindow;
+    BoxRec layerBox; /* where the layer shows it, screen coordinates */
 } screen = {
     .vsyncFd = -1,
     .bufferFd = -1,
@@ -138,11 +143,149 @@ static bool gpuCopy(AHardwareBuffer* src, void** srcImage, PixmapPtr dst, Region
     return done;
 }
 
+/* -- Window layer ----------------------------------------------------------
+ * A window that shows all of an app-allocated buffer, unobscured, goes on its
+ * own layer above the desktop instead of being copied into the screen pixmap
+ * (dnx_presenter_show_window). Present hears that each buffer is idle only
+ * once the display has let go of it. The screen pixmap keeps what was under
+ * the layer until the window leaves it: then its newest buffer is copied in. */
+
+struct layer_buffer {
+    PixmapPtr pixmap; /* a reference, until idle */
+    XID window;       /* for the idle notification, if the window still exists */
+    CARD32 serial;
+    struct present_fence* idleFence;
+    bool released; /* the display no longer reads it */
+};
+
+static WindowPtr lookupWindow(XID id) {
+    void* window = NULL;
+    if (!id || dixLookupResourceByType(&window, id, RT_WINDOW, NullClient, DixGetAttrAccess) != Success) return NULL;
+    return window;
+}
+
+static BoxRec windowBox(WindowPtr window) {
+    return (BoxRec) {window->drawable.x, window->drawable.y, window->drawable.x + window->drawable.width,
+                     window->drawable.y + window->drawable.height};
+}
+
+/* The window shows all of the pixmap, nothing covers it, and it is drawn
+ * straight into the screen pixmap. */
+static bool layerFits(WindowPtr window, PixmapPtr pixmap) {
+    PixmapPtr screenPixmap = pScreenPtr->GetScreenPixmap(pScreenPtr);
+    BoxRec box = windowBox(window);
+    BoxPtr clip = RegionExtents(&window->clipList);
+    return !screen.flipPixmap && window->viewable && pScreenPtr->GetWindowPixmap(window) == screenPixmap &&
+           dnx_dri3_hardware_buffer(screenPixmap) && dnx_dri3_hardware_buffer(pixmap) &&
+           pixmap->drawable.bitsPerPixel == 32 && pixmap->drawable.width == window->drawable.width &&
+           pixmap->drawable.height == window->drawable.height && RegionNumRects(&window->clipList) == 1 &&
+           clip->x1 == box.x1 && clip->y1 == box.y1 && clip->x2 == box.x2 && clip->y2 == box.y2;
+}
+
+/* Idle once the display let go of it and it is no longer the window's
+ * newest buffer, which leaveLayer() may still need. */
+static void layerBufferIdle(struct layer_buffer* buffer) {
+    if (!buffer->released || buffer == screen.layerLatest) return;
+    present_pixmap_idle(buffer->pixmap, lookupWindow(buffer->window), buffer->serial, buffer->idleFence);
+    present_fence_destroy(buffer->idleFence);
+    buffer->pixmap->drawable.pScreen->DestroyPixmap(buffer->pixmap);
+    free(buffer);
+}
+
+/* Takes the window off the layer, with the next desktop frame. */
+static void leaveLayer(void) {
+    struct layer_buffer* buffer = screen.layerLatest;
+    if (!buffer) return;
+    screen.layerLatest = NULL;
+    PixmapPtr screenPixmap = pScreenPtr->GetScreenPixmap(pScreenPtr);
+    WindowPtr window = lookupWindow(screen.layerWindow);
+    RegionRec region;
+    RegionInit(&region, &screen.layerBox, 1);
+    if (window && window->viewable && pScreenPtr->GetWindowPixmap(window) == screenPixmap) {
+        BoxRec box = {window->drawable.x, window->drawable.y, window->drawable.x + buffer->pixmap->drawable.width,
+                      window->drawable.y + buffer->pixmap->drawable.height};
+        RegionRec shown;
+        RegionInit(&shown, &box, 1);
+        RegionIntersect(&shown, &shown, &window->clipList);
+        if (gpuCopy(dnx_dri3_hardware_buffer(buffer->pixmap), dnx_dri3_gpu_image(buffer->pixmap), screenPixmap,
+                    &shown, window->drawable.x, window->drawable.y)) {
+            RegionUnion(&region, &region, &shown);
+        }
+        RegionUninit(&shown);
+    }
+    /* The frame that hides the layer shows what was under it. */
+    dnx_presenter_hide_window();
+    DamageDamageRegion(&screenPixmap->drawable, &region);
+    RegionUninit(&region);
+    screen.layerWindow = 0;
+    layerBufferIdle(buffer);
+}
+
+/* Binder thread: a layer buffer is on screen or released. */
+static void onLayerBufferEvent(dnx_buffer_event event, void* data) {
+    struct buffer_event* e = malloc(sizeof(*e));
+    if (!e) return;
+    *e = (struct buffer_event) {.event = event, .layer = data};
+    pthread_mutex_lock(&screen.bufferLock);
+    e->next = screen.bufferEvents;
+    screen.bufferEvents = e;
+    pthread_mutex_unlock(&screen.bufferLock);
+    eventfd_write(screen.bufferFd, 1);
+}
+
+static bool showOnLayer(present_vblank_ptr vblank) {
+    WindowPtr window = vblank->window;
+    PixmapPtr pixmap = vblank->pixmap;
+    BoxRec all = {0, 0, pixmap->drawable.width, pixmap->drawable.height};
+    if (vblank->x_off || vblank->y_off || !layerFits(window, pixmap) ||
+        (vblank->update && RegionContainsRect(vblank->update, &all) != rgnIN))
+        return false;
+    struct layer_buffer* buffer = calloc(1, sizeof(*buffer));
+    if (!buffer) return false;
+    if (screen.layerLatest && screen.layerWindow != window->drawable.id) leaveLayer();
+
+    BoxRec box = windowBox(window);
+    dnx_box where = {box.x1, box.y1, box.x2, box.y2};
+    if (!dnx_presenter_show_window(dnx_dri3_hardware_buffer(pixmap), pixmap->drawable.width,
+                                   pixmap->drawable.height, where, onLayerBufferEvent, buffer)) {
+        free(buffer);
+        return false;
+    }
+    *buffer = (struct layer_buffer) {
+        .pixmap = pixmap, .window = window->drawable.id, .serial = vblank->serial, .idleFence = vblank->idle_fence};
+    pixmap->refcnt++;
+    vblank->idle_fence = NULL;
+    if (vblank->update) {
+        RegionDestroy(vblank->update);
+        vblank->update = NULL;
+    }
+    struct layer_buffer* previous = screen.layerLatest;
+    screen.layerLatest = buffer;
+    screen.layerWindow = window->drawable.id;
+    screen.layerBox = box;
+    if (previous) layerBufferIdle(previous);
+    return true;
+}
+
+/* Before a desktop frame: the window still fits the layer, where it is. */
+static void checkLayer(void) {
+    if (!screen.layerLatest) return;
+    WindowPtr window = lookupWindow(screen.layerWindow);
+    BoxRec box = window ? windowBox(window) : (BoxRec) {0};
+    if (window && layerFits(window, screen.layerLatest->pixmap) && box.x1 == screen.layerBox.x1 &&
+        box.y1 == screen.layerBox.y1 && box.x2 == screen.layerBox.x2 && box.y2 == screen.layerBox.y2)
+        return;
+    leaveLayer();
+}
+
 enum dnx_present_copy dnx_present_copy(present_vblank_ptr vblank) {
     WindowPtr window = vblank->window;
     PixmapPtr pixmap = vblank->pixmap;
     PixmapPtr screenPixmap = pScreenPtr->GetScreenPixmap(pScreenPtr);
     AHardwareBuffer* src = dnx_dri3_hardware_buffer(pixmap);
+    if (showOnLayer(vblank)) return DNX_PRESENT_COPY_LAYER;
+    /* Copied from now on: under the layer, the copy would not show. */
+    if (screen.layerLatest && screen.layerWindow == window->drawable.id) leaveLayer();
     if (!src || pixmap->drawable.bitsPerPixel != 32 || pScreenPtr->GetWindowPixmap(window) != screenPixmap ||
         !dnx_dri3_hardware_buffer(screenPixmap)) {
         dnx_dri3_begin_cpu_read(pixmap);
@@ -303,7 +446,12 @@ static void onBufferEvents(int fd, int ready, void* data) {
     while (ordered) {
         struct buffer_event* e = ordered;
         ordered = e->next;
-        if (e->event == DNX_BUFFER_SHOWN && e->flip == screen.shownWaiting) {
+        if (e->layer) {
+            if (e->event == DNX_BUFFER_RELEASED) {
+                e->layer->released = true;
+                layerBufferIdle(e->layer);
+            }
+        } else if (e->event == DNX_BUFFER_SHOWN && e->flip == screen.shownWaiting) {
             screen.shownWaiting = 0;
             present_event_notify(e->flip, GetTimeInMicros(), screen.msc);
         } else if (e->event == DNX_BUFFER_RELEASED && e->flip == screen.lastExternal) {
@@ -362,6 +510,7 @@ static void onFrame(int fd, int ready, void* data) {
 
     /* After an app-allocated buffer, only once the display let go of it. */
     reportUnflip();
+    checkLayer();
 
     if (screen.flipPixmap) {
         presentFlip();
@@ -401,6 +550,7 @@ static void onDamage(DamagePtr damage, RegionPtr region, void* closure) {
 
 void dnx_output_force_redraw(void) {
     if (!pScreenPtr) return;
+    leaveLayer();
     screen.flipDirty = screen.flipPixmap != NULL;
     /* A flip in flight when the surface went away may never be reported
      * by the presenter; its client must not wait for it forever. */
@@ -550,6 +700,7 @@ static Bool rrScreenSetSize(ScreenPtr pScreen, CARD16 width, CARD16 height, CARD
     BoxRec box = {0, 0, width, height};
 
     performVblanks();
+    leaveLayer();
     present_restore_screen_pixmap(pScreen);
     /* The screen pixmap has the flip's content again; Present unflips at
      * its next frame, as the window no longer covers the screen. */
@@ -676,6 +827,7 @@ static Bool presentCheckFlip(RRCrtcPtr crtc, WindowPtr window, PixmapPtr pixmap,
 
 static Bool presentFlipPixmap(RRCrtcPtr crtc, uint64_t eventId, uint64_t targetMsc, PixmapPtr pixmap, Bool syncFlip) {
     /* Present flips again only after the last flip event (flip_pending). */
+    leaveLayer();
     screen.flipPixmap = pixmap;
     screen.flipEvent = eventId;
     screen.flipDirty = true;

@@ -13,8 +13,11 @@ object Presenter {
         DisplayCore // loads the native library
     }
 
-    /** Call when the surface is created or its size changes (from SurfaceHolder.Callback). */
-    fun attach(surface: Surface) = nativeAttach(surface)
+    /**
+     * Call when the surface is created or its size changes (from SurfaceHolder.Callback).
+     * [maxRefreshRate]: the highest refresh rate of the surface's display, in Hz.
+     */
+    fun attach(surface: Surface, maxRefreshRate: Float) = nativeAttach(surface, maxRefreshRate)
 
     /** Call before the surface is destroyed. */
     fun detach() = nativeDetach()
@@ -28,7 +31,7 @@ object Presenter {
     /** Longest frame preparation since the previous call, in nanoseconds (debug overlay). */
     fun takeFrameTimeMaxNanos(): Long = nativeTakeFrameTimeMax()
 
-    @JvmStatic private external fun nativeAttach(surface: Surface)
+    @JvmStatic private external fun nativeAttach(surface: Surface, maxRefreshRate: Float)
     @JvmStatic private external fun nativeDetach()
     @JvmStatic private external fun nativeFrameCount(): Long
     @JvmStatic private external fun nativeFrameTimeTotal(): Long

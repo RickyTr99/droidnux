@@ -45,10 +45,10 @@ Java_app_droidnux_display_BufferSpike_nativeStop(JNIEnv*, jclass, jlong handle) 
 #include "presenter.h"
 
 extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_Presenter_nativeAttach(JNIEnv* env, jclass, jobject surface) {
+Java_app_droidnux_display_Presenter_nativeAttach(JNIEnv* env, jclass, jobject surface, jfloat maxRefreshRate) {
     ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
     if (window == nullptr) return;
-    dnx_presenter_attach(window);
+    dnx_presenter_attach(window, maxRefreshRate);
     ANativeWindow_release(window);  // the presenter holds its own reference
 }
 
