@@ -49,6 +49,7 @@ struct dmabuf {
     size_t size;
     AHardwareBuffer* ahb; /* the app allocated it (core/allocator.h): Android can show it as is */
     bool locked;          /* ahb stays locked for CPU access while the pixmap lives */
+    void* gpuImage;       /* ahb as the GPU sees it (gpu_copy.c), made at the first GPU copy */
 };
 
 static DevPrivateKeyRec dmabufKeyRec;
@@ -61,6 +62,7 @@ static struct dmabuf* pixmapDmabuf(PixmapPtr pixmap) {
 }
 
 static void dmabufFree(struct dmabuf* buffer) {
+    dnx_gpu_image_free(buffer->gpuImage);
     if (buffer->map != MAP_FAILED) munmap(buffer->map, buffer->size);
     if (buffer->fd >= 0) close(buffer->fd);
     if (buffer->locked) AHardwareBuffer_unlock(buffer->ahb, NULL);
@@ -250,6 +252,11 @@ PixmapPtr dnx_dri3_create_hardware_pixmap(ScreenPtr pScreen, int width, int heig
 AHardwareBuffer* dnx_dri3_hardware_buffer(PixmapPtr pixmap) {
     struct dmabuf* buffer = pixmap ? pixmapDmabuf(pixmap) : NULL;
     return buffer ? buffer->ahb : NULL;
+}
+
+void** dnx_dri3_gpu_image(PixmapPtr pixmap) {
+    struct dmabuf* buffer = pixmap ? pixmapDmabuf(pixmap) : NULL;
+    return buffer && buffer->ahb ? &buffer->gpuImage : NULL;
 }
 
 void dnx_dri3_begin_cpu_read(PixmapPtr pixmap) {
