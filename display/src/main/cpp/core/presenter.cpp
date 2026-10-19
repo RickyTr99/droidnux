@@ -135,6 +135,16 @@ struct CursorBuffer {
 
 class Presenter;
 
+// A client buffer on the desktop layer (dnx_presenter_present_buffer).
+struct External {
+    AHardwareBuffer* buffer = nullptr;
+    dnx_buffer_callback callback = nullptr;
+    void* data = nullptr;
+
+    explicit operator bool() const { return buffer != nullptr; }
+    void report(dnx_buffer_event event) const { callback(event, data); }
+};
+
 // One per transaction (a transaction has a single completion callback): which
 // buffers it replaced on each layer, so they can be reused once released.
 struct Completion {
@@ -144,6 +154,8 @@ struct Completion {
     int framePrevious = -1;
     bool cursor = false;  // the transaction set a cursor buffer
     int cursorPrevious = -1;
+    External external{};          // the client buffer the transaction set
+    External externalPrevious{};  // the client buffer it replaced
 };
 
 class Presenter {
@@ -244,6 +256,8 @@ public:
         auto* completion = new Completion{this, generation_};
         completion->frame = true;
         completion->framePrevious = onScreen_;
+        completion->externalPrevious = external_;
+        external_ = External{};
         if (cursorDirty_) applyCursorLocked(t, completion);
         ASurfaceTransaction_setOnComplete(t, completion, onComplete);
         ASurfaceTransaction_apply(t);
@@ -258,6 +272,48 @@ public:
         frameTimeTotalNs_ += ns;
         uint64_t max = frameTimeMaxNs_.load();
         while (ns > max && !frameTimeMaxNs_.compare_exchange_weak(max, ns)) {}
+        return true;
+    }
+
+    bool presentBuffer(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_buffer_callback callback,
+                       void* data) {
+        auto start = std::chrono::steady_clock::now();
+        std::lock_guard lock(mutex_);
+        if (surface_ == nullptr) return false;
+        ASurfaceTransaction* t = ASurfaceTransaction_create();
+        // The client waited for its rendering before presenting (no implicit
+        // sync on KGSL, Mesa patch 0001): no acquire fence.
+        ASurfaceTransaction_setBuffer(t, surface_, buffer, -1);
+        if (geometryDirty_ || width != width_ || height != height_) {
+            ARect source{0, 0, static_cast<int32_t>(width), static_cast<int32_t>(height)};
+            ARect destination{0, 0, windowWidth_, windowHeight_};
+            ASurfaceTransaction_setGeometry(t, surface_, source, destination, ANATIVEWINDOW_TRANSFORM_IDENTITY);
+            ASurfaceTransaction_setBufferTransparency(t, surface_, ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE);
+            ASurfaceTransaction_setVisibility(t, surface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
+            ASurfaceTransaction_setZOrder(t, cursorSurface_, 1);
+            // Our own frames set it back at their size.
+            geometryDirty_ = width != width_ || height != height_;
+            cursorDirty_ = true;
+        }
+        AHardwareBuffer_acquire(buffer);
+        auto* completion = new Completion{this, generation_};
+        completion->frame = true;
+        completion->framePrevious = onScreen_;
+        completion->external = External{buffer, callback, data};
+        completion->externalPrevious = external_;
+        external_ = completion->external;
+        onScreen_ = -1;
+        // Our buffers missed this frame entirely.
+        for (FrameBuffer& b : frames_) b.fullDamage = true;
+        if (cursorDirty_) applyCursorLocked(t, completion);
+        ASurfaceTransaction_setOnComplete(t, completion, onComplete);
+        ASurfaceTransaction_apply(t);
+        ASurfaceTransaction_delete(t);
+
+        frameCount_++;
+        auto ns = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
+        frameTimeTotalNs_ += ns;
         return true;
     }
 
@@ -305,13 +361,22 @@ private:
     void complete(const Completion& completion, ASurfaceTransactionStats* stats) {
         int frameFence = -1;
         int cursorFence = -1;
-        bool releaseFrame = completion.frame && completion.framePrevious >= 0;
+        bool releaseFrame = completion.frame && (completion.framePrevious >= 0 || completion.externalPrevious);
         bool releaseCursor = completion.cursor && completion.cursorPrevious >= 0;
+        bool current;
         {
             std::lock_guard lock(mutex_);
-            if (completion.generation != generation_ || (!releaseFrame && !releaseCursor)) return;
-            if (releaseFrame) frameFence = ASurfaceTransactionStats_getPreviousReleaseFenceFd(stats, surface_);
-            if (releaseCursor) cursorFence = ASurfaceTransactionStats_getPreviousReleaseFenceFd(stats, cursorSurface_);
+            current = completion.generation == generation_;
+            if (current && releaseFrame) frameFence = ASurfaceTransactionStats_getPreviousReleaseFenceFd(stats, surface_);
+            if (current && releaseCursor) {
+                cursorFence = ASurfaceTransactionStats_getPreviousReleaseFenceFd(stats, cursorSurface_);
+            }
+        }
+        // Client buffers are reported whatever happened to the surface:
+        // their clients wait for these events.
+        if (!current || (!releaseFrame && !releaseCursor)) {
+            finishExternal(completion);
+            return;
         }
         // The replaced buffers may still be read by the display until their
         // release fences signal; wait outside the lock.
@@ -321,10 +386,21 @@ private:
             poll(&pfd, 1, 1000);
             close(fence);
         }
+        finishExternal(completion);
         std::lock_guard lock(mutex_);
         if (completion.generation != generation_) return;
-        if (releaseFrame) frames_[completion.framePrevious].busy = false;
+        if (releaseFrame && completion.framePrevious >= 0) frames_[completion.framePrevious].busy = false;
         if (releaseCursor) cursors_[completion.cursorPrevious].busy = false;
+    }
+
+    // The replaced client buffer is released (its fence waited), then the
+    // new one is on screen.
+    static void finishExternal(const Completion& completion) {
+        if (completion.externalPrevious) {
+            completion.externalPrevious.report(DNX_BUFFER_RELEASED);
+            AHardwareBuffer_release(completion.externalPrevious.buffer);
+        }
+        if (completion.external) completion.external.report(DNX_BUFFER_SHOWN);
     }
 
     void detachLocked() {
@@ -343,6 +419,12 @@ private:
         window_ = nullptr;
         generation_++;  // pending completions refer to the old surface
         for (FrameBuffer& b : frames_) b.busy = false;
+        // The buffer on screen has no transaction left to replace it.
+        if (external_) {
+            external_.report(DNX_BUFFER_RELEASED);
+            AHardwareBuffer_release(external_.buffer);
+            external_ = External{};
+        }
         for (CursorBuffer& c : cursors_) c.busy = false;
     }
 
@@ -515,6 +597,7 @@ private:
     uint32_t height_ = 0;
     bool swizzle_ = false;
     int onScreen_ = -1;
+    External external_;  // client buffer on screen (or about to be), instead of frames_[onScreen_]
     bool geometryDirty_ = true;
     bool pending_ = false;
     std::atomic<uint64_t> frameCount_{0};
@@ -557,6 +640,11 @@ bool dnx_presenter_attached(void) { return presenter().attached(); }
 bool dnx_presenter_present(const void* pixels, uint32_t width, uint32_t height, uint32_t stride_bytes,
                            dnx_pixel_format format, const dnx_box* rects, int rect_count) {
     return presenter().present(pixels, width, height, stride_bytes, format, rects, rect_count);
+}
+
+bool dnx_presenter_present_buffer(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_buffer_callback callback,
+                                  void* data) {
+    return presenter().presentBuffer(buffer, width, height, callback, data);
 }
 
 void dnx_presenter_set_cursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot) {

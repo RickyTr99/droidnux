@@ -106,6 +106,9 @@ object DesktopEnvironment {
                 export __EGL_VENDOR_LIBRARY_FILENAMES=${'$'}MESA/share/glvnd/egl_vendor.d/50_droidnux.json
                 export MESA_LOADER_DRIVER_OVERRIDE=zink
                 export GALLIUM_DRIVER=zink
+                # Swapchain images in AHardwareBuffers from the X server, which
+                # shows full-screen ones without copying them (Mesa patch 0003).
+                export DROIDNUX_AHB_SOCKET=/tmp/.droidnux-ahb
             else
                 # With DRI3 but no device, Debian's GLX tries Zink; with no
                 # Vulkan driver Zink fails and Mesa 25.0 deadlocks on its own

@@ -21,6 +21,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "allocator.h"
 #include "dix.h"
 #include "globals.h"
 #include "input.h"
@@ -103,6 +104,12 @@ bool dnx_x11_start(const dnx_x11_config* config) {
     mkdir(xtrans_unix_dir_x11, 01777);
     chmod(xtrans_unix_dir_x11, 01777);
     chdir(config->tmp_dir);
+
+    /* GPU clients' swapchain images (Mesa patch 0003), as /tmp/.droidnux-ahb. */
+    char* allocator_path = NULL;
+    asprintf(&allocator_path, "%s/.droidnux-ahb", config->tmp_dir);
+    dnx_allocator_start(allocator_path);
+    free(allocator_path);
 
     XkbBaseDirectory = strdup(config->xkb_dir);
     if (config->font_dir && access(config->font_dir, F_OK) == 0) {

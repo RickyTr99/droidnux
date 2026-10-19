@@ -11,6 +11,7 @@
 #ifndef DROIDNUX_PRESENTER_H
 #define DROIDNUX_PRESENTER_H
 
+#include <android/hardware_buffer.h>
 #include <android/native_window.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -45,6 +46,24 @@ bool dnx_presenter_attached(void);
  */
 bool dnx_presenter_present(const void* pixels, uint32_t width, uint32_t height, uint32_t stride_bytes,
                            dnx_pixel_format format, const dnx_box* rects, int rect_count);
+
+/* What happened to a buffer given to dnx_presenter_present_buffer(). */
+typedef enum dnx_buffer_event {
+    DNX_BUFFER_SHOWN,    /* on screen, and the frame shown before it is no longer read */
+    DNX_BUFFER_RELEASED, /* no longer read: the client may render into it again */
+} dnx_buffer_event;
+
+/* Runs on a binder thread, once per event and buffer. */
+typedef void (*dnx_buffer_callback)(dnx_buffer_event event, void* data);
+
+/*
+ * Shows the top-left width x height of a client's buffer (BGRA; it may have
+ * padding rows) as the whole frame, without copying it. The presenter holds a reference until RELEASED, and
+ * reports both events for every buffer it accepted, also when the surface
+ * goes away. Returns false, reporting nothing, without a surface.
+ */
+bool dnx_presenter_present_buffer(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_buffer_callback callback,
+                                  void* data);
 
 /* Cursor image in RGBA8888 (straight alpha), NULL or 0x0 hides it. Coordinates are framebuffer pixels. */
 void dnx_presenter_set_cursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot);

@@ -36,6 +36,7 @@
 #include "dri3.h"
 #include "drm_fourcc.h"
 
+#include "allocator.h"
 #include "private.h"
 
 #define log(prio, ...) __android_log_print(ANDROID_LOG_##prio, "DroidNux.X11", __VA_ARGS__)
@@ -45,6 +46,7 @@ struct dmabuf {
     int fd;
     void* map;
     size_t size;
+    AHardwareBuffer* ahb; /* the app allocated it (core/allocator.h): Android can show it as is */
 };
 
 static DevPrivateKeyRec dmabufKeyRec;
@@ -59,6 +61,7 @@ static struct dmabuf* pixmapDmabuf(PixmapPtr pixmap) {
 static void dmabufFree(struct dmabuf* buffer) {
     if (buffer->map != MAP_FAILED) munmap(buffer->map, buffer->size);
     if (buffer->fd >= 0) close(buffer->fd);
+    if (buffer->ahb) AHardwareBuffer_release(buffer->ahb);
     free(buffer);
 }
 
@@ -109,6 +112,7 @@ static PixmapPtr pixmapFromFds(ScreenPtr pScreen, CARD8 num_fds, const int* fds,
     buffer->size = (size_t) end;
     buffer->map = mmap(NULL, buffer->size, PROT_READ | PROT_WRITE, MAP_SHARED, fds[0], 0);
     buffer->fd = dup(fds[0]);
+    buffer->ahb = dnx_allocator_find(fds[0]);
     if (buffer->map == MAP_FAILED || buffer->fd < 0) {
         log(ERROR, "DRI3: cannot map buffer: %s", strerror(errno));
         dmabufFree(buffer);
@@ -188,6 +192,11 @@ Bool dnx_dri3_init(ScreenPtr pScreen) {
 
 Bool dnx_dri3_is_dmabuf(PixmapPtr pixmap) {
     return pixmap && pixmapDmabuf(pixmap) != NULL;
+}
+
+AHardwareBuffer* dnx_dri3_hardware_buffer(PixmapPtr pixmap) {
+    struct dmabuf* buffer = pixmap ? pixmapDmabuf(pixmap) : NULL;
+    return buffer ? buffer->ahb : NULL;
 }
 
 void dnx_dri3_begin_cpu_read(PixmapPtr pixmap) {

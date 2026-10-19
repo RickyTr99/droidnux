@@ -7,6 +7,7 @@ project(droidnux_display C CXX)
 set(GUEST_DIR ${CMAKE_CURRENT_LIST_DIR}/../../../../guest)
 
 add_library(droidnux-display SHARED
+    core/allocator.cpp
     core/presenter.cpp
     buffer_spike.cpp
     jni.cpp

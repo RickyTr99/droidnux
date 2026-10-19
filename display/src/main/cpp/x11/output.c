@@ -16,8 +16,12 @@
 
 #include <android/log.h>
 #include <libxcvt/libxcvt.h>
+#include <pthread.h>
 #include <stdatomic.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <sys/eventfd.h>
+#include <time.h>
 #include <X11/X.h>
 #include <X11/Xmd.h>
 
@@ -50,6 +54,12 @@ struct vblank {
     uint64_t id, msc;
 };
 
+struct buffer_event {
+    struct buffer_event* next;
+    dnx_buffer_event event;
+    uint64_t flip;
+};
+
 static struct {
     DamagePtr damage;
     CloseScreenProcPtr CloseScreen;
@@ -57,7 +67,12 @@ static struct {
     atomic_bool vsyncRequested; /* a vsync is pending; avoids one request per damage event */
     bool retryPresent;          /* last frame could not be shown, try again next vsync */
     int framerate;
+    /* Media stream counter: one per display vsync, also while the clock
+     * sleeps, so that Present clients see where the display really is and a
+     * flip whose target has passed is shown at once. */
     uint64_t msc;
+    uint64_t mscTimeNs;               /* vsync time of msc, CLOCK_MONOTONIC */
+    _Atomic int64_t lastVsyncNs;      /* written by the vsync thread */
     struct xorg_list vblanks;
     /* Present flips: a full-screen client buffer is shown instead of the
      * screen pixmap, skipping the copy into it. */
@@ -65,8 +80,17 @@ static struct {
     uint64_t flipEvent;         /* flip to report once flipPixmap has been shown */
     uint64_t unflipEvent;       /* unflip to report at the next frame */
     bool flipDirty;             /* flipPixmap has content not shown yet */
+    /* Flips of app-allocated buffers go to the screen as they are; the
+     * presenter's events (dnx_buffer_event) say when, through bufferFd. */
+    uint64_t shownWaiting;      /* flip handed to the presenter, reported once SHOWN */
+    uint64_t lastExternal;      /* flip whose buffer the display may still read, until RELEASED */
+    int bufferFd;
+    pthread_mutex_t bufferLock;
+    struct buffer_event* bufferEvents; /* pushed by binder threads, under bufferLock */
 } screen = {
     .vsyncFd = -1,
+    .bufferFd = -1,
+    .bufferLock = PTHREAD_MUTEX_INITIALIZER,
     .framerate = 60,
     .vblanks = {&screen.vblanks, &screen.vblanks},
 };
@@ -133,7 +157,33 @@ static void requestFrame(void) {
 
 /* Vsync thread: wake the server thread. */
 static void onVsync(int64_t frameTimeNanos, void* data) {
+    atomic_store(&screen.lastVsyncNs, frameTimeNanos);
     eventfd_write(screen.vsyncFd, 1);
+}
+
+static int64_t vsyncPeriodNs(void) {
+    return 1000000000LL / (screen.framerate > 0 ? screen.framerate : 60);
+}
+
+/* Moves msc to the vsync at or before `nowNs`, counting the vsyncs the
+ * clock slept through. */
+static void updateMsc(int64_t nowNs) {
+    int64_t period = vsyncPeriodNs();
+    if (screen.mscTimeNs == 0) {
+        screen.mscTimeNs = nowNs;
+        return;
+    }
+    if (nowNs <= (int64_t) screen.mscTimeNs) return;
+    int64_t elapsed = (nowNs - (int64_t) screen.mscTimeNs + period / 4) / period;
+    if (elapsed <= 0) return;
+    screen.msc += elapsed;
+    screen.mscTimeNs += elapsed * period;
+}
+
+static uint64_t nowNs(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t) ts.tv_sec * 1000000000ULL + ts.tv_nsec;
 }
 
 static void performVblanks(void) {
@@ -147,9 +197,73 @@ static void performVblanks(void) {
     }
 }
 
+/* Binder thread: a buffer given to dnx_presenter_present_buffer() is on
+ * screen or released. */
+static void onBufferEvent(dnx_buffer_event event, void* data) {
+    struct buffer_event* e = malloc(sizeof(*e));
+    if (!e) return;
+    *e = (struct buffer_event) {.event = event, .flip = (uint64_t) (uintptr_t) data};
+    pthread_mutex_lock(&screen.bufferLock);
+    e->next = screen.bufferEvents;
+    screen.bufferEvents = e;
+    pthread_mutex_unlock(&screen.bufferLock);
+    eventfd_write(screen.bufferFd, 1);
+}
+
+static void reportUnflip(void) {
+    if (!screen.unflipEvent || screen.lastExternal) return;
+    uint64_t event = screen.unflipEvent;
+    screen.unflipEvent = 0;
+    present_event_notify(event, GetTimeInMicros(), screen.msc);
+}
+
+/* Server thread: the presenter's events, oldest first. */
+static void onBufferEvents(int fd, int ready, void* data) {
+    eventfd_t value;
+    eventfd_read(fd, &value);
+    pthread_mutex_lock(&screen.bufferLock);
+    struct buffer_event* list = screen.bufferEvents;
+    screen.bufferEvents = NULL;
+    pthread_mutex_unlock(&screen.bufferLock);
+
+    struct buffer_event* ordered = NULL;
+    while (list) {
+        struct buffer_event* next = list->next;
+        list->next = ordered;
+        ordered = list;
+        list = next;
+    }
+    while (ordered) {
+        struct buffer_event* e = ordered;
+        ordered = e->next;
+        if (e->event == DNX_BUFFER_SHOWN && e->flip == screen.shownWaiting) {
+            screen.shownWaiting = 0;
+            present_event_notify(e->flip, GetTimeInMicros(), screen.msc);
+        } else if (e->event == DNX_BUFFER_RELEASED && e->flip == screen.lastExternal) {
+            screen.lastExternal = 0;
+            reportUnflip();
+        }
+        free(e);
+    }
+}
+
 /* Shows the flipped client buffer, whole, then reports the flip. */
 static void presentFlip(void) {
     PixmapPtr pixmap = screen.flipPixmap;
+    AHardwareBuffer* hardwareBuffer = dnx_dri3_hardware_buffer(pixmap);
+    if (screen.flipDirty && hardwareBuffer && screen.flipEvent) {
+        /* No copy: the buffer itself goes to the display, and Present
+         * hears of the flip once it is on screen (onBufferEvents). */
+        uint64_t event = screen.flipEvent;
+        if (dnx_presenter_present_buffer(hardwareBuffer, pixmap->drawable.width, pixmap->drawable.height, onBufferEvent,
+                                         (void*) (uintptr_t) event)) {
+            screen.flipDirty = false;
+            screen.flipEvent = 0;
+            screen.shownWaiting = event;
+            screen.lastExternal = event;
+            return;
+        }
+    }
     if (screen.flipDirty) {
         dnx_box all = {0, 0, pixmap->drawable.width, pixmap->drawable.height};
         dnx_dri3_begin_cpu_read(pixmap);
@@ -174,13 +288,16 @@ static void onFrame(int fd, int ready, void* data) {
     eventfd_t value;
     eventfd_read(fd, &value);
     screen.vsyncRequested = false;
-    screen.msc++;
+    /* Resynchronized on the real vsync, so extrapolation never drifts. */
+    int64_t vsync = atomic_load(&screen.lastVsyncNs);
+    uint64_t before = screen.msc;
+    updateMsc(vsync);
+    if (screen.msc == before) screen.msc++;
+    screen.mscTimeNs = vsync;
     performVblanks();
 
-    if (screen.unflipEvent) {
-        present_event_notify(screen.unflipEvent, GetTimeInMicros(), screen.msc);
-        screen.unflipEvent = 0;
-    }
+    /* After an app-allocated buffer, only once the display let go of it. */
+    reportUnflip();
 
     if (screen.flipPixmap) {
         presentFlip();
@@ -220,6 +337,13 @@ static void onDamage(DamagePtr damage, RegionPtr region, void* closure) {
 void dnx_output_force_redraw(void) {
     if (!pScreenPtr) return;
     screen.flipDirty = screen.flipPixmap != NULL;
+    /* A flip in flight when the surface went away may never be reported
+     * by the presenter; its client must not wait for it forever. */
+    if (screen.shownWaiting) {
+        uint64_t event = screen.shownWaiting;
+        screen.shownWaiting = 0;
+        present_event_notify(event, GetTimeInMicros(), screen.msc);
+    }
     BoxRec box = {0, 0, pScreenPtr->width, pScreenPtr->height};
     RegionRec all;
     RegionInit(&all, &box, 1);
@@ -446,7 +570,8 @@ static RRCrtcPtr presentGetCrtc(WindowPtr w) {
 }
 
 static int presentGetUstMsc(RRCrtcPtr crtc, uint64_t* ust, uint64_t* msc) {
-    *ust = GetTimeInMicros();
+    updateMsc(nowNs());
+    *ust = screen.mscTimeNs / 1000;
     *msc = screen.msc;
     return Success;
 }
@@ -482,6 +607,10 @@ static Bool presentFlipPixmap(RRCrtcPtr crtc, uint64_t eventId, uint64_t targetM
     screen.flipPixmap = pixmap;
     screen.flipEvent = eventId;
     screen.flipDirty = true;
+    if (dnx_dri3_hardware_buffer(pixmap)) {
+        presentFlip();
+        if (!screen.flipDirty) return TRUE;
+    }
     requestFrame();
     return TRUE;
 }
@@ -516,7 +645,9 @@ static Bool screenInit(ScreenPtr pScreen, int argc, char** argv) {
         screen.vsyncFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
         dnx_presenter_set_vsync_callback(onVsync, NULL);
     }
+    if (screen.bufferFd < 0) screen.bufferFd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
     SetNotifyFd(screen.vsyncFd, onFrame, X_NOTIFY_READ, NULL);
+    SetNotifyFd(screen.bufferFd, onBufferEvents, X_NOTIFY_READ, NULL);
     screen.framerate = dnx_presenter_refresh_rate();
 
     miSetZeroLineBias(pScreen, 0);

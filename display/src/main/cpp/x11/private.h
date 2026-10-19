@@ -20,6 +20,8 @@ Bool dnx_dri3_init(ScreenPtr pScreen);
 void dnx_dri3_begin_cpu_read(PixmapPtr pixmap);
 /* True for pixmaps imported from a client's dma-buf. */
 Bool dnx_dri3_is_dmabuf(PixmapPtr pixmap);
+/* The AHardwareBuffer behind a DRI3 pixmap, when the app allocated it. */
+struct AHardwareBuffer* dnx_dri3_hardware_buffer(PixmapPtr pixmap);
 
 /* server.c: called from ddxReady() once the server can take input. */
 void dnx_server_ready(void);
