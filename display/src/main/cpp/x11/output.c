@@ -70,8 +70,9 @@ static struct {
     /* Media stream counter: one per display vsync, also while the clock
      * sleeps, so that Present clients see where the display really is and a
      * flip whose target has passed is shown at once. */
-    uint64_t msc;
-    uint64_t mscTimeNs;               /* vsync time of msc, CLOCK_MONOTONIC */
+    uint64_t msc;                     /* never decreases */
+    uint64_t vsyncMsc;                /* msc of the last vsync seen... */
+    int64_t vsyncTimeNs;              /* ...and its time, CLOCK_MONOTONIC */
     _Atomic int64_t lastVsyncNs;      /* written by the vsync thread */
     struct xorg_list vblanks;
     /* Present flips: a full-screen client buffer is shown instead of the
@@ -165,19 +166,31 @@ static int64_t vsyncPeriodNs(void) {
     return 1000000000LL / (screen.framerate > 0 ? screen.framerate : 60);
 }
 
-/* Moves msc to the vsync at or before `nowNs`, counting the vsyncs the
- * clock slept through. */
+/* Vsyncs between the last one seen and `timeNs`, rounded. */
+static int64_t vsyncsSince(int64_t timeNs) {
+    int64_t period = vsyncPeriodNs();
+    if (screen.vsyncTimeNs == 0 || timeNs <= screen.vsyncTimeNs) return 0;
+    return (timeNs - screen.vsyncTimeNs + period / 2) / period;
+}
+
+/* A vsync the clock reported, counting those it slept through. */
+static void onVsyncTime(int64_t vsyncNs) {
+    int64_t elapsed = vsyncsSince(vsyncNs);
+    screen.vsyncMsc += elapsed > 0 ? elapsed : 1;
+    screen.vsyncTimeNs = vsyncNs;
+    if (screen.vsyncMsc > screen.msc) screen.msc = screen.vsyncMsc;
+}
+
+/* Between vsyncs: where the display is now, extrapolated from the last one. */
 static void updateMsc(int64_t nowNs) {
     int64_t period = vsyncPeriodNs();
-    if (screen.mscTimeNs == 0) {
-        screen.mscTimeNs = nowNs;
-        return;
-    }
-    if (nowNs <= (int64_t) screen.mscTimeNs) return;
-    int64_t elapsed = (nowNs - (int64_t) screen.mscTimeNs + period / 4) / period;
-    if (elapsed <= 0) return;
-    screen.msc += elapsed;
-    screen.mscTimeNs += elapsed * period;
+    if (screen.vsyncTimeNs == 0 || nowNs <= screen.vsyncTimeNs) return;
+    uint64_t now = screen.vsyncMsc + (uint64_t) ((nowNs - screen.vsyncTimeNs) / period);
+    if (now > screen.msc) screen.msc = now;
+}
+
+static uint64_t mscTimeNs(void) {
+    return (uint64_t) (screen.vsyncTimeNs + (int64_t) (screen.msc - screen.vsyncMsc) * vsyncPeriodNs());
 }
 
 static uint64_t nowNs(void) {
@@ -289,11 +302,7 @@ static void onFrame(int fd, int ready, void* data) {
     eventfd_read(fd, &value);
     screen.vsyncRequested = false;
     /* Resynchronized on the real vsync, so extrapolation never drifts. */
-    int64_t vsync = atomic_load(&screen.lastVsyncNs);
-    uint64_t before = screen.msc;
-    updateMsc(vsync);
-    if (screen.msc == before) screen.msc++;
-    screen.mscTimeNs = vsync;
+    onVsyncTime(atomic_load(&screen.lastVsyncNs));
     performVblanks();
 
     /* After an app-allocated buffer, only once the display let go of it. */
@@ -571,7 +580,7 @@ static RRCrtcPtr presentGetCrtc(WindowPtr w) {
 
 static int presentGetUstMsc(RRCrtcPtr crtc, uint64_t* ust, uint64_t* msc) {
     updateMsc(nowNs());
-    *ust = screen.mscTimeNs / 1000;
+    *ust = mscTimeNs() / 1000;
     *msc = screen.msc;
     return Success;
 }
