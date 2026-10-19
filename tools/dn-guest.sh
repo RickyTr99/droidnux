@@ -14,7 +14,7 @@ export MSYS_NO_PATHCONV=1
 LIB=$("$ADB" shell dumpsys package $PKG | sed -n 's/^ *legacyNativeLibraryDir=//p' | tr -d '\r')/arm64
 SCRIPT=$(printf '%s' "$*" | sed "s/'/'\\''/g")
 "$ADB" shell "run-as $PKG sh -c 'cd /data/data/$PKG && mkdir -p cache/proot-tmp files/rootfs/debian-trixie/tmp/.droidnux-shm && \
-GPU= && if [ -d files/gpu-node/dri ]; then GPU=\"-b \$PWD/files/gpu-node/sys:/sys/dev/char -b \$PWD/files/gpu-node/dri:/dev/dri -b /dev/kgsl-3d0:/dev/dri/renderD128\"; fi && \
+GPU= && if [ -d files/gpu-node/dri ]; then GPU=\"-b \$PWD/files/gpu-node/sys:/sys/dev/char -b \$PWD/files/gpu-node/dri:/dev/dri -b /dev/kgsl-3d0:/dev/dri/renderD128 -b /dev/kgsl-3d0:/dev/dri/renderD0\"; fi && \
 ${DN_PROOT_ENV:-} PROOT_LOADER=$LIB/libproot-loader.so PROOT_TMP_DIR=\$PWD/cache/proot-tmp \
 $LIB/libproot.so --kill-on-exit --link2symlink --sysvipc -L -0 -r files/rootfs/debian-trixie \
 -b /dev -b /proc -b /sys -b \$PWD/files/rootfs/debian-trixie/tmp/.droidnux-shm:/dev/shm \$GPU ${DN_PROOT_ARGS:-} -w /root /usr/bin/env -i HOME=/root USER=root LANG=C.UTF-8 TERM=xterm-256color \

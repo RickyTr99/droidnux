@@ -10,6 +10,7 @@ add_library(droidnux-display SHARED
     core/allocator.cpp
     core/gpu_copy.c
     core/presenter.cpp
+    core/video_decoder.cpp
     buffer_spike.cpp
     jni.cpp
     probe.cpp)
@@ -18,7 +19,7 @@ target_compile_options(droidnux-display PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Werror>" -fvisibility=hidden)
 # Newer-than-minSdk APIs are guarded with __builtin_available.
 target_compile_definitions(droidnux-display PRIVATE __ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__)
-target_link_libraries(droidnux-display PRIVATE android log nativewindow EGL GLESv3 dl)
+target_link_libraries(droidnux-display PRIVATE android log mediandk nativewindow EGL GLESv3 dl)
 
 # Preload library for the desktop session in the container: MIT-SHM segments
 # the X server can attach (shm/dnx_shm.c). It runs under glibc, so it links to

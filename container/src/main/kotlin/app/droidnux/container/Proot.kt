@@ -65,6 +65,11 @@ class Proot(context: Context) {
      * same device). Without one, EGL falls back to software and Firefox
      * blocklists WebRender. KGSL answers no DRM ioctl: Turnip's msm probe
      * skips the node and keeps using KGSL.
+     *
+     * libdrm also finds a node's type from the device number alone
+     * (drmGetNodeTypeFromFd, which libva's vaGetDisplayDRM needs): it looks
+     * for /dev/dri/card<minor> or /dev/dri/renderD<minor>, so the device is
+     * also shown under its real minor.
      */
     private fun gpuNodeBinds(): List<String> {
         val rdev = try {
@@ -91,11 +96,14 @@ class Proot(context: Context) {
                 Os.symlink(target, link.path)
             }
         }
-        File(dri, RENDER_NODE).createNewFile() // mount point for the device
+        val minorNode = "renderD$minor"
+        File(dri, RENDER_NODE).createNewFile() // mount points for the device
+        File(dri, minorNode).createNewFile()
         return listOf(
             "-b", "${sys.absolutePath}:/sys/dev/char",
             "-b", "${dri.absolutePath}:/dev/dri",
             "-b", "$KGSL_DEVICE:/dev/dri/$RENDER_NODE",
+            "-b", "$KGSL_DEVICE:/dev/dri/$minorNode",
         )
     }
 

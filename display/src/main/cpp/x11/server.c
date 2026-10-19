@@ -30,6 +30,7 @@
 #include "opaque.h"
 #include "os.h"
 #include "scrnintstr.h"
+#include "video_decoder.h"
 #include "xkbsrv.h"
 
 #include "dnx_x11.h"
@@ -110,6 +111,11 @@ bool dnx_x11_start(const dnx_x11_config* config) {
     asprintf(&allocator_path, "%s/.droidnux-ahb", config->tmp_dir);
     dnx_allocator_start(allocator_path);
     free(allocator_path);
+    /* Hardware video decoding for DroidNux's VA-API driver (guest/va). */
+    char* video_path = NULL;
+    asprintf(&video_path, "%s/.droidnux-video", config->tmp_dir);
+    dnx_video_decoder_start(video_path);
+    free(video_path);
 
     XkbBaseDirectory = strdup(config->xkb_dir);
     if (config->font_dir && access(config->font_dir, F_OK) == 0) {
