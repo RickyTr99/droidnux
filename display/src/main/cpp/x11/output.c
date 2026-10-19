@@ -230,6 +230,7 @@ static void leaveLayer(void) {
     RegionRec region;
     RegionInit(&region, &screen.layerBox, 1);
     RegionRec shown;
+    RegionNull(&shown); /* the window may be gone */
     if (window && shownRegion(window, &shown)) {
         BoxRec box = {window->drawable.x, window->drawable.y, window->drawable.x + buffer->pixmap->drawable.width,
                       window->drawable.y + buffer->pixmap->drawable.height};
