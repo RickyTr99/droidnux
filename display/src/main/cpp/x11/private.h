@@ -18,6 +18,8 @@ void dnx_output_force_redraw(void);
 Bool dnx_dri3_init(ScreenPtr pScreen);
 /* Makes GPU writes to a DRI3 pixmap visible to the CPU; no-op for other pixmaps. */
 void dnx_dri3_begin_cpu_read(PixmapPtr pixmap);
+/* True for pixmaps imported from a client's dma-buf. */
+Bool dnx_dri3_is_dmabuf(PixmapPtr pixmap);
 
 /* server.c: called from ddxReady() once the server can take input. */
 void dnx_server_ready(void);

@@ -59,6 +59,12 @@ static struct {
     int framerate;
     uint64_t msc;
     struct xorg_list vblanks;
+    /* Present flips: a full-screen client buffer is shown instead of the
+     * screen pixmap, skipping the copy into it. */
+    PixmapPtr flipPixmap;       /* shown while flipped; Present holds a reference */
+    uint64_t flipEvent;         /* flip to report once flipPixmap has been shown */
+    uint64_t unflipEvent;       /* unflip to report at the next frame */
+    bool flipDirty;             /* flipPixmap has content not shown yet */
 } screen = {
     .vsyncFd = -1,
     .framerate = 60,
@@ -141,6 +147,28 @@ static void performVblanks(void) {
     }
 }
 
+/* Shows the flipped client buffer, whole, then reports the flip. */
+static void presentFlip(void) {
+    PixmapPtr pixmap = screen.flipPixmap;
+    if (screen.flipDirty) {
+        dnx_box all = {0, 0, pixmap->drawable.width, pixmap->drawable.height};
+        dnx_dri3_begin_cpu_read(pixmap);
+        if (dnx_presenter_present(pixmap->devPrivate.ptr, pixmap->drawable.width, pixmap->drawable.height,
+                                  pixmap->devKind, DNX_PIXEL_BGRX8888, &all, 1)) {
+            screen.flipDirty = false;
+        } else if (!dnx_presenter_attached()) {
+            /* Nothing to show it on: the frame is lost, but the client
+             * must not wait for it (dnx_x11_redraw shows it again). */
+            screen.flipDirty = false;
+        }
+    }
+    if (!screen.flipDirty && screen.flipEvent) {
+        uint64_t event = screen.flipEvent;
+        screen.flipEvent = 0;
+        present_event_notify(event, GetTimeInMicros(), screen.msc);
+    }
+}
+
 /* Server thread, once per requested vsync. */
 static void onFrame(int fd, int ready, void* data) {
     eventfd_t value;
@@ -148,6 +176,17 @@ static void onFrame(int fd, int ready, void* data) {
     screen.vsyncRequested = false;
     screen.msc++;
     performVblanks();
+
+    if (screen.unflipEvent) {
+        present_event_notify(screen.unflipEvent, GetTimeInMicros(), screen.msc);
+        screen.unflipEvent = 0;
+    }
+
+    if (screen.flipPixmap) {
+        presentFlip();
+        if (screen.flipDirty || screen.flipEvent) requestFrame();
+        return;
+    }
 
     PixmapPtr pixmap = pScreenPtr ? pScreenPtr->GetScreenPixmap(pScreenPtr) : NULL;
     RegionPtr region = screen.damage ? DamageRegion(screen.damage) : NULL;
@@ -180,6 +219,7 @@ static void onDamage(DamagePtr damage, RegionPtr region, void* closure) {
 
 void dnx_output_force_redraw(void) {
     if (!pScreenPtr) return;
+    screen.flipDirty = screen.flipPixmap != NULL;
     BoxRec box = {0, 0, pScreenPtr->width, pScreenPtr->height};
     RegionRec all;
     RegionInit(&all, &box, 1);
@@ -315,6 +355,9 @@ static Bool rrScreenSetSize(ScreenPtr pScreen, CARD16 width, CARD16 height, CARD
 
     performVblanks();
     present_restore_screen_pixmap(pScreen);
+    /* The screen pixmap has the flip's content again; Present unflips at
+     * its next frame, as the window no longer covers the screen. */
+    screen.flipPixmap = NULL;
     SetRootClip(pScreen, ROOT_CLIP_NONE);
 
     pScreen->root->drawable.width = pScreen->width = width;
@@ -428,12 +471,40 @@ static void presentAbortVblank(RRCrtcPtr crtc, uint64_t id, uint64_t msc) {
     }
 }
 
+/* Present already checked that the window covers the whole screen,
+ * unredirected and unobscured, with a pixmap of exactly its size. */
+static Bool presentCheckFlip(RRCrtcPtr crtc, WindowPtr window, PixmapPtr pixmap, Bool syncFlip) {
+    return dnx_dri3_is_dmabuf(pixmap) && pixmap->drawable.bitsPerPixel == 32;
+}
+
+static Bool presentFlipPixmap(RRCrtcPtr crtc, uint64_t eventId, uint64_t targetMsc, PixmapPtr pixmap, Bool syncFlip) {
+    /* Present flips again only after the last flip event (flip_pending). */
+    screen.flipPixmap = pixmap;
+    screen.flipEvent = eventId;
+    screen.flipDirty = true;
+    requestFrame();
+    return TRUE;
+}
+
+static void presentAfterFlip(RRCrtcPtr crtc, uint64_t eventId, uint64_t ust, uint64_t targetMsc, PixmapPtr pixmap) {}
+
+static void presentUnflip(ScreenPtr pScreen, uint64_t eventId) {
+    /* present_unflip() has copied the last flip into the screen pixmap,
+     * damaging it, so the next frame shows the screen pixmap again. */
+    screen.flipPixmap = NULL;
+    screen.unflipEvent = eventId;
+    requestFrame();
+}
+
 static struct present_screen_info presentInfo = {
     .get_crtc = presentGetCrtc,
     .get_ust_msc = presentGetUstMsc,
     .queue_vblank = presentQueueVblank,
     .abort_vblank = presentAbortVblank,
-    .check_flip = FalseNoop, /* Phase 1: every Present is a copy */
+    .check_flip = presentCheckFlip,
+    .flip = presentFlipPixmap,
+    .after_flip = presentAfterFlip,
+    .unflip = presentUnflip,
 };
 
 /* -- Screen --------------------------------------------------------------- */

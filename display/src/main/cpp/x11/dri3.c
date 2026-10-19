@@ -186,6 +186,10 @@ Bool dnx_dri3_init(ScreenPtr pScreen) {
     return dri3_screen_init(pScreen, &dri3Info);
 }
 
+Bool dnx_dri3_is_dmabuf(PixmapPtr pixmap) {
+    return pixmap && pixmapDmabuf(pixmap) != NULL;
+}
+
 void dnx_dri3_begin_cpu_read(PixmapPtr pixmap) {
     struct dmabuf* buffer = pixmap ? pixmapDmabuf(pixmap) : NULL;
     if (!buffer) return;
