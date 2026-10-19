@@ -40,6 +40,7 @@
 #include "shmint.h"
 #include "fbconfigs.h"
 
+#include "gpu_copy.h"
 #include "presenter.h"
 #include "private.h"
 
@@ -140,8 +141,14 @@ static bool gpuCopy(WindowPtr window, PixmapPtr pixmap, PixmapPtr dst, RegionPtr
     RegionTranslate(&region, dx, dy);
     RegionIntersect(&region, &region, &window->clipList);
 
-    bool done = dnx_gpu_copy(src, dnx_dri3_gpu_image(pixmap), screenBuffer, dnx_dri3_gpu_image(dst),
-                             RegionRects(&region), RegionNumRects(&region), dx, dy);
+    int count = RegionNumRects(&region);
+    BoxPtr rects = RegionRects(&region);
+    dnx_box stackBoxes[64];
+    dnx_box* boxes = count <= 64 ? stackBoxes : malloc(sizeof(dnx_box) * count);
+    bool done = boxes != NULL;
+    for (int i = 0; done && i < count; i++) boxes[i] = (dnx_box) {rects[i].x1, rects[i].y1, rects[i].x2, rects[i].y2};
+    if (done) done = dnx_gpu_copy(src, dnx_dri3_gpu_image(pixmap), screenBuffer, dnx_dri3_gpu_image(dst), boxes, count, dx, dy);
+    if (boxes != stackBoxes) free(boxes);
     /* present_execute_copy() then damages update and the clip list, taking the
      * update region (pixmap coordinates) as if it were in screen ones. */
     if (done && update) RegionCopy(update, &region);
@@ -332,7 +339,8 @@ static void presentFlip(void) {
         dnx_box all = {0, 0, pixmap->drawable.width, pixmap->drawable.height};
         dnx_dri3_begin_cpu_read(pixmap);
         if (dnx_presenter_present(pixmap->devPrivate.ptr, pixmap->drawable.width, pixmap->drawable.height,
-                                  pixmap->devKind, DNX_PIXEL_BGRX8888, &all, 1)) {
+                                  pixmap->devKind, DNX_PIXEL_BGRX8888, hardwareBuffer, dnx_dri3_gpu_image(pixmap),
+                                  &all, 1)) {
             screen.flipDirty = false;
         } else if (!dnx_presenter_attached()) {
             /* Nothing to show it on: the frame is lost, but the client
@@ -378,7 +386,8 @@ static void onFrame(int fd, int ready, void* data) {
 
         /* The presenter records the damage whether or not it can show it now. */
         bool shown = dnx_presenter_present(pixmap->devPrivate.ptr, pixmap->drawable.width, pixmap->drawable.height,
-                                           pixmap->devKind, DNX_PIXEL_BGRX8888, boxes, count);
+                                           pixmap->devKind, DNX_PIXEL_BGRX8888, dnx_dri3_hardware_buffer(pixmap),
+                                           dnx_dri3_gpu_image(pixmap), boxes, count);
         if (boxes != stackBoxes) free(boxes);
         if (damaged) DamageEmpty(screen.damage);
         /* Without a surface there is nothing to retry until one is attached

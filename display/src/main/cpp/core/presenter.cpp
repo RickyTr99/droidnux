@@ -1,5 +1,7 @@
 #include "presenter.h"
 
+#include "gpu_copy.h"
+
 #include <android/choreographer.h>
 #include <android/hardware_buffer.h>
 #include <android/log.h>
@@ -30,8 +32,10 @@ constexpr size_t kMaxMissedRects = 48;  // beyond this, missed damage collapses 
 constexpr uint32_t kCursorSize = 256;   // largest cursor image kept (X cursors are almost always <= 64)
 constexpr uint32_t kFormatBgra8888 = 5; // AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM, not in the NDK headers
 
-constexpr uint64_t kFrameUsage = AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-                                 AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY;
+constexpr uint64_t kCursorUsage = AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+                                  AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY;
+// The GPU copies into frames when the source is an AHardwareBuffer, the CPU otherwise.
+constexpr uint64_t kFrameUsage = kCursorUsage | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT;
 
 // ---------------------------------------------------------------------------
 // Vsync clock: AChoreographer on a dedicated looper thread, ticking only when
@@ -122,7 +126,8 @@ private:
 struct FrameBuffer {
     AHardwareBuffer* buffer = nullptr;
     uint32_t stride = 0;  // pixels
-    bool busy = false;    // presented, release fence not signalled yet
+    void* gpuImage = nullptr;  // buffer as the GPU sees it (gpu_copy.h), made at the first GPU copy
+    bool busy = false;         // presented, release fence not signalled yet
     bool fullDamage = true;
     std::vector<dnx_box> missed;  // damage not copied into this buffer yet
 };
@@ -202,7 +207,7 @@ public:
     }
 
     bool present(const void* pixels, uint32_t width, uint32_t height, uint32_t stride, dnx_pixel_format,
-                 const dnx_box* rects, int count) {
+                 AHardwareBuffer* source, void** sourceImage, const dnx_box* rects, int count) {
         auto start = std::chrono::steady_clock::now();
         std::lock_guard lock(mutex_);
         if (width != width_ || height != height_) {
@@ -222,24 +227,30 @@ public:
         if (index < 0) return false;
         FrameBuffer& target = frames_[index];
 
-        void* dst = nullptr;
-        if (AHardwareBuffer_lock(target.buffer, AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, nullptr, &dst) != 0) {
-            LOGE("cannot lock frame buffer");
-            return false;
-        }
         if (target.fullDamage) {
-            dnx_box all{0, 0, static_cast<int32_t>(width), static_cast<int32_t>(height)};
-            copyRect(static_cast<const uint8_t*>(pixels), stride, static_cast<uint8_t*>(dst), target.stride * 4, all);
-        } else {
+            target.missed.assign(1, dnx_box{0, 0, static_cast<int32_t>(width), static_cast<int32_t>(height)});
+        }
+        for (dnx_box& box : target.missed) box = clampLocked(box);
+        int acquireFence = -1;
+        // The GPU copy waits for its blits: no acquire fence, and the caller may
+        // draw into the source again as soon as we return.
+        bool copied = source != nullptr && sourceImage != nullptr &&
+                      dnx_gpu_copy(source, sourceImage, target.buffer, &target.gpuImage, target.missed.data(),
+                                   static_cast<int>(target.missed.size()), 0, 0);
+        if (!copied) {
+            void* dst = nullptr;
+            if (AHardwareBuffer_lock(target.buffer, AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, nullptr, &dst) != 0) {
+                LOGE("cannot lock frame buffer");
+                return false;
+            }
             for (const dnx_box& box : target.missed) {
                 copyRect(static_cast<const uint8_t*>(pixels), stride, static_cast<uint8_t*>(dst), target.stride * 4,
                          box);
             }
+            AHardwareBuffer_unlock(target.buffer, &acquireFence);
         }
         target.missed.clear();
         target.fullDamage = false;
-        int acquireFence = -1;
-        AHardwareBuffer_unlock(target.buffer, &acquireFence);
 
         ASurfaceTransaction* t = ASurfaceTransaction_create();
         ASurfaceTransaction_setBuffer(t, surface_, target.buffer, acquireFence);
@@ -430,6 +441,7 @@ private:
 
     void reallocateFramesLocked(uint32_t width, uint32_t height) {
         for (FrameBuffer& b : frames_) {
+            dnx_gpu_image_free(b.gpuImage);  // present() runs on the GPU copy thread
             if (b.buffer != nullptr) AHardwareBuffer_release(b.buffer);
             b = FrameBuffer{};
         }
@@ -478,11 +490,16 @@ private:
         }
     }
 
-    void copyRect(const uint8_t* src, uint32_t srcStride, uint8_t* dst, uint32_t dstStride, dnx_box box) const {
+    dnx_box clampLocked(dnx_box box) const {
         box.x1 = std::clamp<int32_t>(box.x1, 0, static_cast<int32_t>(width_));
-        box.x2 = std::clamp<int32_t>(box.x2, 0, static_cast<int32_t>(width_));
+        box.x2 = std::clamp<int32_t>(box.x2, box.x1, static_cast<int32_t>(width_));
         box.y1 = std::clamp<int32_t>(box.y1, 0, static_cast<int32_t>(height_));
-        box.y2 = std::clamp<int32_t>(box.y2, 0, static_cast<int32_t>(height_));
+        box.y2 = std::clamp<int32_t>(box.y2, box.y1, static_cast<int32_t>(height_));
+        return box;
+    }
+
+    // box is clamped to the frame.
+    void copyRect(const uint8_t* src, uint32_t srcStride, uint8_t* dst, uint32_t dstStride, dnx_box box) const {
         if (box.x2 <= box.x1 || box.y2 <= box.y1) return;
         const size_t rowBytes = static_cast<size_t>(box.x2 - box.x1) * 4;
         for (int32_t y = box.y1; y < box.y2; y++) {
@@ -553,7 +570,7 @@ private:
             desc.height = kCursorSize;
             desc.layers = 1;
             desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
-            desc.usage = kFrameUsage;
+            desc.usage = kCursorUsage;
             if (AHardwareBuffer_allocate(&desc, &c.buffer) != 0) {
                 LOGE("cannot allocate cursor buffer");
                 c.buffer = nullptr;
@@ -638,8 +655,9 @@ void dnx_presenter_detach(void) { presenter().detach(); }
 bool dnx_presenter_attached(void) { return presenter().attached(); }
 
 bool dnx_presenter_present(const void* pixels, uint32_t width, uint32_t height, uint32_t stride_bytes,
-                           dnx_pixel_format format, const dnx_box* rects, int rect_count) {
-    return presenter().present(pixels, width, height, stride_bytes, format, rects, rect_count);
+                           dnx_pixel_format format, AHardwareBuffer* buffer, void** gpu_image, const dnx_box* rects,
+                           int rect_count) {
+    return presenter().present(pixels, width, height, stride_bytes, format, buffer, gpu_image, rects, rect_count);
 }
 
 bool dnx_presenter_present_buffer(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_buffer_callback callback,

@@ -89,7 +89,6 @@ set(X11_SOURCES
     ${TX11_DIR}/lorie/InputXKB.c
     ${TX11_DIR}/lorie/workqueue.cpp
     ${CMAKE_CURRENT_LIST_DIR}/dri3.c
-    ${CMAKE_CURRENT_LIST_DIR}/gpu_copy.c
     ${CMAKE_CURRENT_LIST_DIR}/output.c
     ${CMAKE_CURRENT_LIST_DIR}/server.c)
 
@@ -120,4 +119,4 @@ target_include_directories(droidnux-display PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 target_link_options(droidnux-display PRIVATE -Wl,--no-undefined -Wl,--gc-sections)
 target_link_libraries(droidnux-display PRIVATE
     -Wl,--start-group ${X11_SERVER_LIBS} ${X11_DEPENDENCY_LIBS} -Wl,--end-group
-    mediandk m z GLESv3)
+    mediandk m z)

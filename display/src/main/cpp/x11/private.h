@@ -29,16 +29,8 @@ struct AHardwareBuffer* dnx_dri3_hardware_buffer(PixmapPtr pixmap);
 PixmapPtr dnx_dri3_create_hardware_pixmap(ScreenPtr pScreen, int width, int height, int depth);
 
 /* Where the GPU objects for a pixmap's AHardwareBuffer are kept (see
- * gpu_copy.c), freed with the pixmap; NULL for pixmaps without one. */
+ * core/gpu_copy.h), freed with the pixmap; NULL for pixmaps without one. */
 void** dnx_dri3_gpu_image(PixmapPtr pixmap);
-
-/* gpu_copy.c, server thread. Copies boxes of dst (x1, y1, x2, y2) from the
- * same boxes of src moved by (-dx, -dy), and waits until the GPU is done.
- * false if the GPU cannot do it (the caller copies on the CPU). */
-struct AHardwareBuffer;
-bool dnx_gpu_copy(struct AHardwareBuffer* src, void** srcImage, struct AHardwareBuffer* dst, void** dstImage,
-                  const BoxRec* boxes, int count, int dx, int dy);
-void dnx_gpu_image_free(void* image);
 
 /* server.c: called from ddxReady() once the server can take input. */
 void dnx_server_ready(void);

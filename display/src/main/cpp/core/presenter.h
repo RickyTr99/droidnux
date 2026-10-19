@@ -43,9 +43,14 @@ bool dnx_presenter_attached(void);
  * the whole surface. Returns false if nothing could be presented (no surface
  * or no free buffer yet); the caller should keep its damage and retry on the
  * next vsync. A size change implies full damage.
+ *
+ * If `pixels` live in `buffer` (BGRX, may be NULL), the GPU copies them
+ * (gpu_copy.h, same thread rules), keeping its objects for `buffer` in
+ * *gpu_image; the CPU copies from `pixels` if the GPU cannot.
  */
 bool dnx_presenter_present(const void* pixels, uint32_t width, uint32_t height, uint32_t stride_bytes,
-                           dnx_pixel_format format, const dnx_box* rects, int rect_count);
+                           dnx_pixel_format format, AHardwareBuffer* buffer, void** gpu_image, const dnx_box* rects,
+                           int rect_count);
 
 /* What happened to a buffer given to dnx_presenter_present_buffer(). */
 typedef enum dnx_buffer_event {

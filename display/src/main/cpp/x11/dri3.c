@@ -37,6 +37,7 @@
 #include "drm_fourcc.h"
 
 #include "allocator.h"
+#include "gpu_copy.h"
 #include "private.h"
 
 #define log(prio, ...) __android_log_print(ANDROID_LOG_##prio, "DroidNux.X11", __VA_ARGS__)
@@ -49,7 +50,7 @@ struct dmabuf {
     size_t size;
     AHardwareBuffer* ahb; /* the app allocated it (core/allocator.h): Android can show it as is */
     bool locked;          /* ahb stays locked for CPU access while the pixmap lives */
-    void* gpuImage;       /* ahb as the GPU sees it (gpu_copy.c), made at the first GPU copy */
+    void* gpuImage;       /* ahb as the GPU sees it (gpu_copy.h), made at the first GPU copy */
 };
 
 static DevPrivateKeyRec dmabufKeyRec;

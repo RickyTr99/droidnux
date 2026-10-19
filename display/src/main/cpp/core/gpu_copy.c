@@ -1,10 +1,8 @@
 /*
- * GPU copies between AHardwareBuffers for the X server: Present copies a
- * client's buffer (allocated by the app, core/allocator.h) into the screen
- * pixmap with a GLES blit, so the CPU never reads the client's pixels.
- *
- * One surfaceless GLES context, current on the server thread for the life
- * of the process. Server thread only.
+ * GPU copies between AHardwareBuffers (gpu_copy.h): X11 Present copies a
+ * client's buffer (allocated by the app, allocator.h) into the screen pixmap,
+ * and the presenter copies the screen pixmap's damage into its frames, with
+ * GLES blits, so the CPU never touches those pixels.
  */
 #define EGL_EGLEXT_PROTOTYPES
 #define GL_GLEXT_PROTOTYPES
@@ -18,9 +16,9 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
-#include "private.h"
+#include "gpu_copy.h"
 
-#define log(prio, ...) __android_log_print(ANDROID_LOG_##prio, "DroidNux.X11", __VA_ARGS__)
+#define log(prio, ...) __android_log_print(ANDROID_LOG_##prio, "DroidNux.GpuCopy", __VA_ARGS__)
 
 /* A buffer as the GPU sees it: a texture to read from, and a framebuffer to
  * read from or draw into. Lives as long as the pixmap. */
@@ -99,7 +97,7 @@ void dnx_gpu_image_free(void* data) {
     free(image);
 }
 
-bool dnx_gpu_copy(AHardwareBuffer* src, void** srcSlot, AHardwareBuffer* dst, void** dstSlot, const BoxRec* boxes,
+bool dnx_gpu_copy(AHardwareBuffer* src, void** srcSlot, AHardwareBuffer* dst, void** dstSlot, const dnx_box* boxes,
                   int count, int dx, int dy) {
     if (!gpuReady()) return false;
     struct gpu_image* from = gpuImage(src, srcSlot);
@@ -110,13 +108,13 @@ bool dnx_gpu_copy(AHardwareBuffer* src, void** srcSlot, AHardwareBuffer* dst, vo
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, to->fbo);
     /* Framebuffer rows are buffer rows in both: no flip. */
     for (int i = 0; i < count; i++) {
-        const BoxRec* b = &boxes[i];
+        const dnx_box* b = &boxes[i];
         glBlitFramebuffer(b->x1 - dx, b->y1 - dy, b->x2 - dx, b->y2 - dy, b->x1, b->y1, b->x2, b->y2,
                           GL_COLOR_BUFFER_BIT, GL_NEAREST);
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    /* Wait here: fb may draw into the screen pixmap as soon as we return.
+    /* Wait here: the X server may draw into either buffer as soon as we return.
      * The wait sleeps on the kernel fence; the blit takes well under 1 ms. */
     EGLSyncKHR sync = eglCreateSyncKHR(gpu.display, EGL_SYNC_FENCE_KHR, NULL);
     if (sync == EGL_NO_SYNC_KHR) {
