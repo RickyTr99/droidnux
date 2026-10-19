@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -31,6 +32,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -91,6 +93,7 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
                     state = state.rootfs,
                     onInstall = viewModel::install,
                     onCancel = viewModel::cancelInstall,
+                    reinstallWarning = stringResource(R.string.rootfs_reinstall_text),
                 )
             }
 
@@ -159,8 +162,10 @@ private fun InstallSection(
     state: InstallState,
     onInstall: () -> Unit,
     onCancel: () -> Unit,
+    reinstallWarning: String? = null, // asks before reinstalling, which deletes what is installed
 ) {
     val context = LocalContext.current
+    var confirming by remember { mutableStateOf(false) }
     fun size(bytes: Long) = Formatter.formatShortFileSize(context, bytes)
 
     Text(name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
@@ -194,7 +199,25 @@ private fun InstallSection(
         }
         InstallState.Installed -> {
             Status(stringResource(R.string.status_installed))
-            ActionRow { FilledTonalButton(onClick = onInstall) { Text(stringResource(R.string.action_reinstall)) } }
+            ActionRow {
+                FilledTonalButton(onClick = { if (reinstallWarning != null) confirming = true else onInstall() }) {
+                    Text(stringResource(R.string.action_reinstall))
+                }
+            }
+            if (confirming && reinstallWarning != null) {
+                AlertDialog(
+                    onDismissRequest = { confirming = false },
+                    title = { Text(stringResource(R.string.rootfs_reinstall_title, name)) },
+                    text = { Text(reinstallWarning) },
+                    confirmButton = {
+                        TextButton(onClick = { confirming = false; onInstall() }) {
+                            Text(stringResource(R.string.action_reinstall), color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    // The safe choice is the one under a stray tap's thumb.
+                    dismissButton = { Button(onClick = { confirming = false }) { Text(stringResource(R.string.action_cancel)) } },
+                )
+            }
         }
         is InstallState.Failed -> {
             Status(stringResource(R.string.status_failed, state.message), error = true)

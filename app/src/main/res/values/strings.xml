@@ -10,6 +10,8 @@
     <string name="action_install">Install</string>
     <string name="action_reinstall">Reinstall</string>
     <string name="action_cancel">Cancel</string>
+    <string name="rootfs_reinstall_title">Reinstall %1$s?</string>
+    <string name="rootfs_reinstall_text">Everything in the distro is deleted: installed packages, the desktop, the GPU drivers and the files in /root.</string>
     <string name="action_run">Run uname -a</string>
     <string name="status_checking">Checking…</string>
     <string name="status_not_installed">Not installed · %1$s</string>
