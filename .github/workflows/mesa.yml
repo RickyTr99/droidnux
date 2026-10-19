@@ -1,6 +1,6 @@
 name: Mesa component
 
-# Turnip + Zink for the container (guest/mesa). Built natively on an arm64
+# Turnip + Zink + the VA-API driver for the container (guest/mesa, guest/va). Built natively on an arm64
 # runner, inside the Debian release the app installs, so it links against the
 # same libraries the guest has. Tags named mesa-<version>-dn<revision> publish
 # the archive as a GitHub release the app downloads from.
@@ -8,7 +8,7 @@ name: Mesa component
 on:
   push:
     branches: [main, phase*]
-    paths: [guest/mesa/**, .github/workflows/mesa.yml]
+    paths: [guest/mesa/**, guest/va/**, display/src/main/cpp/core/video_protocol.h, .github/workflows/mesa.yml]
     tags: [mesa-*]
   workflow_dispatch:
 
@@ -48,4 +48,4 @@ jobs:
         with:
           files: out/*
           name: Mesa ${{ github.ref_name }}
-          body: Turnip (KGSL) and Zink for the DroidNux container, built from guest/mesa.
+          body: Turnip (KGSL), Zink and the VA-API driver for the DroidNux container, built from guest/mesa and guest/va.

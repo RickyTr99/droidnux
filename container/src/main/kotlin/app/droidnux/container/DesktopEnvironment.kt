@@ -109,6 +109,12 @@ object DesktopEnvironment {
                 # Swapchain images in AHardwareBuffers from the X server, which
                 # shows full-screen ones without copying them (Mesa patch 0003).
                 export DROIDNUX_AHB_SOCKET=/tmp/.droidnux-ahb
+                # Video decoding by the app's MediaCodec (guest/va), for players
+                # like mpv and ffmpeg; Firefox keeps software decoding (droidnux.js).
+                if [ -f "${'$'}MESA/lib/aarch64-linux-gnu/dri/droidnux_drv_video.so" ]; then
+                    export LIBVA_DRIVERS_PATH=${'$'}MESA/lib/aarch64-linux-gnu/dri
+                    export LIBVA_DRIVER_NAME=droidnux
+                fi
             else
                 # With DRI3 but no device, Debian's GLX tries Zink; with no
                 # Vulkan driver Zink fails and Mesa 25.0 deadlocks on its own
@@ -139,10 +145,13 @@ object DesktopEnvironment {
     private const val FIREFOX_PREFS_PATH = "/usr/lib/firefox-esr/browser/defaults/preferences/droidnux.js"
 
     // Under proot, Firefox's content processes crash in their seccomp sandbox
-    // (SIGSEGV at startup, pages never load).
+    // (SIGSEGV at startup, pages never load). VA-API decoding through the app
+    // costs Firefox more CPU than software (it reimports every frame), so it
+    // stays off there (PLAN.md, phase 2).
     private val FIREFOX_PREFS = """
         // Written by DroidNux.
         pref("security.sandbox.content.level", 0);
+        pref("media.hardware-video-decoding.enabled", false);
     """.trimIndent() + "\n"
 
     private val XFWM4_DEFAULTS = """
