@@ -432,8 +432,15 @@ static void trackScreenPixmap(PixmapPtr pixmap) {
     DamageRegister(&pixmap->drawable, screen.damage);
 }
 
+/* In an AHardwareBuffer, so the GPU can copy into and out of the screen;
+ * plain memory if that fails. */
+static PixmapPtr createScreenPixmap(ScreenPtr pScreen, int width, int height) {
+    PixmapPtr pixmap = dnx_dri3_create_hardware_pixmap(pScreen, width, height, pScreen->rootDepth);
+    return pixmap ? pixmap : pScreen->CreatePixmap(pScreen, width, height, pScreen->rootDepth, 0);
+}
+
 static Bool createScreenResources(ScreenPtr pScreen) {
-    PixmapPtr pixmap = pScreen->CreatePixmap(pScreen, pScreen->width, pScreen->height, pScreen->rootDepth, 0);
+    PixmapPtr pixmap = createScreenPixmap(pScreen, pScreen->width, pScreen->height);
     if (!pixmap) return FALSE;
     pScreen->devPrivate = pixmap;
     trackScreenPixmap(pixmap);
@@ -499,7 +506,7 @@ static Bool rrScreenSetSize(ScreenPtr pScreen, CARD16 width, CARD16 height, CARD
     pScreen->mmHeight = height * 25.4 / monitorResolution;
 
     PixmapPtr oldPixmap = pScreen->GetScreenPixmap(pScreen);
-    PixmapPtr newPixmap = pScreen->CreatePixmap(pScreen, width, height, pScreen->rootDepth, 0);
+    PixmapPtr newPixmap = createScreenPixmap(pScreen, width, height);
     pScreen->SetScreenPixmap(newPixmap);
     trackScreenPixmap(newPixmap);
 

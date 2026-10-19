@@ -20,8 +20,12 @@ Bool dnx_dri3_init(ScreenPtr pScreen);
 void dnx_dri3_begin_cpu_read(PixmapPtr pixmap);
 /* True for pixmaps imported from a client's dma-buf. */
 Bool dnx_dri3_is_dmabuf(PixmapPtr pixmap);
-/* The AHardwareBuffer behind a DRI3 pixmap, when the app allocated it. */
+/* The AHardwareBuffer behind a DRI3 pixmap, when the app allocated it, or
+ * behind a pixmap from dnx_dri3_create_hardware_pixmap(). */
 struct AHardwareBuffer* dnx_dri3_hardware_buffer(PixmapPtr pixmap);
+/* A depth 24 pixmap in an AHardwareBuffer the CPU and the GPU both use (the
+ * screen pixmap); NULL if it cannot be allocated. */
+PixmapPtr dnx_dri3_create_hardware_pixmap(ScreenPtr pScreen, int width, int height, int depth);
 
 /* server.c: called from ddxReady() once the server can take input. */
 void dnx_server_ready(void);

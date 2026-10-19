@@ -41,12 +41,14 @@
 
 #define log(prio, ...) __android_log_print(ANDROID_LOG_##prio, "DroidNux.X11", __VA_ARGS__)
 
-/* A pixmap's view of an imported dma-buf. */
+/* A pixmap's view of an imported dma-buf, or of a buffer the server allocated
+ * for itself (fd -1, mapped through the AHardwareBuffer lock). */
 struct dmabuf {
     int fd;
     void* map;
     size_t size;
     AHardwareBuffer* ahb; /* the app allocated it (core/allocator.h): Android can show it as is */
+    bool locked;          /* ahb stays locked for CPU access while the pixmap lives */
 };
 
 static DevPrivateKeyRec dmabufKeyRec;
@@ -61,6 +63,7 @@ static struct dmabuf* pixmapDmabuf(PixmapPtr pixmap) {
 static void dmabufFree(struct dmabuf* buffer) {
     if (buffer->map != MAP_FAILED) munmap(buffer->map, buffer->size);
     if (buffer->fd >= 0) close(buffer->fd);
+    if (buffer->locked) AHardwareBuffer_unlock(buffer->ahb, NULL);
     if (buffer->ahb) AHardwareBuffer_release(buffer->ahb);
     free(buffer);
 }
@@ -191,7 +194,57 @@ Bool dnx_dri3_init(ScreenPtr pScreen) {
 }
 
 Bool dnx_dri3_is_dmabuf(PixmapPtr pixmap) {
-    return pixmap && pixmapDmabuf(pixmap) != NULL;
+    struct dmabuf* buffer = pixmap ? pixmapDmabuf(pixmap) : NULL;
+    return buffer && buffer->fd >= 0;
+}
+
+#define AHB_FORMAT_B8G8R8A8_UNORM 5 /* not in the NDK headers */
+
+PixmapPtr dnx_dri3_create_hardware_pixmap(ScreenPtr pScreen, int width, int height, int depth) {
+    /* Cached on the CPU (fb draws into it at malloc speed on Adreno), and
+     * readable and writable by the GPU, so the app can copy into and out of
+     * it without the CPU. */
+    AHardwareBuffer_Desc desc = {
+        .width = width,
+        .height = height,
+        .layers = 1,
+        .format = AHB_FORMAT_B8G8R8A8_UNORM,
+        .usage = AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN |
+                 AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT,
+    };
+    struct dmabuf* buffer = calloc(1, sizeof(*buffer));
+    if (!buffer) return NULL;
+    buffer->fd = -1;
+    buffer->map = MAP_FAILED;
+    if (width <= 0 || height <= 0 || depth != 24 || AHardwareBuffer_allocate(&desc, &buffer->ahb) != 0) {
+        log(ERROR, "cannot allocate a %dx%d screen buffer", width, height);
+        dmabufFree(buffer);
+        return NULL;
+    }
+    AHardwareBuffer_describe(buffer->ahb, &desc);
+    /* Locked once for the pixmap's lifetime: the mapping is coherent with the
+     * GPU here, and fb needs a fixed address. */
+    void* pixels = NULL;
+    if (AHardwareBuffer_lock(buffer->ahb, AHARDWAREBUFFER_USAGE_CPU_READ_OFTEN | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
+                             -1, NULL, &pixels) != 0) {
+        log(ERROR, "cannot lock the screen buffer");
+        dmabufFree(buffer);
+        return NULL;
+    }
+    buffer->locked = true;
+
+    PixmapPtr pixmap = pScreen->CreatePixmap(pScreen, 0, 0, depth, 0);
+    if (!pixmap) {
+        dmabufFree(buffer);
+        return NULL;
+    }
+    if (!pScreen->ModifyPixmapHeader(pixmap, width, height, depth, 32, desc.stride * 4, pixels)) {
+        pScreen->DestroyPixmap(pixmap);
+        dmabufFree(buffer);
+        return NULL;
+    }
+    dixSetPrivate(&pixmap->devPrivates, dmabufKey, buffer);
+    return pixmap;
 }
 
 AHardwareBuffer* dnx_dri3_hardware_buffer(PixmapPtr pixmap) {
