@@ -2,6 +2,7 @@ package app.droidnux.ui
 
 import android.content.Intent
 import android.text.format.Formatter
+import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
@@ -24,10 +25,14 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -63,7 +68,11 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Column {
-                Text(stringResource(R.string.phase0_title), style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    stringResource(R.string.phase0_title),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
                 Text(
                     stringResource(R.string.phase0_subtitle),
                     style = MaterialTheme.typography.bodyMedium,
@@ -154,7 +163,7 @@ private fun InstallSection(
     val context = LocalContext.current
     fun size(bytes: Long) = Formatter.formatShortFileSize(context, bytes)
 
-    Text(name, style = MaterialTheme.typography.titleMedium)
+    Text(name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
     Spacer(Modifier.padding(top = 4.dp))
 
     when (state) {
@@ -207,9 +216,12 @@ private fun DesktopSection(state: DiagnosticsState, onInstall: () -> Unit) {
             Status(
                 stringResource(if (state.desktopUpToDate) R.string.desktop_installed else R.string.desktop_update),
             )
+            val desktopScale = desktopScaleSlider()
             ActionRow {
                 Button(onClick = {
-                    context.startActivity(Intent(context, DesktopActivity::class.java))
+                    context.startActivity(
+                        Intent(context, DesktopActivity::class.java).putExtra(DesktopActivity.EXTRA_SCALE, desktopScale),
+                    )
                 }) { Text(stringResource(R.string.action_open_desktop)) }
                 if (!state.desktopUpToDate) {
                     FilledTonalButton(onClick = onInstall) { Text(stringResource(R.string.action_update_desktop)) }
@@ -226,6 +238,42 @@ private fun DesktopSection(state: DiagnosticsState, onInstall: () -> Unit) {
         Mono(state.desktopLog)
     }
 }
+
+/**
+ * Desktop size as a fraction of the screen, remembered across launches.
+ * Applied when the desktop opens, also to a running one.
+ */
+@Composable
+private fun desktopScaleSlider(): Float {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE) }
+    var scale by remember { mutableFloatStateOf(prefs.getFloat(PREF_DESKTOP_SCALE, DesktopActivity.DEFAULT_SCALE)) }
+    val screen = remember { context.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds }
+
+    Spacer(Modifier.padding(top = 12.dp))
+    Text(
+        stringResource(
+            R.string.desktop_size,
+            (scale * 100).toInt(),
+            (screen.width() * scale).toInt() and 1.inv(),
+            (screen.height() * scale).toInt() and 1.inv(),
+        ),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurface,
+    )
+    Slider(
+        value = scale,
+        onValueChange = { scale = it },
+        onValueChangeFinished = { prefs.edit().putFloat(PREF_DESKTOP_SCALE, scale).apply() },
+        valueRange = DesktopActivity.MIN_SCALE..DesktopActivity.MAX_SCALE,
+        // 5% steps.
+        steps = Math.round((DesktopActivity.MAX_SCALE - DesktopActivity.MIN_SCALE) * 20) - 1,
+    )
+    return scale
+}
+
+private const val PREFS = "droidnux"
+private const val PREF_DESKTOP_SCALE = "desktop_scale"
 
 @Composable
 private fun Section(title: String, content: @Composable () -> Unit) {

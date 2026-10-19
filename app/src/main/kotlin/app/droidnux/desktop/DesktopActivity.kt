@@ -1,6 +1,7 @@
 package app.droidnux.desktop
 
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.graphics.Typeface
@@ -38,10 +39,15 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** Desktop pixels per surface pixel (the desktop runs below native resolution). */
     private var scale = 1f
+    /** Requested desktop size as a fraction of the screen, from [EXTRA_SCALE]. */
+    private var desktopScale = DEFAULT_SCALE
+    private var surfaceWidth = 0
+    private var surfaceHeight = 0
     private var touchDown = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        desktopScale = scaleOf(intent)
         window.attributes = window.attributes.apply {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
@@ -79,6 +85,20 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val requested = scaleOf(intent)
+        if (requested != desktopScale) {
+            desktopScale = requested
+            if (surfaceWidth > 0) resizeDesktop()
+        }
+    }
+
+    /** The scale [intent] asks for; intents without one (the notification) keep the current size. */
+    private fun scaleOf(intent: Intent?) =
+        (intent?.getFloatExtra(EXTRA_SCALE, desktopScale) ?: desktopScale).coerceIn(MIN_SCALE, MAX_SCALE)
+
     override fun onResume() {
         super.onResume()
         surfaceView.requestFocus()
@@ -99,12 +119,19 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             overlay?.text = "This build has no X server"
             return
         }
-        // Even sizes keep scaling artefacts away from odd pixel rows.
-        val desktopWidth = (width * DESKTOP_SCALE).toInt() and 1.inv()
-        val desktopHeight = (height * DESKTOP_SCALE).toInt() and 1.inv()
-        scale = desktopWidth.toFloat() / width
-
+        surfaceWidth = width
+        surfaceHeight = height
         Presenter.attach(holder.surface)
+        resizeDesktop()
+    }
+
+    /** Starts the X server, or resizes it, at [desktopScale] of the surface. */
+    private fun resizeDesktop() {
+        // Even sizes keep scaling artefacts away from odd pixel rows.
+        val desktopWidth = (surfaceWidth * desktopScale).toInt() and 1.inv()
+        val desktopHeight = (surfaceHeight * desktopScale).toInt() and 1.inv()
+        scale = desktopWidth.toFloat() / surfaceWidth
+
         if (!X11Server.running) {
             val rootfs = Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)
             val started = X11Server.start(rootfs, desktopWidth, desktopHeight, DPI)
@@ -234,9 +261,14 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         else -> "us"
     }
 
-    private companion object {
-        const val TAG = "DroidNux.Desktop"
-        const val DESKTOP_SCALE = 0.6f
-        const val DPI = 96
+    companion object {
+        private const val TAG = "DroidNux.Desktop"
+        private const val DPI = 96
+
+        /** Float extra: desktop size as a fraction of the screen, [MIN_SCALE] to [MAX_SCALE]. */
+        const val EXTRA_SCALE = "app.droidnux.desktop.SCALE"
+        const val DEFAULT_SCALE = 0.6f
+        const val MIN_SCALE = 0.4f
+        const val MAX_SCALE = 1f
     }
 }
