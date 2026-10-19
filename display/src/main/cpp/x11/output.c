@@ -36,6 +36,7 @@
 #include "opaque.h"
 #include "present.h"
 #include "present_priv.h"
+#include "compint.h"
 #include "randrstr.h"
 #include "shmint.h"
 #include "fbconfigs.h"
@@ -169,17 +170,44 @@ static BoxRec windowBox(WindowPtr window) {
                      window->drawable.y + window->drawable.height};
 }
 
-/* The window shows all of the pixmap, nothing covers it, and it is drawn
- * straight into the screen pixmap. */
-static bool layerFits(WindowPtr window, PixmapPtr pixmap) {
+/* What of the window shows on screen, in screen coordinates (to uninit);
+ * false if X does not put it there by itself. A window in a subtree that X
+ * redirected on its own (an ARGB toplevel in a 24-bit parent: Firefox,
+ * Chromium) draws into the subtree's pixmap, which Composite copies into the
+ * screen as it is (PictOpSrc, alpha dropped): it shows like any other window.
+ * A compositing manager's redirection is not ours to skip. */
+static bool shownRegion(WindowPtr window, RegionPtr region) {
     PixmapPtr screenPixmap = pScreenPtr->GetScreenPixmap(pScreenPtr);
+    PixmapPtr pixmap = pScreenPtr->GetWindowPixmap(window);
+    RegionNull(region);
+    if (!window->viewable) return false;
+    RegionCopy(region, &window->clipList);
+    if (pixmap == screenPixmap) return true;
+    WindowPtr top = window;
+    while (top->parent && pScreenPtr->GetWindowPixmap(top->parent) == pixmap) top = top->parent;
+    CompWindowPtr cw = NULL;
+    if (top->parent && pScreenPtr->GetWindowPixmap(top->parent) == screenPixmap) cw = GetCompWindow(top);
+    if (!cw || cw->update != CompositeRedirectAutomatic) {
+        RegionEmpty(region);
+        return false;
+    }
+    RegionIntersect(region, region, &cw->borderClip);
+    return true;
+}
+
+/* The window shows all of the pixmap on screen, and nothing covers it. */
+static bool layerFits(WindowPtr window, PixmapPtr pixmap) {
+    if (screen.flipPixmap || !dnx_dri3_hardware_buffer(pScreenPtr->GetScreenPixmap(pScreenPtr)) ||
+        !dnx_dri3_hardware_buffer(pixmap) || pixmap->drawable.bitsPerPixel != 32 ||
+        pixmap->drawable.width != window->drawable.width || pixmap->drawable.height != window->drawable.height)
+        return false;
     BoxRec box = windowBox(window);
-    BoxPtr clip = RegionExtents(&window->clipList);
-    return !screen.flipPixmap && window->viewable && pScreenPtr->GetWindowPixmap(window) == screenPixmap &&
-           dnx_dri3_hardware_buffer(screenPixmap) && dnx_dri3_hardware_buffer(pixmap) &&
-           pixmap->drawable.bitsPerPixel == 32 && pixmap->drawable.width == window->drawable.width &&
-           pixmap->drawable.height == window->drawable.height && RegionNumRects(&window->clipList) == 1 &&
-           clip->x1 == box.x1 && clip->y1 == box.y1 && clip->x2 == box.x2 && clip->y2 == box.y2;
+    RegionRec shown;
+    bool fits = shownRegion(window, &shown) && RegionNumRects(&shown) == 1;
+    BoxPtr clip = RegionExtents(&shown);
+    fits = fits && clip->x1 == box.x1 && clip->y1 == box.y1 && clip->x2 == box.x2 && clip->y2 == box.y2;
+    RegionUninit(&shown);
+    return fits;
 }
 
 /* Idle once the display let go of it and it is no longer the window's
@@ -201,18 +229,26 @@ static void leaveLayer(void) {
     WindowPtr window = lookupWindow(screen.layerWindow);
     RegionRec region;
     RegionInit(&region, &screen.layerBox, 1);
-    if (window && window->viewable && pScreenPtr->GetWindowPixmap(window) == screenPixmap) {
+    RegionRec shown;
+    if (window && shownRegion(window, &shown)) {
         BoxRec box = {window->drawable.x, window->drawable.y, window->drawable.x + buffer->pixmap->drawable.width,
                       window->drawable.y + buffer->pixmap->drawable.height};
-        RegionRec shown;
-        RegionInit(&shown, &box, 1);
-        RegionIntersect(&shown, &shown, &window->clipList);
+        RegionRec frame;
+        RegionInit(&frame, &box, 1);
+        RegionIntersect(&shown, &shown, &frame);
+        RegionUninit(&frame);
         if (gpuCopy(dnx_dri3_hardware_buffer(buffer->pixmap), dnx_dri3_gpu_image(buffer->pixmap), screenPixmap,
                     &shown, window->drawable.x, window->drawable.y)) {
             RegionUnion(&region, &region, &shown);
         }
-        RegionUninit(&shown);
+        /* A redirected window's own pixmap too: Composite copies it into
+         * the screen again whenever the window is damaged. */
+        if (pScreenPtr->GetWindowPixmap(window) != screenPixmap) {
+            dnx_dri3_begin_cpu_read(buffer->pixmap);
+            present_copy_region(&window->drawable, buffer->pixmap, NULL, 0, 0);
+        }
     }
+    RegionUninit(&shown);
     /* The frame that hides the layer shows what was under it. */
     dnx_presenter_hide_window();
     DamageDamageRegion(&screenPixmap->drawable, &region);
@@ -236,10 +272,11 @@ static void onLayerBufferEvent(dnx_buffer_event event, void* data) {
 static bool showOnLayer(present_vblank_ptr vblank) {
     WindowPtr window = vblank->window;
     PixmapPtr pixmap = vblank->pixmap;
-    BoxRec all = {0, 0, pixmap->drawable.width, pixmap->drawable.height};
-    if (vblank->x_off || vblank->y_off || !layerFits(window, pixmap) ||
-        (vblank->update && RegionContainsRect(vblank->update, &all) != rgnIN))
-        return false;
+    /* The update region does not matter: app-allocated buffers only come from
+     * our Mesa's swapchains (patch 0003), whose images are always whole
+     * frames; the region (incremental present, WebRender) only says what
+     * changed. */
+    if (vblank->x_off || vblank->y_off || !layerFits(window, pixmap)) return false;
     struct layer_buffer* buffer = calloc(1, sizeof(*buffer));
     if (!buffer) return false;
     if (screen.layerLatest && screen.layerWindow != window->drawable.id) leaveLayer();
