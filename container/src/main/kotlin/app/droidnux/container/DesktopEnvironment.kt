@@ -70,6 +70,7 @@ object DesktopEnvironment {
             rootfs, "/root/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml", XFWM4_DEFAULTS.toByteArray(),
             overwrite = false,
         )
+        writeFile(rootfs, FIREFOX_PREFS_PATH, FIREFOX_PREFS.toByteArray())
     }
 
     /** Command starting the session, with the X keyboard [layout] (e.g. "it"). */
@@ -121,6 +122,16 @@ object DesktopEnvironment {
 
         # Session services without systemd start here, on the session bus.
         exec startxfce4
+    """.trimIndent() + "\n"
+
+    /** Default prefs of Debian's Firefox ESR (browser/defaults/preferences, next to Debian's own). */
+    private const val FIREFOX_PREFS_PATH = "/usr/lib/firefox-esr/browser/defaults/preferences/droidnux.js"
+
+    // Under proot, Firefox's content processes crash in their seccomp sandbox
+    // (SIGSEGV at startup, pages never load).
+    private val FIREFOX_PREFS = """
+        // Written by DroidNux.
+        pref("security.sandbox.content.level", 0);
     """.trimIndent() + "\n"
 
     private val XFWM4_DEFAULTS = """

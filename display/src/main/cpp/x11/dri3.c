@@ -5,8 +5,9 @@
  *
  * This is the generic path: any linear dma-buf becomes an fb pixmap backed by
  * a CPU mapping of the buffer, and Present copies it like any other pixmap.
- * DRI3Open has no device to give (the GPU is KGSL, not DRM), which Mesa takes
- * as "the client's own GPU is the right one".
+ * DRI3Open gives the KGSL device; the container shows it to clients as the
+ * render node /dev/dri/renderD128 (with a matching sysfs), so Mesa's loader
+ * and EGL see a GPU device instead of falling back to software.
  *
  * Derived from Termux:X11 (lorie/InitOutput.c, GPL-3.0).
  */
@@ -129,6 +130,15 @@ static PixmapPtr pixmapFromFds(ScreenPtr pScreen, CARD8 num_fds, const int* fds,
     return pixmap;
 }
 
+static int openDevice(ClientPtr client, ScreenPtr pScreen, RRProviderPtr provider, int* fd) {
+    *fd = open("/dev/kgsl-3d0", O_RDWR | O_CLOEXEC);
+    if (*fd < 0) {
+        log(ERROR, "DRI3: cannot open /dev/kgsl-3d0: %s", strerror(errno));
+        return BadAlloc;
+    }
+    return Success;
+}
+
 static int getFormats(ScreenPtr pScreen, CARD32* num_formats, CARD32** formats) {
     static CARD32 supported[] = {DRM_FORMAT_XRGB8888, DRM_FORMAT_ARGB8888};
     *num_formats = ARRAY_SIZE(supported);
@@ -161,6 +171,7 @@ static int fdsFromPixmap(ScreenPtr pScreen, PixmapPtr pixmap, int* fds, uint32_t
 
 static const dri3_screen_info_rec dri3Info = {
     .version = 2,
+    .open_client = openDevice,
     .pixmap_from_fds = pixmapFromFds,
     .fds_from_pixmap = fdsFromPixmap,
     .get_formats = getFormats,
