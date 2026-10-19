@@ -1,0 +1,270 @@
+From 6edb4b2a4997829d4269191065869de77992e7a5 Mon Sep 17 00:00:00 2001
+From: RickyTr99 <rickytorre99@gmail.com>
+Date: Mon, 19 Oct 2026 18:07:05 +0200
+Subject: [PATCH] seccomp: trace sendmsg only on netlink and connected AF_UNIX
+ sockets
+
+sendmsg stopped every tracee on entry: Firefox playing a video sent
+~700 per second, all on connected AF_UNIX streams with no msg_name and
+almost never control data, so PRoot's handlers (netlink emulation,
+msg_name translation, fake_id0's SCM_CREDENTIALS fixup) did nothing.
+sendmsg leaves the base filter and fake_id0's list.  The per-fd filter
+of netlink sockets now covers it too; an AF_UNIX socket gets one for
+sendmsg alone once connect(2) succeeds (X11, D-Bus and PulseAudio
+clients may send credentials) or when it is a datagram socket (named
+destinations).  socketpair ends, where most IPC flows, are left alone.
+A bitmap per tracee keeps one fd number from getting a second filter.
+---
+ src/extension/fake_id0/fake_id0.c |  3 +-
+ src/syscall/enter.c               | 22 +++++++
+ src/syscall/exit.c                | 95 +++++++++++++++++++++----------
+ src/syscall/seccomp.c             |  5 +-
+ src/tracee/tracee.c               |  2 +
+ src/tracee/tracee.h               |  9 +++
+ 6 files changed, 102 insertions(+), 34 deletions(-)
+
+diff --git a/src/extension/fake_id0/fake_id0.c b/src/extension/fake_id0/fake_id0.c
+index cb24728..a87bdc7 100644
+--- a/src/extension/fake_id0/fake_id0.c
++++ b/src/extension/fake_id0/fake_id0.c
+@@ -380,7 +380,8 @@ static FilteredSysnum filtered_sysnums[] = {
+ 	{ PR_oldlstat,		FILTER_SYSEXIT },
+ 	{ PR_oldstat,		FILTER_SYSEXIT },
+ 	{ PR_prctl,		FILTER_SYSEXIT },
+-	{ PR_sendmsg,		0 },
++	/* PR_sendmsg: stopped by the core on AF_UNIX sockets only,
++	 * see trace_socket_fd().  */
+ 	{ PR_setfsgid,		FILTER_SYSEXIT },
+ 	{ PR_setfsgid32,	FILTER_SYSEXIT },
+ 	{ PR_setfsuid,		FILTER_SYSEXIT },
+diff --git a/src/syscall/enter.c b/src/syscall/enter.c
+index 4d721f6..0eed12f 100644
+--- a/src/syscall/enter.c
++++ b/src/syscall/enter.c
+@@ -2044,6 +2044,20 @@ int translate_syscall_enter(Tracee *tracee)
+ 		address = peek_reg(tracee, CURRENT, SYSARG_2);
+ 		size    = peek_reg(tracee, CURRENT, SYSARG_3);
+ 
++		/* A connected AF_UNIX socket (X11, D-Bus, PulseAudio...)
++		 * may send credentials, which fake_id0 fixes up: its
++		 * sendmsg(2) gets traced once connected, see
++		 * trace_socket_fd().  socketpair(2) ends, which carry most
++		 * IPC, are left alone.  */
++		if (syscall_number == PR_connect && size >= sizeof(sa_family_t)) {
++			sa_family_t family;
++			if (read_data(tracee, &family, address, sizeof(family)) == 0 && family == AF_UNIX) {
++				tracee->pending_unix_socket = true;
++				tracee->sysexit_pending = true;
++				tracee->restart_how = PTRACE_SYSCALL;
++			}
++		}
++
+ 		status = translate_socketcall_enter(tracee, &address, size);
+ 		if (status <= 0)
+ 			break;
+@@ -2144,6 +2158,14 @@ int translate_syscall_enter(Tracee *tracee)
+ 			tracee->sysexit_pending = true;
+ 			tracee->restart_how = PTRACE_SYSCALL;
+ 		}
++		else if (domain == AF_UNIX && (peek_reg(tracee, CURRENT, SYSARG_2) & 0xf) == SOCK_DGRAM) {
++			/* sendmsg(2) is traced only on some sockets, see
++			 * trace_socket_fd(): datagrams may name their
++			 * destination.  */
++			tracee->pending_unix_socket = true;
++			tracee->sysexit_pending = true;
++			tracee->restart_how = PTRACE_SYSCALL;
++		}
+ 		status = 0;
+ 		break;
+ 	}
+diff --git a/src/syscall/exit.c b/src/syscall/exit.c
+index f062870..eb9c35c 100644
+--- a/src/syscall/exit.c
++++ b/src/syscall/exit.c
+@@ -54,57 +54,70 @@
+ #include "arch.h"
+ 
+ /**
+- * recvfrom(2) and recvmsg(2) are not in PRoot's seccomp filter: they
+- * are the bulk of every IPC and X11 client's syscalls, and PRoot acts
+- * on them only for netlink sockets (emulated replies, namespace acks).
+- * Make the @tracee's process stop on them for the netlink socket @fd it
+- * just got, by chaining a seccomp(2) call that adds a filter for that
+- * fd to all its threads; children inherit it.  A later socket reusing
+- * the fd number only costs useless stops.
++ * recvfrom(2), recvmsg(2) and sendmsg(2) are not in PRoot's seccomp
++ * filter: they are the bulk of every IPC and X11 client's syscalls, and
++ * PRoot acts on them only for some sockets.  Make the @tracee's process
++ * stop on the @count syscalls @sysnums for the socket @fd it just got, by
++ * chaining a seccomp(2) call that adds a filter for that fd to all its
++ * threads; children inherit it.  A later socket reusing the fd number
++ * only costs useless stops.  @traced remembers the fds already covered,
++ * so that one fd number never gets a second filter: processes that keep
++ * opening sockets (glibc asks nscd on each lookup) would otherwise pile
++ * filters up until seccomp(2) refuses more.
+  */
+-static void trace_netlink_recv(Tracee *tracee, int fd)
++static void trace_socket_fd(Tracee *tracee, int fd, const Sysnum *sysnums, int count, uint64_t *traced)
+ {
+-	const word_t recvfrom_nr = detranslate_sysnum(get_abi(tracee), PR_recvfrom);
+-	const word_t recvmsg_nr  = detranslate_sysnum(get_abi(tracee), PR_recvmsg);
+ 	SeccompArch seccomp_archs[] = SECCOMP_ARCHS;
+-	struct sock_filter filter[] = {
+-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, offsetof(struct seccomp_data, arch)),
+-		/* Only the native ABI, as PRoot is built for arm64 here.  */
+-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, seccomp_archs[0].value, 0, 5),
+-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, offsetof(struct seccomp_data, nr)),
+-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, recvfrom_nr, 1, 0),
+-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, recvmsg_nr, 0, 2),
+-		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, offsetof(struct seccomp_data, args[0])),
+-		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, (uint32_t) fd, 1, 0),
+-		BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_ALLOW),
+-		BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_TRACE),
+-	};
++	struct sock_filter filter[4 + 3 + 3];
+ 	struct sock_fprog program;
+ 	word_t address;
+ 	int status;
++	int i, n = 0;
+ 
+-	if (recvfrom_nr == SYSCALL_AVOIDER || recvmsg_nr == SYSCALL_AVOIDER
+-	    || detranslate_sysnum(get_abi(tracee), PR_seccomp) == SYSCALL_AVOIDER)
++	if (fd < 0 || count > 3 || detranslate_sysnum(get_abi(tracee), PR_seccomp) == SYSCALL_AVOIDER)
+ 		return;
++	if (fd < MAX_TRACED_SOCKET_FDS && (traced[fd / 64] & (1ULL << (fd % 64))) != 0)
++		return;
++
++	/* if (arch == native && (nr == sysnums[0] || ...) && args[0] == fd)
++	 *	return TRACE;
++	 * return ALLOW;
++	 * Only the native ABI, as PRoot is built for arm64 here.  */
++	filter[n++] = (struct sock_filter) BPF_STMT(BPF_LD + BPF_W + BPF_ABS, offsetof(struct seccomp_data, arch));
++	filter[n++] = (struct sock_filter) BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, seccomp_archs[0].value, 0, count + 3);
++	filter[n++] = (struct sock_filter) BPF_STMT(BPF_LD + BPF_W + BPF_ABS, offsetof(struct seccomp_data, nr));
++	for (i = 0; i < count; i++) {
++		word_t nr = detranslate_sysnum(get_abi(tracee), sysnums[i]);
++		if (nr == SYSCALL_AVOIDER)
++			return;
++		/* Match: on to the fd check; no match on the last: allow.  */
++		filter[n++] = (struct sock_filter) BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, nr, count - 1 - i, i == count - 1 ? 2 : 0);
++	}
++	filter[n++] = (struct sock_filter) BPF_STMT(BPF_LD + BPF_W + BPF_ABS, offsetof(struct seccomp_data, args[0]));
++	filter[n++] = (struct sock_filter) BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, (uint32_t) fd, 1, 0);
++	filter[n++] = (struct sock_filter) BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_ALLOW);
++	filter[n++] = (struct sock_filter) BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_TRACE);
+ 
+ 	/* Below the stack pointer, which the tracee won't touch before
+ 	 * the chained seccomp(2) has copied the filter.  */
+ 	address = (peek_reg(tracee, CURRENT, STACK_POINTER) - RED_ZONE_SIZE
+ 		   - 512 - sizeof(filter) - sizeof(program)) & ~(word_t) 15;
+ 
+-	program.len = sizeof(filter) / sizeof(filter[0]);
++	program.len = n;
+ 	program.filter = (struct sock_filter *) (address + sizeof(program));
+ 
+-	status = write_data(tracee, address + sizeof(program), filter, sizeof(filter));
++	status = write_data(tracee, address + sizeof(program), filter, n * sizeof(filter[0]));
+ 	if (status >= 0)
+ 		status = write_data(tracee, address, &program, sizeof(program));
+ 	if (status >= 0)
+ 		status = register_chained_syscall(tracee, PR_seccomp, SECCOMP_SET_MODE_FILTER,
+ 						SECCOMP_FILTER_FLAG_TSYNC, address, 0, 0, 0);
+ 	if (status < 0) {
+-		VERBOSE(tracee, 1, "can't trace recv on netlink fd %d: %s", fd, strerror(-status));
++		VERBOSE(tracee, 1, "can't trace socket fd %d: %s", fd, strerror(-status));
+ 		return;
+ 	}
++	if (fd < MAX_TRACED_SOCKET_FDS)
++		traced[fd / 64] |= 1ULL << (fd % 64);
+ 
+ 	/* The tracee gets its socket, not seccomp's result.  */
+ 	force_chain_final_result(tracee, peek_reg(tracee, CURRENT, SYSARG_RESULT));
+@@ -837,10 +850,32 @@ void translate_syscall_exit(Tracee *tracee)
+ 		}
+ 		goto end;
+ 
++	case PR_connect:
++		if (tracee->pending_unix_socket) {
++			/* SCM_CREDENTIALS of fake_id0, msg_name of datagrams.  */
++			static const Sysnum unix_sysnums[] = { PR_sendmsg };
++			word_t result = peek_reg(tracee, CURRENT, SYSARG_RESULT);
++			if ((int) result == 0 || (int) result == -EINPROGRESS)
++				trace_socket_fd(tracee, (int) peek_reg(tracee, ORIGINAL, SYSARG_1),
++						unix_sysnums, 1, tracee->traced_unix_fds);
++			tracee->pending_unix_socket = false;
++		}
++		goto end;
++
+ 	case PR_socket:
+-		if (   (tracee->pending_fake_netlink_socket || tracee->pending_real_netlink_socket)
+-		    && (int) peek_reg(tracee, CURRENT, SYSARG_RESULT) >= 0)
+-			trace_netlink_recv(tracee, (int) peek_reg(tracee, CURRENT, SYSARG_RESULT));
++		if (tracee->pending_fake_netlink_socket || tracee->pending_real_netlink_socket) {
++			/* Emulated replies and namespace acks.  */
++			static const Sysnum netlink_sysnums[] = { PR_recvfrom, PR_recvmsg, PR_sendmsg };
++			trace_socket_fd(tracee, (int) peek_reg(tracee, CURRENT, SYSARG_RESULT),
++					netlink_sysnums, 3, tracee->traced_netlink_fds);
++		}
++		else if (tracee->pending_unix_socket) {
++			/* msg_name of datagrams.  */
++			static const Sysnum unix_sysnums[] = { PR_sendmsg };
++			trace_socket_fd(tracee, (int) peek_reg(tracee, CURRENT, SYSARG_RESULT),
++					unix_sysnums, 1, tracee->traced_unix_fds);
++		}
++		tracee->pending_unix_socket = false;
+ 
+ 		/* Record the fd we substituted for an AF_NETLINK request.  */
+ 		if (tracee->pending_fake_netlink_socket) {
+diff --git a/src/syscall/seccomp.c b/src/syscall/seccomp.c
+index 1654e12..1879820 100644
+--- a/src/syscall/seccomp.c
++++ b/src/syscall/seccomp.c
+@@ -407,10 +407,9 @@ static FilteredSysnum proot_sysnums[] = {
+ 	{ PR_close,		0 },
+ 	{ PR_connect,		0 },
+ 	{ PR_creat,		0 },
+-	/* PR_recvfrom and PR_recvmsg are traced only on netlink
+-	 * sockets, see trace_netlink_recv().  */
++	/* PR_recvfrom, PR_recvmsg and PR_sendmsg are traced only on
++	 * some sockets, see trace_socket_fd().  */
+ 	{ PR_sendmmsg,		0 },
+-	{ PR_sendmsg,		0 },
+ 	{ PR_sendto,		0 },
+ 	{ PR_socket,		FILTER_SYSEXIT },
+ 	{ PR_execve,		FILTER_SYSEXIT },
+diff --git a/src/tracee/tracee.c b/src/tracee/tracee.c
+index ce04d67..dc37934 100644
+--- a/src/tracee/tracee.c
++++ b/src/tracee/tracee.c
+@@ -681,6 +681,8 @@ static int attach_child(Tracee *parent, word_t clone_flags, pid_t pid)
+ 	child->execfn_addr = parent->execfn_addr;
+ 	child->auxv_fd = parent->auxv_fd;
+ 	child->no_new_privs = parent->no_new_privs;
++	memcpy(child->traced_netlink_fds, parent->traced_netlink_fds, sizeof(child->traced_netlink_fds));
++	memcpy(child->traced_unix_fds, parent->traced_unix_fds, sizeof(child->traced_unix_fds));
+ 	child->seen_execve = parent->seen_execve;
+ #ifdef HAS_POKEDATA_WORKAROUND
+ 	child->pokedata_workaround_stub_addr = parent->pokedata_workaround_stub_addr;
+diff --git a/src/tracee/tracee.h b/src/tracee/tracee.h
+index f800284..cdf8c48 100644
+--- a/src/tracee/tracee.h
++++ b/src/tracee/tracee.h
+@@ -157,6 +157,15 @@ typedef struct tracee {
+ 	int netlink_route_fds[MAX_NETLINK_ROUTE_FDS];
+ 	int netlink_route_fds_count;
+ 	bool pending_real_netlink_socket;
++
++	/* Socket fds whose process already got a seccomp filter tracing
++	 * them (trace_socket_fd), and an AF_UNIX socket(2) or connect(2)
++	 * waiting for its result.  Inherited by children, like the
++	 * filters.  */
++#define MAX_TRACED_SOCKET_FDS 1024
++	uint64_t traced_netlink_fds[MAX_TRACED_SOCKET_FDS / 64];
++	uint64_t traced_unix_fds[MAX_TRACED_SOCKET_FDS / 64];
++	bool pending_unix_socket;
+ 	bool netlink_ack_pending;
+ 	int netlink_ack_fd;
+ 	uint32_t netlink_ack_seq;
+-- 
+2.56.0.windows.1
+
