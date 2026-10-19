@@ -33,7 +33,8 @@ if [ "${DROIDNUX_MESA_DEPS:-}" = install ]; then
         libdrm-dev libexpat1-dev zlib1g-dev libzstd-dev libelf-dev libglvnd-dev \
         libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxrandr-dev libxxf86vm-dev libxshmfence-dev \
         libxcb1-dev libxcb-dri3-dev libxcb-present-dev libxcb-randr0-dev libxcb-shm0-dev libxcb-sync-dev \
-        libxcb-xfixes0-dev libxcb-glx0-dev libwayland-dev libwayland-egl-backend-dev wayland-protocols \n        libva-dev
+        libxcb-xfixes0-dev libxcb-glx0-dev libwayland-dev libwayland-egl-backend-dev wayland-protocols \
+        libva-dev
 fi
 
 if [ ! -f "$TARBALL" ]; then
@@ -73,7 +74,9 @@ rm -rf "$STAGE"
 DESTDIR=$STAGE meson install -C "$SRC/build" --no-rebuild --quiet
 # The session points LIBVA_DRIVERS_PATH here.
 mkdir -p "$STAGE$PREFIX/lib/aarch64-linux-gnu/dri"
-gcc -O2 -fPIC -shared -s -Wall -Wextra -Werror -fvisibility=hidden     -I "$HERE/../../display/src/main/cpp/core"     -o "$STAGE$PREFIX/lib/aarch64-linux-gnu/dri/droidnux_drv_video.so" "$HERE/../va/droidnux_drv_video.c" -lpthread
+gcc -O2 -fPIC -shared -s -Wall -Wextra -Werror -fvisibility=hidden \
+    -I "$HERE/../../display/src/main/cpp/core" \
+    -o"$STAGE$PREFIX/lib/aarch64-linux-gnu/dri/droidnux_drv_video.so" "$HERE/../va/droidnux_drv_video.c" -lpthread
 # Headers and pkg-config files are for building against Mesa, not running it.
 rm -rf "$STAGE$PREFIX/include" "$STAGE$PREFIX/lib/aarch64-linux-gnu/pkgconfig"
 cat > "$STAGE$PREFIX/droidnux-mesa.version" <<EOF
