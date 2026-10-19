@@ -32,6 +32,14 @@ PixmapPtr dnx_dri3_create_hardware_pixmap(ScreenPtr pScreen, int width, int heig
  * core/gpu_copy.h), freed with the pixmap; NULL for pixmaps without one. */
 void** dnx_dri3_gpu_image(PixmapPtr pixmap);
 
+/* output.c: how present_execute_copy() (present_execute.c) shows a Present
+ * request. The DDX did all but the flush and the idle notification, unless
+ * it says CPU: then Present copies on the CPU as usual. LAYER: the buffer is
+ * on screen as it is, and the DDX sends its idle notification later. */
+enum dnx_present_copy { DNX_PRESENT_COPY_CPU, DNX_PRESENT_COPY_GPU, DNX_PRESENT_COPY_LAYER };
+struct present_vblank;
+enum dnx_present_copy dnx_present_copy(struct present_vblank* vblank);
+
 /* server.c: called from ddxReady() once the server can take input. */
 void dnx_server_ready(void);
 

@@ -90,6 +90,7 @@ set(X11_SOURCES
     ${TX11_DIR}/lorie/workqueue.cpp
     ${CMAKE_CURRENT_LIST_DIR}/dri3.c
     ${CMAKE_CURRENT_LIST_DIR}/output.c
+    ${CMAKE_CURRENT_LIST_DIR}/present_execute.c
     ${CMAKE_CURRENT_LIST_DIR}/server.c)
 
 set(X11_C_OPTIONS

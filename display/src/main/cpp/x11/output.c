@@ -101,75 +101,71 @@ static Bool TrueNoop() { return TRUE; }
 static Bool FalseNoop() { return FALSE; }
 static void VoidNoop() {}
 
-/* -- Hooks the Termux:X11 xserver patch expects ----------------------------
+/* -- Present copies --------------------------------------------------------
  * Present copies of app-allocated client buffers into the screen pixmap run
- * on the GPU (gpu_copy.c), synchronously, so a copy is always done by the
- * time Present asks. Anything else takes the CPU path. */
+ * on the GPU (core/gpu_copy.h), synchronously; anything else takes the CPU
+ * path. Termux:X11's xserver still calls these for its GPU copy polling,
+ * which our present_execute.c never starts. */
 
 bool lorieConnectionAlive(void) { return true; }
 bool lorieRendererAvailable(void) { return true; }
 Bool lorieGpuCopyIsDone(uint64_t serial) { return TRUE; }
 void lorieGpuCopyAck(PixmapPtr pixmap, void* dst_buffer) {}
 
-static GetWindowPixmapProcPtr wrappedGetWindowPixmap;
-static WindowPtr presentWindow;
-/* A GPU copy just finished: Present now queues its vblank for the next msc
- * to poll for completion, which would delay Complete by a frame. */
-static bool gpuCopyDone;
-
-/* present_execute_copy() asks for the window's pixmap just before calling
- * lorieTryScheduleGpuCopy(), which is not told the window: remember it.
- * shortcut: relies on that call order; pass the window through the xserver
- * patch the next time the prebuilt server libraries are rebuilt. */
-static PixmapPtr getWindowPixmap(WindowPtr window) {
-    presentWindow = window;
-    return wrappedGetWindowPixmap(window);
+/* The region present_copy_region() would draw, in screen coordinates: the
+ * update region of the pixmap at the offset, clipped to the window. Only for
+ * windows drawn straight into the screen pixmap, whose coordinates are the
+ * screen's. */
+static void presentRegion(present_vblank_ptr vblank, RegionPtr region) {
+    WindowPtr window = vblank->window;
+    PixmapPtr pixmap = vblank->pixmap;
+    BoxRec box = {0, 0, pixmap->drawable.width, pixmap->drawable.height};
+    RegionInit(region, &box, 1);
+    if (vblank->update) RegionIntersect(region, region, vblank->update);
+    RegionTranslate(region, window->drawable.x + vblank->x_off, window->drawable.y + vblank->y_off);
+    RegionIntersect(region, region, &window->clipList);
 }
 
-static bool gpuCopy(WindowPtr window, PixmapPtr pixmap, PixmapPtr dst, RegionPtr update, int dx, int dy) {
-    AHardwareBuffer* src = dnx_dri3_hardware_buffer(pixmap);
-    AHardwareBuffer* screenBuffer = dnx_dri3_hardware_buffer(dst);
-    if (!src || !screenBuffer || pixmap->drawable.bitsPerPixel != 32) return false;
-
-    /* What present_copy_region() would draw: the update region of the
-     * pixmap at the offset, clipped to the window. dst is the screen pixmap,
-     * so its coordinates are screen coordinates, like the clip list. */
-    BoxRec box = {0, 0, pixmap->drawable.width, pixmap->drawable.height};
-    RegionRec region;
-    RegionInit(&region, &box, 1);
-    if (update) RegionIntersect(&region, &region, update);
-    RegionTranslate(&region, dx, dy);
-    RegionIntersect(&region, &region, &window->clipList);
-
-    int count = RegionNumRects(&region);
-    BoxPtr rects = RegionRects(&region);
+static bool gpuCopy(AHardwareBuffer* src, void** srcImage, PixmapPtr dst, RegionPtr region, int dx, int dy) {
+    int count = RegionNumRects(region);
+    BoxPtr rects = RegionRects(region);
     dnx_box stackBoxes[64];
     dnx_box* boxes = count <= 64 ? stackBoxes : malloc(sizeof(dnx_box) * count);
-    bool done = boxes != NULL;
-    for (int i = 0; done && i < count; i++) boxes[i] = (dnx_box) {rects[i].x1, rects[i].y1, rects[i].x2, rects[i].y2};
-    if (done) done = dnx_gpu_copy(src, dnx_dri3_gpu_image(pixmap), screenBuffer, dnx_dri3_gpu_image(dst), boxes, count, dx, dy);
+    if (!boxes) return false;
+    for (int i = 0; i < count; i++) boxes[i] = (dnx_box) {rects[i].x1, rects[i].y1, rects[i].x2, rects[i].y2};
+    bool done = dnx_gpu_copy(src, srcImage, dnx_dri3_hardware_buffer(dst), dnx_dri3_gpu_image(dst), boxes, count, dx, dy);
     if (boxes != stackBoxes) free(boxes);
-    /* present_execute_copy() then damages update and the clip list, taking the
-     * update region (pixmap coordinates) as if it were in screen ones. */
-    if (done && update) RegionCopy(update, &region);
-    RegionUninit(&region);
     return done;
 }
 
-Bool lorieTryScheduleGpuCopy(PixmapPtr pixmap, PixmapPtr dst, RegionPtr update, int16_t x_off, int16_t y_off,
-                             uint64_t* out_serial, void** out_dst_buffer) {
-    WindowPtr window = presentWindow;
-    presentWindow = NULL;
-    gpuCopyDone = false;
-    *out_serial = 0;
-    *out_dst_buffer = NULL;
-    if (window && dst == pScreenPtr->GetScreenPixmap(pScreenPtr) && wrappedGetWindowPixmap(window) == dst &&
-        gpuCopy(window, pixmap, dst, update, x_off, y_off)) {
-        gpuCopyDone = true;
-        return TRUE;
+enum dnx_present_copy dnx_present_copy(present_vblank_ptr vblank) {
+    WindowPtr window = vblank->window;
+    PixmapPtr pixmap = vblank->pixmap;
+    PixmapPtr screenPixmap = pScreenPtr->GetScreenPixmap(pScreenPtr);
+    AHardwareBuffer* src = dnx_dri3_hardware_buffer(pixmap);
+    if (!src || pixmap->drawable.bitsPerPixel != 32 || pScreenPtr->GetWindowPixmap(window) != screenPixmap ||
+        !dnx_dri3_hardware_buffer(screenPixmap)) {
+        dnx_dri3_begin_cpu_read(pixmap);
+        return DNX_PRESENT_COPY_CPU;
     }
-    dnx_dri3_begin_cpu_read(pixmap);
-    return FALSE;
+
+    RegionRec region;
+    presentRegion(vblank, &region);
+    int dx = window->drawable.x + vblank->x_off, dy = window->drawable.y + vblank->y_off;
+    if (!gpuCopy(src, dnx_dri3_gpu_image(pixmap), screenPixmap, &region, dx, dy)) {
+        RegionUninit(&region);
+        dnx_dri3_begin_cpu_read(pixmap);
+        return DNX_PRESENT_COPY_CPU;
+    }
+    /* What present_copy_region() would have damaged, through the window so
+     * that Composite and DAMAGE clients see it too. */
+    DamageDamageRegion(&window->drawable, &region);
+    RegionUninit(&region);
+    if (vblank->update) {
+        RegionDestroy(vblank->update);
+        vblank->update = NULL;
+    }
+    return DNX_PRESENT_COPY_GPU;
 }
 
 /* Keyboard focus moved between windows (patched enterleave.c). Will drive the
@@ -652,21 +648,9 @@ static int presentGetUstMsc(RRCrtcPtr crtc, uint64_t* ust, uint64_t* msc) {
     return Success;
 }
 
-/* Runs after the current request, outside Present's own execution. */
-static Bool finishGpuCopies(ClientPtr client, void* data) {
-    performVblanks();
-    return TRUE;
-}
-
 static Bool presentQueueVblank(RRCrtcPtr crtc, uint64_t event_id, uint64_t msc) {
     struct vblank* vblank = calloc(1, sizeof(*vblank));
     if (!vblank) return BadAlloc;
-    if (gpuCopyDone) {
-        /* The copy is already done (lorieGpuCopyIsDone): finish it now. */
-        gpuCopyDone = false;
-        msc = screen.msc;
-        QueueWorkProc(finishGpuCopies, NULL, NULL);
-    }
     *vblank = (struct vblank) {.id = event_id, .msc = msc};
     xorg_list_add(&vblank->link, &screen.vblanks);
     requestFrame();
@@ -758,8 +742,6 @@ static Bool screenInit(ScreenPtr pScreen, int argc, char** argv) {
 
     screen.CloseScreen = pScreen->CloseScreen;
     pScreen->CloseScreen = closeScreen;
-    wrappedGetWindowPixmap = pScreen->GetWindowPixmap;
-    pScreen->GetWindowPixmap = getWindowPixmap;
 
     ShmRegisterFbFuncs(pScreen);
     miSyncShmScreenInit(pScreen);
