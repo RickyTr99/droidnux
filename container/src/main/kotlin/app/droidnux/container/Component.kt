@@ -28,10 +28,10 @@ data class Component(
         /** Turnip (Vulkan on Adreno through KGSL) and Zink (OpenGL on Vulkan): guest/mesa. */
         val MESA = Component(
             id = "mesa",
-            version = "26.2.5-dn1",
-            url = "$RELEASES/mesa-26.2.5-dn1/droidnux-mesa-26.2.5-dn1-arm64.tar.xz",
-            sha256 = "e16e6f2f82ffaf6b4a3ed880cde4c2b86b751fd3cdc6b47dd28aaa3b85cbbb5a",
-            sizeBytes = 5_201_656,
+            version = "26.2.5-dn2",
+            url = "$RELEASES/mesa-26.2.5-dn2/droidnux-mesa-26.2.5-dn2-arm64.tar.xz",
+            sha256 = "99b136d1d30731f5626d80710b25e0317838263ba3e647c55d39e526df0bc5e3",
+            sizeBytes = 5_205_676,
             guestPath = DesktopEnvironment.MESA_PREFIX,
         )
     }
