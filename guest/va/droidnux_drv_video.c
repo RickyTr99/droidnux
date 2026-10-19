@@ -30,6 +30,7 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <linux/dma-heap.h>
 #include <va/va_backend.h>
 #include <va/va_dec_vp9.h>
 #include <va/va_drmcommon.h>
@@ -47,12 +48,16 @@ struct dma_buf_sync {
     uint64_t flags;
 };
 #define DMA_BUF_SYNC_READ (1 << 0)
+#define DMA_BUF_SYNC_WRITE (2 << 0)
 #define DMA_BUF_SYNC_START (0 << 2)
 #define DMA_BUF_SYNC_END (1 << 2)
 #define DMA_BUF_IOCTL_SYNC _IOW('b', 0, struct dma_buf_sync)
 
 #define MAX_SIZE 8192
 #define SYNC_TIMEOUT_MS 3000
+/* Decodes a client may run ahead of the frames it got back: past that, its
+ * frames would hold the buffers the app decodes into. */
+#define MAX_IN_FLIGHT 4
 
 static bool debug_enabled(void) {
     static int enabled = -1;
@@ -98,6 +103,7 @@ struct context {
     uint32_t codec;
     VASurfaceID target;
     uint32_t next_tag;
+    unsigned in_flight; /* decodes whose frame the app has not sent back yet */
     VADecPictureParameterBufferVP9 vp9;
     bool have_picture;
     VASliceParameterBufferVP9 slice;
@@ -117,6 +123,7 @@ struct image {
     VASurfaceID derived_from; /* VA_INVALID_ID, or the surface whose frame it maps */
     void* mapping;
     size_t mapping_size;
+    uint64_t mapping_access; /* DMA_BUF_SYNC_READ, and _WRITE when writable */
 };
 
 struct object {
@@ -229,6 +236,7 @@ static int connect_app(void) {
 /* The frame the app sent for a decode: into its surface, unless the surface
  * has been decoded into again since. Called with the driver's mutex. */
 static void apply_frame(struct driver* driver, struct context* context, const dnx_video_frame* frame, int fd) {
+    if (context->in_flight > 0) context->in_flight--;
     struct surface* target = NULL;
     for (unsigned i = 0; i < driver->count; i++) {
         struct surface* s = driver->objects[i].type == OBJECT_SURFACE ? driver->objects[i].data : NULL;
@@ -251,14 +259,42 @@ static void apply_frame(struct driver* driver, struct context* context, const dn
         return;
     }
     if (target->fd >= 0) {
-        dnx_video_release release = {target->frame.buffer};
-        send_message(context->socket, DNX_VIDEO_RELEASE, &release, sizeof(release), NULL, 0);
+        if (target->frame.buffer != 0) {
+            dnx_video_release release = {target->frame.buffer};
+            send_message(context->socket, DNX_VIDEO_RELEASE, &release, sizeof(release), NULL, 0);
+        }
         close(target->fd);
     }
     target->frame = *frame;
     target->fd = fd;
     target->pending = false;
     target->failed = false;
+}
+
+/* Takes the frames the app has sent already, and waits for more while the
+ * client is too far ahead: a client that never syncs its surfaces (ffmpeg
+ * keeping frames on the GPU) would otherwise leave them in the socket,
+ * holding the buffers the app decodes into. Called without the driver's mutex. */
+static void receive_ready(struct driver* driver, struct context* context) {
+    pthread_mutex_lock(&context->receiving);
+    for (;;) {
+        pthread_mutex_lock(&driver->mutex);
+        bool ahead = context->in_flight > MAX_IN_FLIGHT;
+        pthread_mutex_unlock(&driver->mutex);
+        struct pollfd pfd = {context->socket, POLLIN, 0};
+        if (poll(&pfd, 1, ahead ? SYNC_TIMEOUT_MS : 0) <= 0 || !(pfd.revents & POLLIN)) break;
+        dnx_video_header header;
+        dnx_video_frame frame;
+        int fd = -1;
+        if (!recv_message(context->socket, &header, &frame, sizeof(frame), &fd) || header.type != DNX_VIDEO_FRAME) {
+            if (fd >= 0) close(fd);
+            break; /* the next sync reports the lost decoder */
+        }
+        pthread_mutex_lock(&driver->mutex);
+        apply_frame(driver, context, &frame, fd);
+        pthread_mutex_unlock(&driver->mutex);
+    }
+    pthread_mutex_unlock(&context->receiving);
 }
 
 /* Waits for the surface's frame. Called without the driver's mutex. */
@@ -392,6 +428,7 @@ static VAStatus vp9_end_picture(struct driver* driver, struct context* context, 
         }
     }
     (void)driver;
+    context->in_flight++;
     surface->context = context;
     surface->tag = tag;
     surface->pending = true;
@@ -548,12 +585,40 @@ static VAStatus dnx_CreateSurfaces(VADriverContextP ctx, int width, int height, 
 
 static void release_frame(struct surface* surface) {
     if (surface->fd < 0) return;
-    if (surface->context != NULL) {
+    if (surface->context != NULL && surface->frame.buffer != 0) {
         dnx_video_release release = {surface->frame.buffer};
         send_message(surface->context->socket, DNX_VIDEO_RELEASE, &release, sizeof(release), NULL, 0);
     }
     close(surface->fd);
     surface->fd = -1;
+}
+
+/* A black frame for a surface nothing has been decoded into, which players
+ * export or map before decoding (mpv, probing formats). Its memory is the
+ * driver's own (buffer 0: the app numbers its buffers from 1). Called with
+ * the driver's mutex. */
+static bool blank_frame(struct surface* surface) {
+    if (surface->fd >= 0) return true;
+    uint32_t pitch = (surface->width + 63) & ~63u, rows = (surface->height + 31) & ~31u;
+    dnx_video_frame frame = {0, 0, 0, surface->width, surface->height, DRM_FORMAT_NV12,
+                             {0, pitch * rows}, {pitch, pitch}, 0, (uint64_t)pitch * (rows + rows / 2)};
+    int heap = open("/dev/dma_heap/system", O_RDONLY | O_CLOEXEC);
+    if (heap < 0) return false;
+    struct dma_heap_allocation_data allocation = {.len = frame.size, .fd_flags = O_RDWR | O_CLOEXEC};
+    int status = ioctl(heap, DMA_HEAP_IOCTL_ALLOC, &allocation);
+    close(heap);
+    if (status < 0) return false;
+    uint8_t* data = mmap(NULL, (size_t)frame.size, PROT_WRITE, MAP_SHARED, (int)allocation.fd, 0);
+    if (data == MAP_FAILED) {
+        close((int)allocation.fd);
+        return false;
+    }
+    memset(data, 16, frame.offsets[1]); /* black, limited range */
+    memset(data + frame.offsets[1], 128, (size_t)frame.size - frame.offsets[1]);
+    munmap(data, (size_t)frame.size);
+    surface->frame = frame;
+    surface->fd = (int)allocation.fd;
+    return true;
 }
 
 static VAStatus dnx_DestroySurfaces(VADriverContextP ctx, VASurfaceID* surfaces, int count) {
@@ -631,10 +696,10 @@ static VAStatus dnx_ExportSurfaceHandle(VADriverContextP ctx, VASurfaceID id, ui
     struct driver* driver = DRIVER(ctx);
     pthread_mutex_lock(&driver->mutex);
     struct surface* surface = find_object(driver, id, OBJECT_SURFACE);
-    int fd = surface != NULL && surface->fd >= 0 ? fcntl(surface->fd, F_DUPFD_CLOEXEC, 0) : -1;
+    int fd = surface != NULL && blank_frame(surface) ? fcntl(surface->fd, F_DUPFD_CLOEXEC, 0) : -1;
     if (fd < 0) {
         pthread_mutex_unlock(&driver->mutex);
-        return VA_STATUS_ERROR_INVALID_SURFACE; /* nothing decoded into it */
+        return VA_STATUS_ERROR_INVALID_SURFACE;
     }
     const dnx_video_frame* frame = &surface->frame;
     VADRMPRIMESurfaceDescriptor* d = out;
@@ -684,8 +749,10 @@ static VAStatus dnx_CreateContext(VADriverContextP ctx, VAConfigID config_id, in
         free(context);
         return VA_STATUS_ERROR_HW_BUSY;
     }
+    /* No targets means a pool that grows (ffmpeg, mpv): ask for the most the
+     * app gives, which allocates buffers only as they get used. */
     dnx_video_open open = {DNX_VIDEO_MAGIC, DNX_VIDEO_VERSION, context->codec, (uint32_t)width, (uint32_t)height,
-                           target_count > 0 ? (uint32_t)target_count : 16};
+                           target_count > 0 ? (uint32_t)target_count : 46};
     dnx_video_header header;
     dnx_video_opened opened = {-EPROTO};
     int fd = -1;
@@ -915,6 +982,7 @@ static VAStatus dnx_EndPicture(VADriverContextP ctx, VAContextID id) {
                       : surface == NULL ? VA_STATUS_ERROR_INVALID_SURFACE
                                         : vp9_end_picture(driver, context, surface);
     pthread_mutex_unlock(&driver->mutex);
+    if (status == VA_STATUS_SUCCESS) receive_ready(driver, context);
     return status;
 }
 
@@ -993,7 +1061,7 @@ static VAStatus dnx_DeriveImage(VADriverContextP ctx, VASurfaceID id, VAImage* o
     struct driver* driver = DRIVER(ctx);
     pthread_mutex_lock(&driver->mutex);
     struct surface* surface = find_object(driver, id, OBJECT_SURFACE);
-    if (surface == NULL || surface->fd < 0) {
+    if (surface == NULL || !blank_frame(surface)) {
         DEBUG("derive image: surface %u has no frame", id);
         status = VA_STATUS_ERROR_INVALID_SURFACE;
     } else {
@@ -1009,10 +1077,18 @@ static VAStatus map_derived(struct driver* driver, struct image* image) {
     if (image->mapping != NULL) return VA_STATUS_SUCCESS;
     struct surface* surface = find_object(driver, image->derived_from, OBJECT_SURFACE);
     if (surface == NULL || surface->fd < 0) return VA_STATUS_ERROR_INVALID_SURFACE;
-    void* mapping = mmap(NULL, (size_t)surface->frame.size, PROT_READ, MAP_SHARED, surface->fd, 0);
+    /* Writable when the buffer allows it: players upload into surfaces too
+     * (mpv, probing formats). */
+    uint64_t access = DMA_BUF_SYNC_READ | DMA_BUF_SYNC_WRITE;
+    void* mapping = mmap(NULL, (size_t)surface->frame.size, PROT_READ | PROT_WRITE, MAP_SHARED, surface->fd, 0);
+    if (mapping == MAP_FAILED) {
+        access = DMA_BUF_SYNC_READ;
+        mapping = mmap(NULL, (size_t)surface->frame.size, PROT_READ, MAP_SHARED, surface->fd, 0);
+    }
     if (mapping == MAP_FAILED) return VA_STATUS_ERROR_OPERATION_FAILED;
-    struct dma_buf_sync sync = {DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ};
+    struct dma_buf_sync sync = {DMA_BUF_SYNC_START | access};
     ioctl(surface->fd, DMA_BUF_IOCTL_SYNC, &sync);
+    image->mapping_access = access;
     image->mapping = mapping;
     image->mapping_size = (size_t)surface->frame.size;
     return VA_STATUS_SUCCESS;
@@ -1022,7 +1098,7 @@ static void unmap_derived(struct driver* driver, struct image* image) {
     if (image->mapping == NULL) return;
     struct surface* surface = find_object(driver, image->derived_from, OBJECT_SURFACE);
     if (surface != NULL && surface->fd >= 0) {
-        struct dma_buf_sync sync = {DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ};
+        struct dma_buf_sync sync = {DMA_BUF_SYNC_END | image->mapping_access};
         ioctl(surface->fd, DMA_BUF_IOCTL_SYNC, &sync);
     }
     munmap(image->mapping, image->mapping_size);
@@ -1053,7 +1129,7 @@ static VAStatus dnx_GetImage(VADriverContextP ctx, VASurfaceID surface_id, int x
     struct surface* surface = find_object(driver, surface_id, OBJECT_SURFACE);
     struct image* image = find_object(driver, image_id, OBJECT_IMAGE);
     struct buffer* buffer = image != NULL ? find_object(driver, image->image.buf, OBJECT_BUFFER) : NULL;
-    if (surface == NULL || surface->fd < 0) {
+    if (surface == NULL || !blank_frame(surface)) {
         DEBUG("get image: surface %u has no frame", surface_id);
         status = VA_STATUS_ERROR_INVALID_SURFACE;
     } else if (buffer == NULL || buffer->data == NULL) {
