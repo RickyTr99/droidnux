@@ -25,6 +25,8 @@ object DesktopEnvironment {
         "adwaita-icon-theme", "fonts-dejavu-core",
         // SVG loader for gdk-pixbuf: XFCE's default wallpaper and many icons are SVG.
         "librsvg2-common",
+        // H.264 and AAC for Firefox: its bundled decoders cover only VP8/VP9/AV1/Opus/Vorbis.
+        "libavcodec61",
         // No PipeWire yet: under proot its daemon stops answering clients after
         // the first reply and wireplumber spins at 100% CPU (PLAN.md, phase 3).
     )
@@ -88,6 +90,12 @@ object DesktopEnvironment {
             export SHELL=/bin/bash
             # MIT-SHM segments the X server can attach.
             export LD_PRELOAD=$GUEST_LIB_DIR/$SHM_LIBRARY${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}
+            # Firefox's media decoder processes fail in their seccomp sandbox
+            # under proot (video: "Failed to copy image data", audio: "no
+            # decoder found"), so no video plays. Same as the content sandbox
+            # in droidnux.js; Firefox has no prefs for these two.
+            export MOZ_DISABLE_RDD_SANDBOX=1
+            export MOZ_DISABLE_UTILITY_SANDBOX=1
             # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed,
             # otherwise the distro's software rendering.
             MESA=$MESA_PREFIX
