@@ -61,6 +61,7 @@ class SessionMenu(
     val view: FrameLayout = FrameLayout(context).apply {
         visibility = View.GONE
         isClickable = true
+        isFocusable = false
         setOnClickListener { close() }
         setOnGenericMotionListener { _, _ -> true } // hover stays here, not on the desktop under it
         // Android's own pointer, which the desktop under the menu hides (X draws its cursor there).
@@ -87,6 +88,7 @@ class SessionMenu(
             background = rounded(SURFACE, dp(28f))
             setPadding(dp(6), 0, dp(6), 0)
             isClickable = true // touches on the pill's background do not close the menu
+            isFocusable = false // clickable implies focusable: focus belongs to the buttons
         }
         pill.addView(iconButton(R.drawable.ic_menu_keyboard, R.string.menu_keyboard, ON_SURFACE) {
             close()
