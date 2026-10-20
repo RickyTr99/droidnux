@@ -41,9 +41,10 @@ data class DiagnosticsState(
     val desktopInstalling: Boolean = false,
     /** Last lines of the desktop install log. */
     val desktopLog: String = "",
-    val mesa: InstallState = InstallState.Checking,
-    /** Version of the installed Mesa component, if any (may be older than [Component.MESA]). */
-    val mesaVersion: String? = null,
+    /** Install state of each [Component], by id (missing = still checking). */
+    val components: Map<String, InstallState> = emptyMap(),
+    /** Version of each installed component, by id (may be older than the app's). */
+    val componentVersions: Map<String, String> = emptyMap(),
 )
 
 /** Phase 0 checks: proot runs, the rootfs installs, a command runs inside it. */
@@ -54,7 +55,7 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
     val state: StateFlow<DiagnosticsState> = _state.asStateFlow()
 
     private var installJob: Job? = null
-    private var mesaJob: Job? = null
+    private val componentJobs = mutableMapOf<String, Job>()
 
     init {
         viewModelScope.launch {
@@ -68,7 +69,7 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
             val (desktop, upToDate) = withContext(Dispatchers.IO) {
                 DesktopEnvironment.isInstalled(rootfs) to DesktopEnvironment.isUpToDate(rootfs)
             }
-            refreshMesa()
+            Component.ALL.forEach { refreshComponent(it) }
             _state.update {
                 it.copy(
                     proot = proot,
@@ -120,7 +121,7 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
                     _state.update { it.copy(rootfs = InstallState.Installing(progress)) }
                 }
                 _state.update { it.copy(rootfs = InstallState.Installed) }
-                refreshMesa() // a fresh rootfs has no components
+                Component.ALL.forEach { refreshComponent(it) } // a fresh rootfs has no components
             } catch (e: CancellationException) {
                 _state.update { it.copy(rootfs = InstallState.NotInstalled) }
                 throw e
@@ -134,39 +135,45 @@ class DiagnosticsViewModel(application: Application) : AndroidViewModel(applicat
         installJob?.cancel()
     }
 
-    private suspend fun refreshMesa() {
+    private suspend fun refreshComponent(component: Component) {
         val rootfs = container.installer.rootfsDir(_state.value.distro)
         val (installed, version) = withContext(Dispatchers.IO) {
-            container.components.isInstalled(rootfs, Component.MESA) to
-                container.components.installedVersion(rootfs, Component.MESA)
+            container.components.isInstalled(rootfs, component) to
+                container.components.installedVersion(rootfs, component)
         }
         _state.update {
-            it.copy(mesa = if (installed) InstallState.Installed else InstallState.NotInstalled, mesaVersion = version)
+            it.copy(
+                components = it.components + (component.id to if (installed) InstallState.Installed else InstallState.NotInstalled),
+                componentVersions = if (version != null) it.componentVersions + (component.id to version) else it.componentVersions - component.id,
+            )
         }
     }
 
-    /** Downloads and unpacks the Mesa component (Turnip + Zink) into the rootfs. */
-    fun installMesa() {
-        if (mesaJob?.isActive == true) return
+    private fun setComponent(component: Component, state: InstallState) =
+        _state.update { it.copy(components = it.components + (component.id to state)) }
+
+    /** Downloads and unpacks a [Component] into the rootfs. */
+    fun installComponent(component: Component) {
+        if (componentJobs[component.id]?.isActive == true) return
         val rootfs = container.installer.rootfsDir(_state.value.distro)
-        mesaJob = viewModelScope.launch {
-            _state.update { it.copy(mesa = InstallState.Installing(null)) }
+        componentJobs[component.id] = viewModelScope.launch {
+            setComponent(component, InstallState.Installing(null))
             try {
-                container.components.install(rootfs, Component.MESA) { progress ->
-                    _state.update { it.copy(mesa = InstallState.Installing(progress)) }
+                container.components.install(rootfs, component) { progress ->
+                    setComponent(component, InstallState.Installing(progress))
                 }
-                refreshMesa()
+                refreshComponent(component)
             } catch (e: CancellationException) {
-                refreshMesa()
+                refreshComponent(component)
                 throw e
             } catch (e: Exception) {
-                _state.update { it.copy(mesa = InstallState.Failed(e.message ?: e.toString())) }
+                setComponent(component, InstallState.Failed(e.message ?: e.toString()))
             }
         }
     }
 
-    fun cancelMesa() {
-        mesaJob?.cancel()
+    fun cancelComponent(component: Component) {
+        componentJobs[component.id]?.cancel()
     }
 
     fun runUname() {

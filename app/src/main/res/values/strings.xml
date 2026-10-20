@@ -26,8 +26,10 @@
     <string name="section_desktop">Desktop</string>
     <string name="section_gpu">GPU</string>
     <string name="gpu_mesa">Mesa %1$s (Turnip + Zink)</string>
-    <string name="gpu_unreleased">Mesa %1$s is not published yet.</string>
-    <string name="gpu_installed_version">Installed: %1$s</string>
+    <string name="component_unreleased">%1$s is not published yet.</string>
+    <string name="component_installed_version">Installed: %1$s</string>
+    <string name="section_theme">Theme</string>
+    <string name="theme_component">Papirus icons and window borders %1$s</string>
     <string name="desktop_not_installed">XFCE is not installed yet.</string>
     <string name="desktop_installed">XFCE is installed.</string>
     <string name="desktop_no_x11">This build has no X server: use a CI build.</string>

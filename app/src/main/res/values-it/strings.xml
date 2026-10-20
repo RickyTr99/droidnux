@@ -17,8 +17,10 @@
     <string name="status_verifying">Verifica del checksum…</string>
     <string name="status_extracting">Estrazione… %1$d%%</string>
     <string name="status_failed">Errore: %1$s</string>
-    <string name="gpu_unreleased">Mesa %1$s non è ancora pubblicata.</string>
-    <string name="gpu_installed_version">Installata: %1$s</string>
+    <string name="component_unreleased">%1$s: non ancora pubblicato.</string>
+    <string name="component_installed_version">Versione installata: %1$s</string>
+    <string name="section_theme">Tema</string>
+    <string name="theme_component">Icone Papirus e bordi delle finestre %1$s</string>
     <string name="container_hint">Prima installa il file system della distro.</string>
     <string name="exit_code">Codice di uscita %1$d</string>
     <string name="desktop_not_installed">XFCE non è ancora installato.</string>

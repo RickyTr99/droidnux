@@ -126,21 +126,14 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
                     DesktopSection(state, onInstall = viewModel::installDesktop)
                 }
                 Section(stringResource(R.string.section_gpu)) {
-                    if (Component.MESA.sha256.isEmpty()) {
-                        Status(stringResource(R.string.gpu_unreleased, Component.MESA.version))
-                    } else {
-                        InstallSection(
-                            name = stringResource(R.string.gpu_mesa, Component.MESA.version),
-                            sizeBytes = Component.MESA.sizeBytes,
-                            state = state.mesa,
-                                    onInstall = viewModel::installMesa,
-                            onCancel = viewModel::cancelMesa,
-                        )
-                    }
-                    state.mesaVersion?.takeIf { state.mesa != InstallState.Installed }?.let {
-                        Spacer(Modifier.padding(top = 8.dp))
-                        Status(stringResource(R.string.gpu_installed_version, it))
-                    }
+                    ComponentSection(
+                        Component.MESA, stringResource(R.string.gpu_mesa, Component.MESA.version), state, viewModel,
+                    )
+                }
+                Section(stringResource(R.string.section_theme)) {
+                    ComponentSection(
+                        Component.THEME, stringResource(R.string.theme_component, Component.THEME.version), state, viewModel,
+                    )
                 }
             }
 
@@ -156,6 +149,26 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ComponentSection(component: Component, name: String, state: DiagnosticsState, viewModel: DiagnosticsViewModel) {
+    val install = state.components[component.id] ?: InstallState.Checking
+    if (component.sha256.isEmpty()) {
+        Status(stringResource(R.string.component_unreleased, name))
+    } else {
+        InstallSection(
+            name = name,
+            sizeBytes = component.sizeBytes,
+            state = install,
+            onInstall = { viewModel.installComponent(component) },
+            onCancel = { viewModel.cancelComponent(component) },
+        )
+    }
+    state.componentVersions[component.id]?.takeIf { install != InstallState.Installed }?.let {
+        Spacer(Modifier.padding(top = 8.dp))
+        Status(stringResource(R.string.component_installed_version, it))
     }
 }
 

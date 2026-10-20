@@ -34,6 +34,18 @@ data class Component(
             sizeBytes = 5_214_696,
             guestPath = DesktopEnvironment.MESA_PREFIX,
         )
+
+        /** Papirus icons with their caches, and Arc-Dark window borders at 1.5x and 2x: guest/theme. */
+        val THEME = Component(
+            id = "theme",
+            version = "20250501-dn1",
+            url = "$RELEASES/theme-20250501-dn1/droidnux-theme-20250501-dn1.tar.xz",
+            sha256 = "70ac8aa52f274adac2636170284f05c58b7a26a23f4ba1180e73bf1e9f5a1113",
+            sizeBytes = 17_736_244,
+            guestPath = DesktopEnvironment.THEME_PREFIX,
+        )
+
+        val ALL = listOf(MESA, THEME)
     }
 }
 

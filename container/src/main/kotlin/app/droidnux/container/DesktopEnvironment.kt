@@ -27,9 +27,21 @@ object DesktopEnvironment {
     /** Where the Mesa component (guest/mesa) is unpacked. */
     const val MESA_PREFIX = "/opt/droidnux/mesa"
 
+    /** Where the theme component (guest/theme: Papirus icons, scaled window borders) is unpacked. */
+    const val THEME_PREFIX = "/opt/droidnux/theme"
+
+    /**
+     * DroidNux's defaults for XFCE (theme, panel), ahead of the distro's in
+     * XDG_CONFIG_DIRS (as Xubuntu does): what users change still goes to ~/.config.
+     */
+    private const val XDG_DEFAULTS = "/etc/xdg/droidnux"
+    private const val XFCONF_DEFAULTS = "$XDG_DEFAULTS/xfce4/xfconf/xfce-perchannel-xml"
+
     private val PACKAGES = listOf(
         "xfce4", "xfce4-terminal", "dbus-x11", "x11-xserver-utils", "xkb-data",
         "adwaita-icon-theme", "fonts-dejavu-core",
+        // DroidNux's look (XSETTINGS_DEFAULTS, PANEL_DEFAULTS); Papirus comes in the theme component.
+        "arc-theme", "fonts-inter", "xfce4-whiskermenu-plugin", "xfce4-docklike-plugin", "xfce4-pulseaudio-plugin",
         // SVG loader for gdk-pixbuf: XFCE's default wallpaper and many icons are SVG.
         "librsvg2-common",
         // H.264 and AAC for Firefox: its bundled decoders cover only VP8/VP9/AV1/Opus/Vorbis.
@@ -77,12 +89,10 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PIPEWIRE_MODULE_DIR/$PIPEWIRE_MODULE", File(nativeLibraryDir, PIPEWIRE_MODULE).readBytes())
         writeFile(rootfs, PIPEWIRE_CONF, PIPEWIRE_DEFAULTS.toByteArray())
         writeFile(rootfs, WIREPLUMBER_CONF, WIREPLUMBER_DEFAULTS.toByteArray())
-        // Android composes the screen: a compositing window manager would only
-        // add a second, slower composition pass.
-        writeFile(
-            rootfs, "/root/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml", XFWM4_DEFAULTS.toByteArray(),
-            overwrite = false,
-        )
+        writeFile(rootfs, "$XFCONF_DEFAULTS/xfwm4.xml", XFWM4_DEFAULTS.toByteArray())
+        writeFile(rootfs, "$XFCONF_DEFAULTS/xsettings.xml", XSETTINGS_DEFAULTS.toByteArray())
+        writeFile(rootfs, "$XFCONF_DEFAULTS/xfce4-panel.xml", PANEL_DEFAULTS.toByteArray())
+        writeFile(rootfs, "$XDG_DEFAULTS/xfce4/panel/docklike.rc", DOCK_DEFAULTS.toByteArray())
         writeFile(rootfs, FIREFOX_PREFS_PATH, FIREFOX_PREFS.toByteArray())
         OBSOLETE_FILES.forEach { removeFile(rootfs, it) }
     }
@@ -112,6 +122,15 @@ object DesktopEnvironment {
         q -c xsettings -p /Gtk/CursorThemeSize -n -t int -s ${'$'}((24 * dpi / 96))
         q -c xfce4-panel -p /panels/panel-1/size -n -t uint -s ${'$'}((40 * dpi / 96))
         q -c xfce4-desktop -p /desktop-icons/icon-size -n -t uint -s ${'$'}((48 * dpi / 96))
+        # Window borders are pixel images: Arc-Dark at 1x, 1.5x or 2x (theme
+        # component), unless the user picked another theme.
+        case "${'$'}(q -c xfwm4 -p /general/theme)" in Arc-Dark|Arc-Dark-hdpi|Arc-Dark-xhdpi|Arc-Dark-DroidNux)
+            borders=Arc-Dark
+            [ ${'$'}dpi -ge 120 ] && borders=Arc-Dark-hdpi
+            [ ${'$'}dpi -ge 168 ] && borders=Arc-Dark-xhdpi
+            [ -d $THEME_PREFIX/share/themes/${'$'}borders ] || borders=Arc-Dark
+            q -c xfwm4 -p /general/theme -n -t string -s ${'$'}borders
+        esac
         # Whisker menu: its size is in pixels and its icons in steps (16, 24, 32, 38, 48, 64, 96).
         icon_step() {
             for s in 20:0 28:1 35:2 43:3 56:4 80:5; do [ "${'$'}1" -lt "${'$'}{s%:*}" ] && { echo "${'$'}{s#*:}"; return; }; done
@@ -136,6 +155,11 @@ object DesktopEnvironment {
             export XDG_SESSION_TYPE=x11
             export XDG_CURRENT_DESKTOP=XFCE
             export SHELL=/bin/bash
+            export XDG_CONFIG_DIRS=$XDG_DEFAULTS:/etc/xdg
+            # Icons and window borders from the theme component, when installed.
+            if [ -f $THEME_PREFIX/droidnux-theme.version ]; then
+                export XDG_DATA_DIRS=$THEME_PREFIX/share:/usr/local/share:/usr/share
+            fi
             # MIT-SHM segments the X server can attach.
             export LD_PRELOAD=$GUEST_LIB_DIR/$SHM_LIBRARY${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}
             # Android's SELinux denies reopening a memfd through /proc/self/fd,
@@ -253,13 +277,82 @@ object DesktopEnvironment {
         ]
     """.trimIndent() + "\n"
 
+    // Android composes the screen: a compositing window manager would only add
+    // a second, slower composition pass. The borders' size follows the
+    // interface size (UI_SCALE).
     private val XFWM4_DEFAULTS = """
         <?xml version="1.0" encoding="UTF-8"?>
         <channel name="xfwm4" version="1.0">
           <property name="general" type="empty">
             <property name="use_compositing" type="bool" value="false"/>
+            <property name="theme" type="string" value="Arc-Dark"/>
           </property>
         </channel>
+    """.trimIndent() + "\n"
+
+    private val XSETTINGS_DEFAULTS = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <channel name="xsettings" version="1.0">
+          <property name="Net" type="empty">
+            <property name="ThemeName" type="string" value="Arc-Dark"/>
+            <property name="IconThemeName" type="string" value="Papirus-Dark"/>
+          </property>
+          <property name="Gtk" type="empty">
+            <property name="FontName" type="string" value="Inter 10"/>
+          </property>
+        </channel>
+    """.trimIndent() + "\n"
+
+    // One full-width bottom panel: Whisker menu, Docklike, tray, volume, clock.
+    // Panel and menu sizes follow the interface size (UI_SCALE).
+    private val PANEL_DEFAULTS = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <channel name="xfce4-panel" version="1.0">
+          <property name="configver" type="int" value="2"/>
+          <property name="panels" type="array">
+            <value type="int" value="1"/>
+            <property name="dark-mode" type="bool" value="true"/>
+            <property name="panel-1" type="empty">
+              <property name="position" type="string" value="p=10;x=0;y=0"/>
+              <property name="length" type="uint" value="100"/>
+              <property name="size" type="uint" value="40"/>
+              <property name="icon-size" type="uint" value="0"/>
+              <property name="position-locked" type="bool" value="true"/>
+              <property name="plugin-ids" type="array">
+                <value type="int" value="1"/>
+                <value type="int" value="2"/>
+                <value type="int" value="3"/>
+                <value type="int" value="4"/>
+                <value type="int" value="5"/>
+                <value type="int" value="6"/>
+              </property>
+            </property>
+          </property>
+          <property name="plugins" type="empty">
+            <property name="plugin-1" type="string" value="whiskermenu">
+              <property name="button-icon" type="string" value="distributor-logo-debian"/>
+              <property name="show-button-title" type="bool" value="false"/>
+            </property>
+            <property name="plugin-2" type="string" value="docklike"/>
+            <property name="plugin-3" type="string" value="separator">
+              <property name="expand" type="bool" value="true"/>
+              <property name="style" type="uint" value="0"/>
+            </property>
+            <property name="plugin-4" type="string" value="systray">
+              <property name="square-icons" type="bool" value="true"/>
+            </property>
+            <property name="plugin-5" type="string" value="pulseaudio">
+              <property name="enable-keyboard-shortcuts" type="bool" value="true"/>
+            </property>
+            <property name="plugin-6" type="string" value="clock"/>
+          </property>
+        </channel>
+    """.trimIndent() + "\n"
+
+    /** Apps pinned in the dock: Docklike reads xfce4/panel/docklike.rc from the config dirs until the user changes them. */
+    private val DOCK_DEFAULTS = """
+        [user]
+        pinned=xfce4-terminal;thunar;firefox-esr;
     """.trimIndent() + "\n"
 
     /**
@@ -268,7 +361,7 @@ object DesktopEnvironment {
      * The file is replaced by a rename, so processes that have it open or
      * mapped keep the old copy.
      */
-    private fun writeFile(rootfs: File, path: String, content: ByteArray, mode: Int = 0x1A4, overwrite: Boolean = true) {
+    private fun writeFile(rootfs: File, path: String, content: ByteArray, mode: Int = 0x1A4) {
         val file = File(rootfs, path.removePrefix("/"))
         val root = rootfs.canonicalPath
         val parent = file.parentFile!!
@@ -277,7 +370,7 @@ object DesktopEnvironment {
             throw IOException("$path resolves outside the rootfs")
         }
         if (java.nio.file.Files.isSymbolicLink(file.toPath())) file.delete()
-        if (file.exists() && (!overwrite || file.length() == content.size.toLong() && file.readBytes().contentEquals(content))) {
+        if (file.exists() && file.length() == content.size.toLong() && file.readBytes().contentEquals(content)) {
             return
         }
         val temp = File(parent, ".${file.name}.droidnux-new")
