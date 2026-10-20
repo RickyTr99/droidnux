@@ -10,6 +10,7 @@
 #define DROIDNUX_X11_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -47,6 +48,12 @@ void dnx_x11_pointer_move_relative(float dx, float dy);
 void dnx_x11_button(int button, bool down);
 /* Scroll, in notches (1.0 = one wheel click); fractional values for touchpads. */
 void dnx_x11_scroll(float dx, float dy);
+
+/* Android's clipboard text (UTF-8, copied): X clients paste it from CLIPBOARD. */
+void dnx_x11_set_clipboard(const char* utf8, size_t length);
+/* Called on the server thread with the text an X client copied (UTF-8, NUL-terminated). */
+typedef void (*dnx_x11_clipboard_callback)(const char* utf8);
+void dnx_x11_set_clipboard_callback(dnx_x11_clipboard_callback callback);
 
 #ifdef __cplusplus
 }

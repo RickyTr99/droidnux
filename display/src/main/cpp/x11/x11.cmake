@@ -86,6 +86,7 @@ set(X11_SOURCES
     ${TX11_DIR}/xserver/hw/xquartz/keysym2ucs.c
     ${TX11_DIR}/libxcvt/lib/libxcvt.c
     ${TX11_DIR}/lorie/InitInput.c
+    ${TX11_DIR}/lorie/clipboard.c
     ${TX11_DIR}/lorie/InputXKB.c
     ${TX11_DIR}/lorie/workqueue.cpp
     ${CMAKE_CURRENT_LIST_DIR}/dri3.c

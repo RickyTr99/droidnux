@@ -1,6 +1,8 @@
 package app.droidnux.desktop
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Color
@@ -45,12 +47,23 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private var surfaceWidth = 0
     private var surfaceHeight = 0
     private val touch = TouchGestures(handler)
+    private val clipboard by lazy { getSystemService(ClipboardManager::class.java) }
+    /** Last text exchanged with X, so neither side gets its own copy back. */
+    private var clipboardText: String? = null
+    private var clipboardStamp = 0L
+    private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener { clipboardToX() }
     private val touchSlop by lazy { android.view.ViewConfiguration.get(this).scaledTouchSlop.toFloat() }
     private val touchpad = CapturedTouchpad()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         current = this
+        X11Server.onClipboard = { text ->
+            handler.post {
+                clipboardText = text
+                clipboard.setPrimaryClip(ClipData.newPlainText("DroidNux", text))
+            }
+        }
         desktopScale = scaleOf(intent)
         window.attributes = window.attributes.apply {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
@@ -107,16 +120,21 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     override fun onResume() {
         super.onResume()
         surfaceView.requestFocus()
+        clipboard.addPrimaryClipChangedListener(clipboardListener)
         overlay?.let { handler.post(overlayUpdater) }
     }
 
     override fun onPause() {
         handler.removeCallbacks(overlayUpdater)
+        clipboard.removePrimaryClipChangedListener(clipboardListener)
         super.onPause()
     }
 
     override fun onDestroy() {
-        if (current === this) current = null
+        if (current === this) {
+            current = null
+            X11Server.onClipboard = null
+        }
         super.onDestroy()
     }
 
@@ -127,7 +145,26 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
      */
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) capturePointer()
+        if (hasFocus) {
+            capturePointer()
+            clipboardToX()
+        }
+    }
+
+    /**
+     * Offers Android's clipboard to X. Android lets apps read it only while
+     * focused, so this runs on focus and on changes made meanwhile.
+     */
+    private fun clipboardToX() {
+        if (!X11Server.running) return
+        // The description is cheap and shows no "pasted" notice: read the text only when it changed.
+        val description = clipboard.primaryClipDescription ?: return
+        if (description.timestamp == clipboardStamp) return
+        clipboardStamp = description.timestamp
+        val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+        if (text.isNullOrEmpty() || text == clipboardText) return
+        clipboardText = text
+        X11Server.setClipboard(text)
     }
 
     private fun capturePointer() {
@@ -164,6 +201,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             val started = X11Server.start(rootfs, desktopWidth, desktopHeight, DPI)
             Log.i(TAG, "X server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
             DesktopSessionService.start(this, keyboardLayout())
+            clipboardToX()
         } else {
             X11Server.resize(desktopWidth, desktopHeight)
         }

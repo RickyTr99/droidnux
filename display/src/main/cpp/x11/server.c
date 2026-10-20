@@ -43,6 +43,9 @@ extern DeviceIntPtr lorieMouse, lorieKeyboard;
 extern ScreenPtr pScreenPtr;
 extern int ucs2keysym(long ucs);
 extern void lorieKeysymKeyboardEvent(KeySym keysym, int down);
+/* Termux:X11's CLIPBOARD selection bridge (lorie/clipboard.c). */
+extern void lorieHandleClipboardAnnounce(void);
+extern void lorieHandleClipboardData(const char* data);
 
 /* Socket location, read by the patched Xtrans. */
 char* xtrans_unix_path_x11 = NULL;
@@ -59,12 +62,14 @@ enum event_type {
     EVENT_SCROLL,
     EVENT_RESIZE,
     EVENT_REDRAW,
+    EVENT_CLIPBOARD,
 };
 
 struct event {
     uint32_t type;
     int32_t a, b;   /* keycode/down, codepoint, button/down, width/height */
     float x, y;     /* pointer position or delta, scroll amount */
+    char* text;     /* clipboard text, owned by the event */
 };
 
 static int event_pipe[2] = {-1, -1};
@@ -213,6 +218,28 @@ void dnx_x11_redraw(void) {
     send_event((struct event) {.type = EVENT_REDRAW});
 }
 
+void dnx_x11_set_clipboard(const char* utf8, size_t length) {
+    char* text = strndup(utf8, length);
+    if (text) send_event((struct event) {.type = EVENT_CLIPBOARD, .text = text});
+}
+
+/* -- Clipboard callbacks of lorie/clipboard.c ----------------------------- */
+
+static dnx_x11_clipboard_callback clipboard_callback;
+
+void dnx_x11_set_clipboard_callback(dnx_x11_clipboard_callback callback) {
+    clipboard_callback = callback;
+}
+
+/* An X client copied text (empty on conversion errors). */
+void lorieSendClipboardData(const char* data) {
+    if (clipboard_callback && data && *data) clipboard_callback(data);
+}
+
+/* The data always follows its announcement (EVENT_CLIPBOARD), so the
+ * selection never waits for it. */
+void lorieRequestClipboard(void) {}
+
 /* -- Events on the server thread ------------------------------------------ */
 
 static void handle_event(const struct event* e) {
@@ -258,6 +285,11 @@ static void handle_event(const struct event* e) {
         break;
     case EVENT_REDRAW:
         dnx_output_force_redraw();
+        break;
+    case EVENT_CLIPBOARD:
+        /* Own CLIPBOARD, then serve the text; the selection code frees it. */
+        lorieHandleClipboardAnnounce();
+        lorieHandleClipboardData(e->text);
         break;
     }
 }

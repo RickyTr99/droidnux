@@ -48,6 +48,9 @@
 #define log(prio, ...) __android_log_print(ANDROID_LOG_##prio, "DroidNux.X11", __VA_ARGS__)
 
 extern DeviceIntPtr lorieMouse;
+/* CLIPBOARD selection bridge, lorie/clipboard.c (callbacks in server.c). */
+extern void lorieInitClipboard(void);
+extern void lorieEnableClipboardSync(Bool enable);
 
 ScreenPtr pScreenPtr;
 
@@ -956,6 +959,8 @@ void InitOutput(ScreenInfo* screenInfo, int argc, char** argv) {
     screenInfo->numPixmapFormats = ARRAY_SIZE(depths);
 
     xorgGlxCreateVendor();
+    lorieInitClipboard();
+    lorieEnableClipboardSync(TRUE);
 
     if (AddScreen(screenInit, argc, argv) == -1) FatalError("Couldn't add screen\n");
 }

@@ -55,6 +55,18 @@ object X11Server {
     /** Scroll in wheel notches; positive [dy] scrolls down, positive [dx] right. */
     fun scroll(dx: Float, dy: Float) = nativeScroll(dx, dy)
 
+    /** Called on the X server thread with the text an X client copied. */
+    @Volatile var onClipboard: ((String) -> Unit)? = null
+
+    /** Android's clipboard text: X clients paste it (CLIPBOARD selection). */
+    fun setClipboard(text: String) {
+        if (running) nativeSetClipboard(text.toByteArray())
+    }
+
+    @JvmStatic private fun clipboardFromX(utf8: ByteArray) {
+        onClipboard?.invoke(String(utf8, Charsets.UTF_8))
+    }
+
     @JvmStatic private external fun nativeAvailable(): Boolean
     @JvmStatic private external fun nativeStart(
         tmpDir: String, xkbDir: String, fontDir: String, display: Int, width: Int, height: Int, dpi: Int,
@@ -68,4 +80,5 @@ object X11Server {
     @JvmStatic private external fun nativePointerRelative(dx: Float, dy: Float)
     @JvmStatic private external fun nativeButton(button: Int, down: Boolean)
     @JvmStatic private external fun nativeScroll(dx: Float, dy: Float)
+    @JvmStatic private external fun nativeSetClipboard(utf8: ByteArray)
 }
