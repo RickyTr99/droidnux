@@ -34,6 +34,7 @@ import android.widget.TextView
 import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
 import app.droidnux.container.Distro
+import app.droidnux.display.AudioFocus
 import app.droidnux.display.Presenter
 import app.droidnux.display.X11Server
 import java.util.Locale
@@ -74,6 +75,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         current = this
+        AudioFocus.init(this)
         X11Server.onClipboard = { text ->
             handler.post {
                 clipboardText = text
@@ -207,6 +209,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     override fun onResume() {
         super.onResume()
         reloadSettings()
+        AudioFocus.reclaim()
         surfaceView.requestFocus()
         clipboard.addPrimaryClipChangedListener(clipboardListener)
         overlay?.let { handler.post(overlayUpdater) }

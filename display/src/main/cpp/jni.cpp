@@ -42,6 +42,43 @@ Java_app_droidnux_display_BufferSpike_nativeStop(JNIEnv*, jclass, jlong handle) 
     delete reinterpret_cast<BufferSpike*>(handle);
 }
 
+// -- Audio focus -------------------------------------------------------------
+
+#include "audio_output.h"
+
+namespace {
+JavaVM* audioVm;
+jclass audioFocusClass;
+jmethodID audioPlayingMethod;
+
+// On a sink's thread, which ends with its connection: attach only for the call.
+void onAudioPlaying(bool playing) {
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (audioVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (audioVm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+        attached = true;
+    }
+    env->CallStaticVoidMethod(audioFocusClass, audioPlayingMethod, playing ? JNI_TRUE : JNI_FALSE);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (attached) audioVm->DetachCurrentThread();
+}
+}  // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_AudioFocus_nativeInit(JNIEnv* env, jclass clazz) {
+    if (audioVm != nullptr) return;
+    env->GetJavaVM(&audioVm);
+    audioFocusClass = static_cast<jclass>(env->NewGlobalRef(clazz));
+    audioPlayingMethod = env->GetStaticMethodID(clazz, "onPlaying", "(Z)V");
+    dnx_audio_output_set_playing_callback(onAudioPlaying);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_AudioFocus_nativeSetMuted(JNIEnv*, jclass, jboolean muted) {
+    dnx_audio_output_set_muted(muted);
+}
+
 // -- Presenter ---------------------------------------------------------------
 
 #include "presenter.h"

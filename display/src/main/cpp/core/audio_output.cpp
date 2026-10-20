@@ -34,6 +34,10 @@ constexpr uint32_t kMaxChannels = 8;
 constexpr int kPollMs = 200;
 constexpr int64_t kStopTimeoutNs = 200'000'000;
 
+std::atomic<int> gPlaying{0};
+std::atomic<dnx_audio_playing_callback> gPlayingCallback{nullptr};
+std::atomic<bool> gMuted{false};
+
 bool recvAll(int fd, void* data, size_t size) {
     auto* p = static_cast<uint8_t*>(data);
     while (size > 0) {
@@ -57,6 +61,7 @@ public:
     explicit Session(int fd) : fd_(fd) {}
 
     ~Session() {
+        setPlaying(false);
         closeStream();
         if (ring_ != nullptr) munmap(ring_, size_);
         ::close(fd_);
@@ -204,11 +209,22 @@ private:
             LOGE("cannot start the output: %s", AAudio_convertResultToText(result));
             closeStream();
         }
+        setPlaying(stream_ != nullptr);
+    }
+
+    // Counts the sessions playing; the app hears about the first and the last.
+    void setPlaying(bool playing) {
+        if (playing == counted_) return;
+        counted_ = playing;
+        int now = playing ? gPlaying.fetch_add(1) + 1 : gPlaying.fetch_sub(1) - 1;
+        dnx_audio_playing_callback callback = gPlayingCallback.load();
+        if (callback != nullptr && now == (playing ? 1 : 0)) callback(playing);
     }
 
     // The stream stays open: restarting it is faster than opening it again.
     void stop() {
         playing_ = false;
+        setPlaying(false);
         if (stream_ == nullptr) return;
         AAudioStream_requestStop(stream_);
         aaudio_stream_state_t state = AAUDIO_STREAM_STATE_UNKNOWN;
@@ -251,6 +267,7 @@ private:
             __atomic_fetch_add(&ring->underruns, 1u, __ATOMIC_RELAXED);
         }
         __atomic_store_n(&ring->read_index, read + take, __ATOMIC_RELEASE);
+        if (gMuted.load(std::memory_order_relaxed)) std::memset(out, 0, wanted * channels * sizeof(float));
         // The sink starts its clock once this is set, and keeps a burst in the ring.
         if (self->playing_ && wanted > __atomic_load_n(&ring->burst, __ATOMIC_RELAXED)) {
             __atomic_store_n(&ring->burst, wanted, __ATOMIC_RELAXED);
@@ -272,6 +289,7 @@ private:
     AAudioStream* stream_ = nullptr;
     std::atomic<bool> playing_{false};
     std::atomic<bool> lost_{false};
+    bool counted_ = false;  // in gPlaying (session thread only)
 };
 
 class Server {
@@ -319,6 +337,12 @@ private:
 };
 
 }  // namespace
+
+extern "C" void dnx_audio_output_set_playing_callback(dnx_audio_playing_callback callback) {
+    gPlayingCallback.store(callback);
+}
+
+extern "C" void dnx_audio_output_set_muted(bool muted) { gMuted.store(muted); }
 
 extern "C" bool dnx_audio_output_start(const char* socket_path) {
     static Server* server = new Server();  // lives as long as the process

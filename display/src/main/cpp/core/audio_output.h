@@ -15,6 +15,15 @@ extern "C" {
 /* Listens on `socket_path` (replacing a stale socket) on a thread of its own. */
 bool dnx_audio_output_start(const char* socket_path);
 
+/* Called, on an audio thread, when the first sink starts playing (true) and
+ * when the last one stops (false): the app holds Android's audio focus in
+ * between. */
+typedef void (*dnx_audio_playing_callback)(bool playing);
+void dnx_audio_output_set_playing_callback(dnx_audio_playing_callback callback);
+
+/* Silences the output (the ring keeps flowing) while another app has the focus. */
+void dnx_audio_output_set_muted(bool muted);
+
 #ifdef __cplusplus
 }
 #endif
