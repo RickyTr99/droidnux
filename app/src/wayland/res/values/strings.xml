@@ -1,4 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">DroidNux WL</string>
+    <!-- Plasma instead of XFCE. -->
+    <string name="desktop_not_installed">Plasma is not installed yet.</string>
+    <string name="desktop_installed">Plasma is installed.</string>
+    <string name="action_install_desktop">Install Plasma</string>
+    <string name="desktop_update">Plasma is installed; this version of the app adds packages.</string>
+    <string name="home_title">Debian 13 · Plasma</string>
+    <string name="desktop_xfce">KDE Plasma 6.3</string>
+    <string name="desktop_xfce_text">Wayland, dark theme, bottom panel</string>
+    <string name="install_desktop_text">Plasma and KDE\'s apps, from Debian</string>
 </resources>

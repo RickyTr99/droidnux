@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="desktop_not_installed">Plasma non è ancora installato.</string>
+    <string name="desktop_installed">Plasma è installato.</string>
+    <string name="action_install_desktop">Installa Plasma</string>
+    <string name="desktop_update">Plasma è installato; questa versione dell\'app aggiunge dei pacchetti.</string>
+    <string name="home_title">Debian 13 · Plasma</string>
+    <string name="desktop_xfce">KDE Plasma 6.3</string>
+    <string name="desktop_xfce_text">Wayland, tema scuro, barra in basso</string>
+    <string name="install_desktop_text">Plasma e le app di KDE, da Debian</string>
+</resources>

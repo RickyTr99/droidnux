@@ -103,8 +103,9 @@ private enum class Tab(val label: Int, val icon: ImageVector) {
 }
 
 /** Apps opened from the desktop tab when installed, in this order. */
-private val FAVORITES = listOf("firefox-esr", "thunar", "mpv", "xfce4-terminal")
+private val FAVORITES = listOf("firefox-esr", "thunar", "org.kde.dolphin", "mpv", "xfce4-terminal", "org.kde.konsole")
 private const val TERMINAL = "xfce4-terminal"
+private const val PLASMA_TERMINAL = "org.kde.konsole"
 
 @Composable
 fun HomeScreen(state: AppState, viewModel: AppViewModel) {
@@ -228,7 +229,7 @@ private fun DesktopTab(
                             modifier = Modifier.padding(start = 10.dp),
                         )
                     }
-                    FilledTonalButton(onClick = { launchApp(context, TERMINAL, null) }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    FilledTonalButton(onClick = { launchApp(context, if (context.resources.getBoolean(R.bool.wayland_frontend)) PLASMA_TERMINAL else TERMINAL, null) }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         Text(stringResource(R.string.action_terminal), fontSize = 16.sp)
                     }
                 }
