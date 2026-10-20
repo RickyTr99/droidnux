@@ -145,6 +145,11 @@ object DesktopEnvironment {
             # in droidnux.js; Firefox has no prefs for these two.
             export MOZ_DISABLE_RDD_SANDBOX=1
             export MOZ_DISABLE_UTILITY_SANDBOX=1
+            # Android's SELinux denies reopening a memfd through /proc/self/fd,
+            # so Firefox's parent process falls back to unsealed shm_open while
+            # its children still demand F_SEAL_SHRINK: every tab crashes with
+            # "Shared memory PlatformHandle is not safe to map" (Firefox 154+).
+            export MOZ_SHM_NO_SEALS=1
             # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed,
             # otherwise the distro's software rendering.
             MESA=$MESA_PREFIX
