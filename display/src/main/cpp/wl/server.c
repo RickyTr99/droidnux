@@ -40,12 +40,14 @@ enum event_type {
     EVENT_SCROLL,
     EVENT_RESIZE,
     EVENT_REDRAW,
+    EVENT_BUFFER,
 };
 
 struct event {
     uint32_t type;
-    int32_t a, b; /* keycode/down, codepoint, button/down, width/height */
+    int32_t a, b; /* keycode/down, codepoint, button/down, width/height, released */
     float x, y;   /* pointer position or delta, scroll amount */
+    void* data;   /* the buffer of EVENT_BUFFER */
 };
 
 static int event_pipe[2] = {-1, -1};
@@ -162,6 +164,18 @@ void dnx_wl_redraw(void) {
     send_event((struct event) {.type = EVENT_REDRAW});
 }
 
+void dnx_wl_post_buffer_event(struct dnx_wl_dmabuf* buffer, bool released) {
+    /* Never dropped: the buffer is freed on its last RELEASED. */
+    struct event e = {.type = EVENT_BUFFER, .a = released, .data = buffer};
+    while (write(event_pipe[1], &e, sizeof(e)) != sizeof(e)) {
+        if (errno != EAGAIN && errno != EINTR) {
+            log(ERROR, "buffer event lost: %s", strerror(errno));
+            return;
+        }
+        usleep(1000);
+    }
+}
+
 /* -- Events on the compositor thread -------------------------------------- */
 
 static void handle_event(const struct event* e) {
@@ -195,6 +209,9 @@ static void handle_event(const struct event* e) {
     }
     case EVENT_REDRAW:
         dnx_wl_surface_redraw();
+        break;
+    case EVENT_BUFFER:
+        dnx_wl_dmabuf_on_presenter_event(e->data, e->a);
         break;
     }
 }
@@ -299,6 +316,7 @@ bool dnx_wl_start(const dnx_wl_config* config) {
     wl_list_init(&outputs);
     wl_global_create(dnx_wl_display, &wl_output_interface, 4, NULL, output_bind);
     dnx_wl_surface_init(dnx_wl_display);
+    dnx_wl_dmabuf_init(dnx_wl_display);
     char* keymap = NULL;
     asprintf(&keymap, "%s/.droidnux-keymap.xkb", config->tmp_dir);
     dnx_wl_seat_init(dnx_wl_display, keymap);

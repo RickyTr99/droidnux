@@ -50,6 +50,23 @@ extern int dnx_wl_width, dnx_wl_height;
 void dnx_wl_request_frame(void);
 uint32_t dnx_wl_now_ms(void);
 
+/* Any thread: delivers a presenter buffer event to the compositor thread. */
+struct dnx_wl_dmabuf;
+void dnx_wl_post_buffer_event(struct dnx_wl_dmabuf* buffer, bool released);
+
+/* -- dmabuf.c -- */
+void dnx_wl_dmabuf_init(struct wl_display* display);
+/* The linux-dmabuf buffer behind a wl_buffer, or NULL for other buffers (shm). */
+struct dnx_wl_dmabuf* dnx_wl_dmabuf_get(struct wl_resource* buffer);
+void dnx_wl_dmabuf_size(struct dnx_wl_dmabuf* buffer, int32_t* width, int32_t* height);
+/* A surface took it as its current buffer / let it go (then it may be released). */
+void dnx_wl_dmabuf_use(struct dnx_wl_dmabuf* buffer);
+void dnx_wl_dmabuf_unuse(struct dnx_wl_dmabuf* buffer);
+/* Shows it as the desktop; false if the presenter cannot take it yet. */
+bool dnx_wl_dmabuf_present(struct dnx_wl_dmabuf* buffer, const dnx_box* rects, int count);
+/* A presenter event for it, on the compositor thread. */
+void dnx_wl_dmabuf_on_presenter_event(struct dnx_wl_dmabuf* buffer, bool released);
+
 /* -- surface.c -- */
 void dnx_wl_surface_init(struct wl_display* display);
 /* The surface shown as the desktop, or NULL. */

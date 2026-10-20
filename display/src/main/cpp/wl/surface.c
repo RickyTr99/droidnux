@@ -75,9 +75,12 @@ static void present_shown(void) {
     struct dnx_wl_surface* s = shown;
     if (!s || !s->buffer || s->damage.count == 0) return;
     struct wl_shm_buffer* shm = wl_shm_buffer_get(s->buffer);
-    if (!shm) return; /* shortcut: shm only; linux-dmabuf is Fase 4b step 2 */
-    uint32_t format = wl_shm_buffer_get_format(shm);
-    if (format != WL_SHM_FORMAT_XRGB8888 && format != WL_SHM_FORMAT_ARGB8888) {
+    struct dnx_wl_dmabuf* dmabuf = shm ? NULL : dnx_wl_dmabuf_get(s->buffer);
+    if (shm) {
+        uint32_t format = wl_shm_buffer_get_format(shm);
+        if (format != WL_SHM_FORMAT_XRGB8888 && format != WL_SHM_FORMAT_ARGB8888) shm = NULL;
+    }
+    if (!shm && !dmabuf) {
         s->damage.count = 0;
         return;
     }
@@ -95,11 +98,16 @@ static void present_shown(void) {
         return;
     }
 
-    wl_shm_buffer_begin_access(shm);
-    bool ok = dnx_presenter_present(wl_shm_buffer_get_data(shm), (uint32_t) s->width, (uint32_t) s->height,
-                                    (uint32_t) wl_shm_buffer_get_stride(shm), DNX_PIXEL_BGRX8888, NULL, NULL, rects,
-                                    count);
-    wl_shm_buffer_end_access(shm);
+    bool ok;
+    if (dmabuf) {
+        ok = dnx_wl_dmabuf_present(dmabuf, rects, count);
+    } else {
+        wl_shm_buffer_begin_access(shm);
+        ok = dnx_presenter_present(wl_shm_buffer_get_data(shm), (uint32_t) s->width, (uint32_t) s->height,
+                                   (uint32_t) wl_shm_buffer_get_stride(shm), DNX_PIXEL_BGRX8888, NULL, NULL, rects,
+                                   count);
+        wl_shm_buffer_end_access(shm);
+    }
     if (ok)
         s->damage.count = 0;
     else
@@ -395,6 +403,16 @@ static void wm_base_bind(struct wl_client* client, void* data, uint32_t version,
 
 /* -- wl_surface ------------------------------------------------------------ */
 
+/* The surface no longer shows `buffer`: the client may reuse it (dma-bufs
+ * once the presenter let go too). */
+static void release_buffer(struct wl_resource* buffer) {
+    struct dnx_wl_dmabuf* dmabuf = dnx_wl_dmabuf_get(buffer);
+    if (dmabuf)
+        dnx_wl_dmabuf_unuse(dmabuf);
+    else
+        wl_buffer_send_release(buffer);
+}
+
 static void set_buffer(struct wl_resource** slot, struct wl_listener* listener, struct wl_resource* buffer) {
     if (*slot) wl_list_remove(&listener->link);
     *slot = buffer;
@@ -456,13 +474,25 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
 
     if (s->pending_attach) {
         struct wl_resource* buffer = s->pending_buffer;
-        if (s->buffer && s->buffer != buffer) wl_buffer_send_release(s->buffer);
+        if (buffer != s->buffer) {
+            struct dnx_wl_dmabuf* dmabuf = dnx_wl_dmabuf_get(buffer);
+            if (dmabuf) dnx_wl_dmabuf_use(dmabuf);
+            if (s->buffer) release_buffer(s->buffer);
+        }
         set_buffer(&s->buffer, &s->buffer_destroy, buffer);
         set_buffer(&s->pending_buffer, &s->pending_buffer_destroy, NULL);
         s->pending_attach = false;
+        int32_t width = 0, height = 0;
         struct wl_shm_buffer* shm = buffer ? wl_shm_buffer_get(buffer) : NULL;
-        int32_t width = shm ? wl_shm_buffer_get_width(shm) : 0, height = shm ? wl_shm_buffer_get_height(shm) : 0;
-        if (buffer && !shm) log(WARN, "only wl_shm buffers are supported yet");
+        struct dnx_wl_dmabuf* dmabuf = shm ? NULL : dnx_wl_dmabuf_get(buffer);
+        if (shm) {
+            width = wl_shm_buffer_get_width(shm);
+            height = wl_shm_buffer_get_height(shm);
+        } else if (dmabuf) {
+            dnx_wl_dmabuf_size(dmabuf, &width, &height);
+        } else if (buffer) {
+            log(WARN, "unknown buffer type");
+        }
         if (width != s->width || height != s->height) damage_all(s);
         s->width = width;
         s->height = height;
@@ -506,6 +536,7 @@ static void surface_destroyed(struct wl_resource* resource) {
     }
     if (shown == s) set_shown(NULL);
     dnx_wl_seat_surface_destroyed(s);
+    if (s->buffer) release_buffer(s->buffer);
     set_buffer(&s->buffer, &s->buffer_destroy, NULL);
     set_buffer(&s->pending_buffer, &s->pending_buffer_destroy, NULL);
     struct wl_resource *callback, *next;
