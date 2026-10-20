@@ -62,10 +62,15 @@ class DesktopSessionService : Service() {
         session = process
         Log.i(TAG, "session started (layout $layout)")
         scope.launch {
-            process.inputStream.bufferedReader().forEachLine {
-                Log.i(TAG_GUEST, it)
-                // The desktop logged out; its services (PipeWire, D-Bus) would keep proot alive.
-                if (it == DesktopEnvironment.SESSION_END_MARKER) process.destroy()
+            try {
+                process.inputStream.bufferedReader().forEachLine {
+                    Log.i(TAG_GUEST, it)
+                    // The desktop logged out; its services (PipeWire, D-Bus) would keep proot alive.
+                    if (it == DesktopEnvironment.SESSION_END_MARKER) process.destroy()
+                }
+            } catch (e: java.io.IOException) {
+                // destroy() from another thread closes the stream under the reader.
+                Log.i(TAG, "session output closed: $e")
             }
             val code = process.waitFor()
             Log.i(TAG, "session ended with $code")
