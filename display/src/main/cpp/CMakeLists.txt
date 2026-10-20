@@ -51,3 +51,6 @@ target_link_options(droidnux-guest-pipewire PRIVATE
 
 # X11 front-end (X server from Termux:X11 with our own DDX), see x11/x11.cmake.
 include(x11/x11.cmake)
+
+# Wayland front-end, see wl/wl.cmake.
+include(wl/wl.cmake)
