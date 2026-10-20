@@ -138,4 +138,5 @@
     <string name="keys_service_description">Passa al desktop Linux le scorciatoie da tastiera che Android tiene per sé (Meta, Alt+Tab, Ctrl+Esc), solo mentre il desktop è sullo schermo. Non legge nient’altro.</string>
     <string name="check_microphone">Microfono</string>
     <string name="check_microphone_text">Per le app Linux che registrano: chiamate, messaggi vocali.</string>
+    <string name="home_last_session">Il desktop come l’hai lasciato</string>
 </resources>

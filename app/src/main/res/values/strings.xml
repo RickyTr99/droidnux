@@ -145,4 +145,5 @@
     <string name="keys_service_description">Gives the Linux desktop the keyboard shortcuts Android keeps for itself (Meta, Alt+Tab, Ctrl+Esc), only while the desktop is on screen. It reads nothing else.</string>
     <string name="check_microphone">Microphone</string>
     <string name="check_microphone_text">For Linux apps that record: calls, voice messages.</string>
+    <string name="home_last_session">The desktop as you left it</string>
 </resources>

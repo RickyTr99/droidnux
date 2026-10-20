@@ -71,6 +71,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -185,12 +186,28 @@ private fun DesktopTab(
     ) {
         BoxWithConstraints {
             val wide = maxWidth > 760.dp
+            // The last picture of the desktop, reloaded whenever the screen comes back.
+            var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
+            LifecycleResumeEffect(Unit) {
+                val file = DesktopActivity.thumbnailFile(context)
+                thumbnail = if (file.isFile) BitmapFactory.decodeFile(file.path) else null
+                onPauseOrDispose { }
+            }
             val hero = @Composable { modifier: Modifier ->
                 Box(
-                    modifier.height(300.dp).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surfaceContainerLowest),
+                    modifier.height(300.dp).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                        .combinedClickable(onClick = { openDesktop(context) }),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Icon(Icons.Debian, null, tint = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(140.dp))
+                    val picture = thumbnail
+                    if (picture != null) {
+                        Image(
+                            picture.asImageBitmap(), stringResource(R.string.home_last_session),
+                            Modifier.fillMaxSize(), contentScale = ContentScale.Fit,
+                        )
+                    } else {
+                        Icon(Icons.Debian, null, tint = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(140.dp))
+                    }
                 }
             }
             val actions = @Composable { modifier: Modifier ->

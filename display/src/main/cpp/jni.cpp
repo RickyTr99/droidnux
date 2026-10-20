@@ -6,6 +6,7 @@
 #include <jni.h>
 
 #include <cstring>
+#include <vector>
 
 #include "buffer_spike.h"
 #include "probe.h"
@@ -224,6 +225,16 @@ Java_app_droidnux_display_X11Server_nativeButton(JNIEnv*, jclass, jint button, j
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_X11Server_nativeScroll(JNIEnv*, jclass, jfloat dx, jfloat dy) {
     dnx_x11_scroll(dx, dy);
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_app_droidnux_display_X11Server_nativeSnapshot(JNIEnv* env, jclass, jint width, jint height) {
+    if (width <= 0 || height <= 0 || width > 4096 || height > 4096) return nullptr;
+    std::vector<uint32_t> pixels(static_cast<size_t>(width) * height);
+    if (!dnx_x11_snapshot(pixels.data(), width, height)) return nullptr;
+    jintArray result = env->NewIntArray(width * height);
+    if (result != nullptr) env->SetIntArrayRegion(result, 0, width * height, reinterpret_cast<const jint*>(pixels.data()));
+    return result;
 }
 
 extern "C" JNIEXPORT void JNICALL

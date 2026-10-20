@@ -187,6 +187,23 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         surfaceView.animate().translationY(-shift).setDuration(KEYBOARD_PAN_MS).start()
     }
 
+    /** The desktop as it is now, small, for the app's home screen. */
+    private fun saveThumbnail() {
+        if (!X11Server.running || surfaceWidth == 0) return
+        val width = THUMBNAIL_WIDTH
+        val height = width * surfaceHeight / surfaceWidth
+        Thread {
+            runCatching {
+                val pixels = X11Server.snapshot(width, height) ?: return@Thread
+                val bitmap = android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
+                val file = thumbnailFile(this)
+                val temp = java.io.File(file.path + ".new")
+                temp.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.WEBP_LOSSY, 85, it) }
+                temp.renameTo(file)
+            }.onFailure { Log.w(TAG, "cannot save the desktop's thumbnail", it) }
+        }.start()
+    }
+
     /** Settings changed in the app while the desktop was in the background apply on return. */
     private fun reloadSettings() {
         val settings = DesktopSettings.load(this)
@@ -216,6 +233,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onPause() {
+        saveThumbnail()
         handler.removeCallbacks(overlayUpdater)
         clipboard.removePrimaryClipChangedListener(clipboardListener)
         super.onPause()
@@ -646,6 +664,11 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         const val MAX_SCALE = 1f
 
         private const val GESTURE_EXCLUSION_DP = 200
+        private const val THUMBNAIL_WIDTH = 960
+
+        /** The last picture of the desktop (see saveThumbnail), shown on the home screen. */
+        fun thumbnailFile(context: android.content.Context) = java.io.File(context.filesDir, "desktop-thumbnail.webp")
+
         /** String extra: desktop id of a Linux app to start in the session. */
         const val EXTRA_LAUNCH = "app.droidnux.desktop.LAUNCH"
         private const val KEYBOARD_MARGIN_DP = 48

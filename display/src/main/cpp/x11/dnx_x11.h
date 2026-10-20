@@ -49,6 +49,11 @@ void dnx_x11_button(int button, bool down);
 /* Scroll, in notches (1.0 = one wheel click); fractional values for touchpads. */
 void dnx_x11_scroll(float dx, float dy);
 
+/* A picture of the desktop scaled to width x height (0xAARRGGBB), taken on
+ * the server thread: false if it did not answer within half a second.
+ * Windows shown on their own layer (full-screen GPU apps) are not in it. */
+bool dnx_x11_snapshot(uint32_t* pixels, int width, int height);
+
 /* Android's clipboard text (UTF-8, copied): X clients paste it from CLIPBOARD. */
 void dnx_x11_set_clipboard(const char* utf8, size_t length);
 /* Called on the server thread with the text an X client copied (UTF-8, NUL-terminated). */

@@ -14,6 +14,8 @@ extern int dnx_initial_width, dnx_initial_height;
 /* output.c, server thread only. */
 void dnx_output_resize(int width, int height);
 void dnx_output_force_redraw(void);
+/* Server thread: the screen scaled to width x height, 0xAARRGGBB. */
+void dnx_output_snapshot(uint32_t* pixels, int width, int height);
 
 /* dri3.c, server thread. */
 Bool dnx_dri3_init(ScreenPtr pScreen);

@@ -55,6 +55,12 @@ object X11Server {
     /** Scroll in wheel notches; positive [dy] scrolls down, positive [dx] right. */
     fun scroll(dx: Float, dy: Float) = nativeScroll(dx, dy)
 
+    /**
+     * The desktop scaled to [width] x [height] (ARGB), or null if the server
+     * is not running or did not answer in time. Blocks up to half a second.
+     */
+    fun snapshot(width: Int, height: Int): IntArray? = if (running) nativeSnapshot(width, height) else null
+
     /** Called on the X server thread with the text an X client copied. */
     @Volatile var onClipboard: ((String) -> Unit)? = null
 
@@ -67,6 +73,7 @@ object X11Server {
         onClipboard?.invoke(String(utf8, Charsets.UTF_8))
     }
 
+    @JvmStatic private external fun nativeSnapshot(width: Int, height: Int): IntArray?
     @JvmStatic private external fun nativeAvailable(): Boolean
     @JvmStatic private external fun nativeStart(
         tmpDir: String, xkbDir: String, fontDir: String, display: Int, width: Int, height: Int, dpi: Int,

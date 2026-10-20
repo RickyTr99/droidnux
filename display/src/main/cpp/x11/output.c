@@ -589,6 +589,20 @@ static void onDamage(DamagePtr damage, RegionPtr region, void* closure) {
     requestFrame();
 }
 
+void dnx_output_snapshot(uint32_t* pixels, int width, int height) {
+    if (!pScreenPtr) return;
+    PixmapPtr pixmap = pScreenPtr->GetScreenPixmap(pScreenPtr);
+    if (!pixmap || !pixmap->devPrivate.ptr) return;
+    dnx_dri3_begin_cpu_read(pixmap);
+    const uint8_t* base = pixmap->devPrivate.ptr;
+    int sw = pixmap->drawable.width, sh = pixmap->drawable.height;
+    /* Nearest pixel: a thumbnail, taken once when the desktop leaves the screen. */
+    for (int y = 0; y < height; y++) {
+        const uint32_t* row = (const uint32_t*) (base + (size_t) (y * sh / height) * pixmap->devKind);
+        for (int x = 0; x < width; x++) pixels[y * width + x] = row[x * sw / width] | 0xff000000u;
+    }
+}
+
 void dnx_output_force_redraw(void) {
     if (!pScreenPtr) return;
     leaveLayer();
