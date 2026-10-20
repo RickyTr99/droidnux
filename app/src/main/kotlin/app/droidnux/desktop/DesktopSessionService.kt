@@ -40,7 +40,15 @@ class DesktopSessionService : Service() {
             endDesktop()
             return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        // The microphone type lets Linux apps record while the desktop is in the background;
+        // Android refuses it without the permission.
+        val microphone = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        startForeground(
+            NOTIFICATION_ID, notification(),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
+                (if (microphone) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0),
+        )
         if (session == null) {
             startSession(intent?.getStringExtra(EXTRA_LAYOUT) ?: "us", intent?.getIntExtra(EXTRA_DPI, 96) ?: 96)
         }

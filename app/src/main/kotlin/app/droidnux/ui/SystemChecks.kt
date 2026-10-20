@@ -47,12 +47,16 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
     }
     var phantomHelp by remember { mutableStateOf(false) }
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
+    val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
 
     val phantomOk = remember(refresh) { phantomProcessesUnlimited(context) }
     val batteryOk = remember(refresh) {
         context.getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(context.packageName)
     }
     val filesOk = remember(refresh) { Environment.isExternalStorageManager() }
+    val microphoneOk = remember(refresh) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    }
     val notificationsOk = remember(refresh) {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
@@ -99,6 +103,18 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
                         Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.fromParts("package", context.packageName, null)),
                     )
                 }) { Text(stringResource(R.string.check_allow)) }
+            }
+        }
+        InfoRow(
+            title = stringResource(R.string.check_microphone),
+            text = stringResource(R.string.check_microphone_text),
+            icon = if (microphoneOk) Icons.Check else Icons.Info,
+            iconTint = if (microphoneOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        ) {
+            if (!microphoneOk) {
+                FilledTonalButton(onClick = { microphone.launch(Manifest.permission.RECORD_AUDIO) }) {
+                    Text(stringResource(R.string.check_allow))
+                }
             }
         }
         InfoRow(

@@ -1,12 +1,15 @@
 /*
  * PipeWire module for the container: an Audio/Sink that plays through the
- * app's AAudio output (display/src/main/cpp/core/audio_output.cpp), protocol
- * in audio_protocol.h.
+ * app's AAudio output and an Audio/Source that records the device's
+ * microphone (display/src/main/cpp/core/audio_output.cpp), protocol in
+ * audio_protocol.h. Each node has its own connection and ring.
  *
- * The sink drives the guest's graph with a timer, as a sound card does with
- * its interrupt. The AAudio callback drains the shared ring at the device's
- * clock, and a DLL on the ring's fill corrects the timer, so the graph follows
- * the device's clock with no message per period.
+ * A node drives the guest's graph with a timer, as a sound card does with its
+ * interrupt. The AAudio callback drains (fills) the shared ring at the
+ * device's clock, and a DLL on the ring's fill corrects the timer, so the
+ * graph follows the device's clock with no message per period. The sink is
+ * the preferred driver; the source drives only graphs that record without
+ * playing.
  *
  * Built with the NDK (display/src/main/cpp/CMakeLists.txt) as
  * libpipewire-module-droidnux.so, but loaded by the guest's PipeWire under
@@ -52,8 +55,6 @@ PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
 #define PW_LOG_TOPIC_DEFAULT mod_topic
 
 #define RATE 48000u
-#define CHANNELS 2u
-#define FRAME_SIZE (CHANNELS * sizeof(float))
 #define RING_FRAMES 8192u /* 170 ms, above PipeWire's largest default quantum */
 /* Fill kept in the ring above one device burst at every period: the timer's
  * jitter under proot. */
@@ -69,7 +70,7 @@ PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
 
 static const struct spa_dict_item module_props[] = {
     {PW_KEY_MODULE_AUTHOR, "DroidNux"},
-    {PW_KEY_MODULE_DESCRIPTION, "Audio output through the DroidNux app (AAudio)"},
+    {PW_KEY_MODULE_DESCRIPTION, "Audio output and microphone through the DroidNux app (AAudio)"},
     {PW_KEY_MODULE_VERSION, "1"},
 };
 
@@ -80,7 +81,10 @@ struct dll {
     uint32_t period;
 };
 
+/* One node: the sink, or the source (capture). */
 struct impl {
+    bool capture;
+    uint32_t channels;
     struct pw_context* context;
     struct pw_impl_module* module;
     struct spa_hook module_listener;
@@ -150,20 +154,30 @@ static void set_timeout(struct impl* impl, uint64_t time) {
     pw_loop_update_timer(impl->data_loop, impl->timer, &value, &interval, true);
 }
 
+static uint32_t frame_size(const struct impl* impl) {
+    return impl->channels * (uint32_t) sizeof(float);
+}
+
 static uint32_t target_fill(const struct impl* impl) {
     return __atomic_load_n(&impl->ring->burst, __ATOMIC_RELAXED) + MARGIN_FRAMES;
 }
 
-/* Data loop: the device runs (or never will), the first period starts with
- * the target fill of silence. */
+/* Data loop: the device runs (or never will). A sink's first period starts
+ * with the target fill of silence, a source's with at most that much of the
+ * microphone. */
 static void begin_periods(struct impl* impl, uint64_t now) {
-    uint32_t read = __atomic_load_n(&impl->ring->read_index, __ATOMIC_ACQUIRE);
     uint32_t fill = SPA_MIN(target_fill(impl), RING_FRAMES / 2);
-    for (uint32_t i = 0; i < fill; i++) {
-        float* frame = impl->samples + ((read + i) & (RING_FRAMES - 1)) * CHANNELS;
-        for (uint32_t c = 0; c < CHANNELS; c++) frame[c] = 0.0f;
+    if (impl->capture) {
+        uint32_t write = __atomic_load_n(&impl->ring->write_index, __ATOMIC_ACQUIRE);
+        uint32_t read = __atomic_load_n(&impl->ring->read_index, __ATOMIC_RELAXED);
+        if (write - read > fill) __atomic_store_n(&impl->ring->read_index, write - fill, __ATOMIC_RELEASE);
+    } else {
+        uint32_t read = __atomic_load_n(&impl->ring->read_index, __ATOMIC_ACQUIRE);
+        for (uint32_t i = 0; i < fill * impl->channels; i++) {
+            impl->samples[((read * impl->channels) + i) & (RING_FRAMES * impl->channels - 1)] = 0.0f;
+        }
+        __atomic_store_n(&impl->ring->write_index, read + fill, __ATOMIC_RELEASE);
     }
-    __atomic_store_n(&impl->ring->write_index, read + fill, __ATOMIC_RELEASE);
     dll_init(&impl->dll);
     impl->corr = 1.0;
     impl->next_time = now;
@@ -203,10 +217,18 @@ static void on_timeout(void* data, uint64_t expirations) {
     fill = __atomic_load_n(&impl->ring->write_index, __ATOMIC_RELAXED) -
            __atomic_load_n(&impl->ring->read_index, __ATOMIC_ACQUIRE);
     if (fill > RING_FRAMES) fill = RING_FRAMES;
-    /* Only while the device drains the ring: a stopped one would wind the DLL up. */
+    /* A node that follows another driver only keeps its timer for when it drives again. */
+    if (!pw_stream_is_driving(impl->stream)) {
+        impl->next_time = now + duration * SPA_NSEC_PER_SEC / rate;
+        set_timeout(impl, impl->next_time);
+        return;
+    }
+    /* Only while the device runs: a stopped one would wind the DLL up. A sink
+     * slows down when its ring fills, a source speeds up. */
     if (burst != 0) {
         if (impl->dll.period != duration) dll_set_bw(&impl->dll, DLL_BW, (uint32_t) duration, rate);
         double error = (double) fill - (double) target_fill(impl);
+        if (impl->capture) error = -error;
         impl->corr = SPA_CLAMPD(dll_update(&impl->dll, SPA_CLAMPD(error, -MAX_ERROR, MAX_ERROR)), 0.95, 1.05);
     }
 
@@ -224,7 +246,7 @@ static void on_timeout(void* data, uint64_t expirations) {
         pos->clock.rate = pos->clock.target_rate;
         pos->clock.position += pos->clock.duration;
         pos->clock.duration = pos->clock.target_duration;
-        pos->clock.delay = fill + __atomic_load_n(&impl->ring->latency, __ATOMIC_RELAXED);
+        pos->clock.delay = impl->capture ? 0 : fill + __atomic_load_n(&impl->ring->latency, __ATOMIC_RELAXED);
         pos->clock.rate_diff = impl->corr;
         pos->clock.next_nsec = impl->next_time;
     }
@@ -232,18 +254,52 @@ static void on_timeout(void* data, uint64_t expirations) {
     pw_stream_trigger_process(impl->stream);
 }
 
-/* Data loop: one period of the graph's output into the ring. */
+/* Data loop: one period of the microphone from the ring, silence for what it
+ * does not have. */
+static void capture_process(struct impl* impl, struct pw_buffer* buffer) {
+    struct spa_data* d = &buffer->buffer->datas[0];
+    const uint32_t size = frame_size(impl);
+    if (d->data == NULL || d->chunk == NULL) return;
+    uint32_t frames = d->maxsize / size;
+    if (impl->position != NULL && impl->position->clock.duration > 0)
+        frames = SPA_MIN(frames, (uint32_t) impl->position->clock.duration);
+    float* dst = d->data;
+    uint32_t got = 0;
+    if (impl->started) {
+        uint32_t read = __atomic_load_n(&impl->ring->read_index, __ATOMIC_RELAXED);
+        uint32_t available = SPA_MIN(__atomic_load_n(&impl->ring->write_index, __ATOMIC_ACQUIRE) - read, RING_FRAMES);
+        got = SPA_MIN(available, frames);
+        for (uint32_t done = 0; done < got;) {
+            uint32_t at = (read + done) & (RING_FRAMES - 1);
+            uint32_t n = SPA_MIN(got - done, RING_FRAMES - at);
+            memcpy(dst + done * impl->channels, impl->samples + at * impl->channels, n * size);
+            done += n;
+        }
+        __atomic_store_n(&impl->ring->read_index, read + got, __ATOMIC_RELEASE);
+    }
+    memset(dst + got * impl->channels, 0, (frames - got) * size);
+    d->chunk->offset = 0;
+    d->chunk->size = frames * size;
+    d->chunk->stride = (int32_t) size;
+}
+
+/* Data loop: one period of the graph, into (or out of) the ring. */
 static void stream_process(void* data) {
     struct impl* impl = data;
     struct pw_buffer* buffer = pw_stream_dequeue_buffer(impl->stream);
     if (buffer == NULL) return;
+    if (impl->capture) {
+        capture_process(impl, buffer);
+        pw_stream_queue_buffer(impl->stream, buffer);
+        return;
+    }
 
     struct spa_data* d = &buffer->buffer->datas[0];
     const float* src = NULL;
     uint32_t frames = 0;
     if (d->data != NULL && d->chunk != NULL) {
         uint32_t offset = SPA_MIN(d->chunk->offset, d->maxsize);
-        frames = SPA_MIN(d->chunk->size, d->maxsize - offset) / FRAME_SIZE;
+        frames = SPA_MIN(d->chunk->size, d->maxsize - offset) / frame_size(impl);
         src = SPA_PTROFF(d->data, offset, const float);
     }
     if (impl->started) {
@@ -257,7 +313,7 @@ static void stream_process(void* data) {
         for (uint32_t done = 0; done < frames;) {
             uint32_t at = (write + done) & (RING_FRAMES - 1);
             uint32_t n = SPA_MIN(frames - done, RING_FRAMES - at);
-            memcpy(impl->samples + at * CHANNELS, src + done * CHANNELS, n * FRAME_SIZE);
+            memcpy(impl->samples + at * impl->channels, src + done * impl->channels, n * frame_size(impl));
             done += n;
         }
         __atomic_store_n(&impl->ring->write_index, write + frames, __ATOMIC_RELEASE);
@@ -269,9 +325,14 @@ static int do_start(struct spa_loop* loop, bool async, uint32_t seq, const void*
                     void* user_data) {
     struct impl* impl = user_data;
     (void) loop, (void) async, (void) seq, (void) data, (void) size;
-    /* The device is stopped: drop what it did not play last time. */
-    __atomic_store_n(&impl->ring->write_index, __atomic_load_n(&impl->ring->read_index, __ATOMIC_ACQUIRE),
-                     __ATOMIC_RELEASE);
+    /* The device is stopped: drop what it did not play (record) last time. */
+    if (impl->capture) {
+        __atomic_store_n(&impl->ring->read_index, __atomic_load_n(&impl->ring->write_index, __ATOMIC_ACQUIRE),
+                         __ATOMIC_RELEASE);
+    } else {
+        __atomic_store_n(&impl->ring->write_index, __atomic_load_n(&impl->ring->read_index, __ATOMIC_ACQUIRE),
+                         __ATOMIC_RELEASE);
+    }
     impl->active = true;
     impl->started = false;
     impl->start_time = now_ns();
@@ -307,7 +368,8 @@ static void stream_state_changed(void* data, enum pw_stream_state old, enum pw_s
         send_message(impl, DNX_AUDIO_STOP);
     }
     if (state == PW_STREAM_STATE_ERROR || state == PW_STREAM_STATE_UNCONNECTED) {
-        pw_log_error("sink stream %s: %s", pw_stream_state_as_string(state), error ? error : "");
+        pw_log_error("%s stream %s: %s", impl->capture ? "source" : "sink", pw_stream_state_as_string(state),
+                     error ? error : "");
         pw_impl_module_schedule_destroy(impl->module);
     }
 }
@@ -345,7 +407,7 @@ static int connect_app(struct impl* impl) {
         return res;
     }
 
-    impl->ring_size = DNX_AUDIO_RING_SIZE(RING_FRAMES, CHANNELS);
+    impl->ring_size = DNX_AUDIO_RING_SIZE(RING_FRAMES, impl->channels);
     /* No memfd_create() in bionic's headers below API 30. */
     memfd = (int) syscall(SYS_memfd_create, "droidnux-audio", 1u /* MFD_CLOEXEC */);
     if (memfd < 0 || ftruncate(memfd, (off_t) impl->ring_size) < 0) {
@@ -364,8 +426,9 @@ static int connect_app(struct impl* impl) {
     impl->ring->magic = DNX_AUDIO_MAGIC;
     impl->ring->version = DNX_AUDIO_VERSION;
     impl->ring->rate = RATE;
-    impl->ring->channels = CHANNELS;
+    impl->ring->channels = impl->channels;
     impl->ring->frames = RING_FRAMES;
+    impl->ring->direction = impl->capture ? DNX_AUDIO_INPUT : DNX_AUDIO_OUTPUT;
 
     struct {
         dnx_audio_header header;
@@ -396,24 +459,27 @@ out:
 }
 
 static int create_stream(struct impl* impl) {
+    const char* name = impl->capture ? "droidnux-input" : "droidnux-output";
     struct pw_properties* props = pw_properties_new(
-        PW_KEY_MEDIA_CLASS, "Audio/Sink",
-        PW_KEY_NODE_NAME, "droidnux-output",
+        PW_KEY_MEDIA_CLASS, impl->capture ? "Audio/Source" : "Audio/Sink",
+        PW_KEY_NODE_NAME, name,
         PW_KEY_NODE_DESCRIPTION, "Android",
         PW_KEY_NODE_RATE, "1/48000",
         /* The adapter's DSP ports take their layout from these, not from EnumFormat. */
         PW_KEY_AUDIO_FORMAT, "F32LE",
         PW_KEY_AUDIO_RATE, "48000",
-        PW_KEY_AUDIO_CHANNELS, "2",
-        SPA_KEY_AUDIO_POSITION, "[ FL FR ]",
-        /* Above the dummy driver and any other sink: the default output. */
-        "priority.driver", "2000",
-        "priority.session", "2000",
+        PW_KEY_AUDIO_CHANNELS, impl->capture ? "1" : "2",
+        SPA_KEY_AUDIO_POSITION, impl->capture ? "[ MONO ]" : "[ FL FR ]",
+        /* Above the dummy driver and any other node: the default output and
+         * input. The sink drives when both run. */
+        "priority.driver", impl->capture ? "1500" : "2000",
+        /* The source above the sink: WirePlumber also offers the sink's monitor as a source. */
+        "priority.session", impl->capture ? "2100" : "2000",
         NULL);
     if (props == NULL) return -errno;
     pw_properties_set(props, PW_KEY_NODE_LOOP_NAME, impl->data_loop->name);
 
-    impl->stream = pw_stream_new(impl->core, "droidnux-output", props);
+    impl->stream = pw_stream_new(impl->core, name, props);
     if (impl->stream == NULL) return -errno;
     pw_stream_add_listener(impl->stream, &impl->stream_listener, &stream_events, impl);
 
@@ -422,11 +488,12 @@ static int create_stream(struct impl* impl) {
     struct spa_audio_info_raw info = {
         .format = SPA_AUDIO_FORMAT_F32,
         .rate = RATE,
-        .channels = CHANNELS,
+        .channels = impl->channels,
         .position = {SPA_AUDIO_CHANNEL_FL, SPA_AUDIO_CHANNEL_FR},
     };
+    if (impl->capture) info.position[0] = SPA_AUDIO_CHANNEL_MONO;
     const struct spa_pod* params[1] = {spa_format_audio_raw_build(&b, SPA_PARAM_EnumFormat, &info)};
-    return pw_stream_connect(impl->stream, PW_DIRECTION_INPUT, PW_ID_ANY,
+    return pw_stream_connect(impl->stream, impl->capture ? PW_DIRECTION_OUTPUT : PW_DIRECTION_INPUT, PW_ID_ANY,
                              PW_STREAM_FLAG_DRIVER | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS,
                              params, 1);
 }
@@ -465,16 +532,15 @@ static const struct pw_proxy_events core_proxy_events = {
     .destroy = core_destroy,
 };
 
-SPA_EXPORT int pipewire__module_init(struct pw_impl_module* module, const char* args) {
+static int create_node(struct pw_impl_module* module, bool capture) {
     struct pw_context* context = pw_impl_module_get_context(module);
     struct impl* impl;
     int res;
-    (void) args;
-
-    PW_LOG_TOPIC_INIT(mod_topic);
 
     impl = calloc(1, sizeof(*impl));
     if (impl == NULL) return -errno;
+    impl->capture = capture;
+    impl->channels = capture ? 1u : 2u;
     impl->sock = -1;
     impl->module = module;
     impl->context = context;
@@ -505,11 +571,21 @@ SPA_EXPORT int pipewire__module_init(struct pw_impl_module* module, const char* 
     if ((res = connect_app(impl)) < 0 || (res = create_stream(impl)) < 0) goto error;
 
     pw_impl_module_add_listener(module, &impl->module_listener, &module_events, impl);
-    pw_impl_module_update_properties(module, &SPA_DICT_INIT_ARRAY(module_props));
-    pw_log_info("playing through the app, %u Hz, %u channels", RATE, CHANNELS);
+    pw_log_info("%s through the app, %u Hz, %u channels", capture ? "recording" : "playing", RATE, impl->channels);
     return 0;
 
 error:
     impl_destroy(impl);
     return res;
+}
+
+SPA_EXPORT int pipewire__module_init(struct pw_impl_module* module, const char* args) {
+    (void) args;
+    PW_LOG_TOPIC_INIT(mod_topic);
+    int sink = create_node(module, false);
+    /* Without the microphone the sink still plays, and the other way round. */
+    int source = create_node(module, true);
+    if (sink < 0 && source < 0) return sink;
+    pw_impl_module_update_properties(module, &SPA_DICT_INIT_ARRAY(module_props));
+    return 0;
 }

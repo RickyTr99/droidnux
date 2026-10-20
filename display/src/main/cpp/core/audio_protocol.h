@@ -3,7 +3,7 @@
  * client in the container: DroidNux's PipeWire module (guest/pipewire). Plain
  * C with fixed-size fields only, as the client is loaded by glibc.
  *
- * On a Unix stream socket, one connection per sink. Every message starts with
+ * On a Unix stream socket, one connection per sink or source. Every message starts with
  * a dnx_audio_header whose `size` counts the bytes that follow it.
  *
  * Client:  HELLO once, with the ring's memfd in SCM_RIGHTS; then START and
@@ -11,8 +11,9 @@
  *          needs from it is in the ring header.
  *
  * The ring is a dnx_audio_ring followed by `frames` interleaved F32 frames of
- * `channels` samples. The client (PipeWire's graph clock) writes, the server
- * (the AAudio callback) reads. Indices count frames and wrap at 2^32; `frames`
+ * `channels` samples. For a sink the client (PipeWire's graph clock) writes
+ * and the server (the AAudio callback) reads; for a source (the microphone,
+ * `direction` DNX_AUDIO_INPUT) the server writes and the client reads. Indices count frames and wrap at 2^32; `frames`
  * is a power of two. Shared fields are accessed with atomic loads and stores
  * only (__atomic builtins on both sides).
  */
@@ -27,8 +28,13 @@
 
 enum dnx_audio_type {
     DNX_AUDIO_HELLO = 1, /* dnx_audio_hello, ring memfd in SCM_RIGHTS */
-    DNX_AUDIO_START = 2, /* the sink is running: play the ring */
-    DNX_AUDIO_STOP = 3,  /* the sink is idle: stop the device (battery) */
+    DNX_AUDIO_START = 2, /* the node is running: play (record) the ring */
+    DNX_AUDIO_STOP = 3,  /* the node is idle: stop the device (battery) */
+};
+
+enum dnx_audio_direction {
+    DNX_AUDIO_OUTPUT = 0,
+    DNX_AUDIO_INPUT = 1,
 };
 
 typedef struct dnx_audio_header {
@@ -44,17 +50,19 @@ typedef struct dnx_audio_ring {
     uint32_t magic, version;
     uint32_t rate, channels; /* F32 samples */
     uint32_t frames;         /* capacity of the ring, a power of two */
-    uint32_t reserved0[11];
-    /* Client: frames written. */
+    uint32_t direction;      /* dnx_audio_direction */
+    uint32_t reserved0[10];
+    /* Writer (sink: client, source: server): frames written. */
     uint32_t write_index;
     uint32_t reserved1[15];
-    /* Server: frames read; silence fills what the ring cannot. */
+    /* Reader (sink: server, source: client): frames read; a sink's reader
+     * fills with silence what the ring cannot. */
     uint32_t read_index;
-    uint32_t underruns; /* callbacks that found too few frames */
+    uint32_t underruns; /* server callbacks that found too few frames (sink) or no room (source) */
     /* Server: frames per callback while the device plays, 0 while it does
      * not (set after START once the device runs, cleared on STOP). */
     uint32_t burst;
-    /* Server: frames between the ring and the speaker, an estimate. */
+    /* Server: frames between the ring and the speaker (sink), an estimate. */
     uint32_t latency;
     uint32_t reserved2[12];
 } dnx_audio_ring;

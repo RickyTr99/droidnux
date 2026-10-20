@@ -147,6 +147,7 @@ private:
         rate_ = ring_->rate;
         channels_ = ring_->channels;
         frames_ = ring_->frames;
+        input_ = ring_->direction == DNX_AUDIO_INPUT;
         if (ring_->magic != DNX_AUDIO_MAGIC || ring_->version != DNX_AUDIO_VERSION || rate_ < 8000 ||
             rate_ > 192000 || channels_ == 0 || channels_ > kMaxChannels || frames_ == 0 || frames_ > kMaxFrames ||
             (frames_ & (frames_ - 1)) != 0 || DNX_AUDIO_RING_SIZE(frames_, channels_) > size_) {
@@ -160,7 +161,7 @@ private:
     bool openStream() {
         AAudioStreamBuilder* builder = nullptr;
         if (AAudio_createStreamBuilder(&builder) != AAUDIO_OK) return false;
-        AAudioStreamBuilder_setDirection(builder, AAUDIO_DIRECTION_OUTPUT);
+        AAudioStreamBuilder_setDirection(builder, input_ ? AAUDIO_DIRECTION_INPUT : AAUDIO_DIRECTION_OUTPUT);
         AAudioStreamBuilder_setSharingMode(builder, AAUDIO_SHARING_MODE_SHARED);
         AAudioStreamBuilder_setFormat(builder, AAUDIO_FORMAT_PCM_FLOAT);
         AAudioStreamBuilder_setChannelCount(builder, static_cast<int32_t>(channels_));
@@ -170,19 +171,25 @@ private:
         // ~54 ms, power saving the same as none. The sink reports the latency to
         // PipeWire, so players keep audio and video in sync either way.
         AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
-        AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_MEDIA);
-        AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_MUSIC);
+        if (input_) {
+            // Plain recording: no voice-call routing (it changes Android's audio mode).
+            AAudioStreamBuilder_setInputPreset(builder, AAUDIO_INPUT_PRESET_GENERIC);
+        } else {
+            AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_MEDIA);
+            AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_MUSIC);
+        }
         AAudioStreamBuilder_setDataCallback(builder, &Session::onData, this);
         AAudioStreamBuilder_setErrorCallback(builder, &Session::onError, this);
         aaudio_result_t result = AAudioStreamBuilder_openStream(builder, &stream_);
         AAudioStreamBuilder_delete(builder);
         if (result != AAUDIO_OK) {
-            LOGE("cannot open the output: %s", AAudio_convertResultToText(result));
+            // Input without the microphone permission ends here.
+            LOGE("cannot open the %s: %s", input_ ? "input" : "output", AAudio_convertResultToText(result));
             stream_ = nullptr;
             return false;
         }
-        LOGI("output open: %d Hz, burst %d, buffer %d of %d frames, performance mode %d",
-             AAudioStream_getSampleRate(stream_), AAudioStream_getFramesPerBurst(stream_),
+        LOGI("%s open: %d Hz, burst %d, buffer %d of %d frames, performance mode %d",
+             input_ ? "input" : "output", AAudioStream_getSampleRate(stream_), AAudioStream_getFramesPerBurst(stream_),
              AAudioStream_getBufferSizeInFrames(stream_), AAudioStream_getBufferCapacityInFrames(stream_),
              AAudioStream_getPerformanceMode(stream_));
         return true;
@@ -209,7 +216,7 @@ private:
             LOGE("cannot start the output: %s", AAudio_convertResultToText(result));
             closeStream();
         }
-        setPlaying(stream_ != nullptr);
+        if (!input_) setPlaying(stream_ != nullptr);
     }
 
     // Counts the sessions playing; the app hears about the first and the last.
@@ -231,8 +238,8 @@ private:
         AAudioStream_waitForStateChange(stream_, AAUDIO_STREAM_STATE_STOPPING, &state, kStopTimeoutNs);
         __atomic_store_n(&ring_->burst, 0u, __ATOMIC_RELAXED);
         // Short ring callbacks include the first ones, before the sink's clock starts.
-        LOGI("output stopped: %lld frames written since open, %u short callbacks, %d device underruns, latency %u frames",
-             static_cast<long long>(AAudioStream_getFramesWritten(stream_)),
+        LOGI("%s stopped: %lld frames written since open, %u short callbacks, %d device underruns, latency %u frames",
+             input_ ? "input" : "output", static_cast<long long>(AAudioStream_getFramesWritten(stream_)),
              __atomic_load_n(&ring_->underruns, __ATOMIC_RELAXED) - underruns_, AAudioStream_getXRunCount(stream_),
              __atomic_load_n(&ring_->latency, __ATOMIC_RELAXED));
     }
@@ -240,7 +247,7 @@ private:
     // Frames between the ring and the speaker, for the sink's delay (A/V sync).
     void updateLatency() {
         int64_t position = 0, time = 0;
-        if (stream_ == nullptr || AAudioStream_getTimestamp(stream_, CLOCK_MONOTONIC, &position, &time) != AAUDIO_OK) {
+        if (input_ || stream_ == nullptr || AAudioStream_getTimestamp(stream_, CLOCK_MONOTONIC, &position, &time) != AAUDIO_OK) {
             return;
         }
         int64_t presented = position + (nowNs() - time) * rate_ / 1'000'000'000LL;
@@ -250,6 +257,7 @@ private:
 
     static aaudio_data_callback_result_t onData(AAudioStream*, void* user, void* audio, int32_t count) {
         auto* self = static_cast<Session*>(user);
+        if (self->input_) return onInput(self, static_cast<const float*>(audio), static_cast<uint32_t>(count));
         auto* out = static_cast<float*>(audio);
         dnx_audio_ring* ring = self->ring_;
         const uint32_t frames = self->frames_, channels = self->channels_, wanted = static_cast<uint32_t>(count);
@@ -275,6 +283,27 @@ private:
         return AAUDIO_CALLBACK_RESULT_CONTINUE;
     }
 
+    // The microphone's frames into the ring; what finds no room is dropped.
+    static aaudio_data_callback_result_t onInput(Session* self, const float* in, uint32_t count) {
+        dnx_audio_ring* ring = self->ring_;
+        const uint32_t frames = self->frames_, channels = self->channels_;
+        uint32_t write = __atomic_load_n(&ring->write_index, __ATOMIC_RELAXED);
+        uint32_t room = frames - std::min(write - __atomic_load_n(&ring->read_index, __ATOMIC_ACQUIRE), frames);
+        uint32_t put = std::min(room, count);
+        for (uint32_t done = 0; done < put;) {
+            uint32_t at = (write + done) & (frames - 1);
+            uint32_t n = std::min(put - done, frames - at);
+            std::memcpy(self->samples_ + at * channels, in + done * channels, n * channels * sizeof(float));
+            done += n;
+        }
+        if (put < count) __atomic_fetch_add(&ring->underruns, 1u, __ATOMIC_RELAXED);
+        __atomic_store_n(&ring->write_index, write + put, __ATOMIC_RELEASE);
+        if (self->playing_ && count > __atomic_load_n(&ring->burst, __ATOMIC_RELAXED)) {
+            __atomic_store_n(&ring->burst, count, __ATOMIC_RELAXED);
+        }
+        return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    }
+
     static void onError(AAudioStream*, void* user, aaudio_result_t error) {
         LOGW("output error: %s", AAudio_convertResultToText(error));
         static_cast<Session*>(user)->lost_ = true;
@@ -290,6 +319,7 @@ private:
     std::atomic<bool> playing_{false};
     std::atomic<bool> lost_{false};
     bool counted_ = false;  // in gPlaying (session thread only)
+    bool input_ = false;    // a source: the microphone
 };
 
 class Server {
