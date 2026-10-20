@@ -318,8 +318,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             val rootfs = Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)
             val started = DisplayServer.start(rootfs, desktopWidth, desktopHeight, DPI, wayland = wayland)
             Log.i(TAG, "display server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
-            // shortcut: the Wayland build starts no session yet, clients come from adb; Fase 4b step 3.
-            if (!wayland) DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout(), dpi())
+            DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout(), dpi())
             clipboardToX()
         } else {
             DisplayServer.resize(desktopWidth, desktopHeight)

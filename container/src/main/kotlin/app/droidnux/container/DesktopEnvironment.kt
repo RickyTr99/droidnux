@@ -13,6 +13,8 @@ import java.io.IOException
 object DesktopEnvironment {
 
     const val SESSION_SCRIPT = "/usr/local/bin/droidnux-session"
+    /** Plasma on the app's Wayland compositor (the Wayland build, Fase 4b). */
+    private const val PLASMA_SESSION_SCRIPT = "/usr/local/bin/droidnux-plasma-session"
     private const val UI_SCALE_SCRIPT = "/usr/local/bin/droidnux-ui-scale"
     private const val APPS_SCRIPT = "/usr/local/bin/droidnux-apps"
 
@@ -113,6 +115,7 @@ object DesktopEnvironment {
      */
     fun prepare(rootfs: File, nativeLibraryDir: File) {
         writeFile(rootfs, SESSION_SCRIPT, SESSION.toByteArray(), mode = 0x1ED /* 0755 */)
+        writeFile(rootfs, PLASMA_SESSION_SCRIPT, PLASMA_SESSION.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, UI_SCALE_SCRIPT, UI_SCALE.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, APPS_SCRIPT, APPS.toByteArray(), mode = 0x1ED)
         writeFile(
@@ -133,9 +136,13 @@ object DesktopEnvironment {
     /** Printed by the session script when the desktop logs out. */
     const val SESSION_END_MARKER = "DROIDNUX_SESSION_END"
 
-    /** Command starting the session, with the X keyboard [layout] (e.g. "it"). */
-    fun sessionCommand(layout: String, dpi: Int): String =
-        "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_DPI=$dpi DROIDNUX_LOCALE=${glibcLocale()} exec $SESSION_SCRIPT"
+    /**
+     * Command starting the session, with the X keyboard [layout] (e.g. "it"):
+     * XFCE on the X server, or Plasma on the Wayland compositor when [wayland].
+     */
+    fun sessionCommand(layout: String, dpi: Int, wayland: Boolean = false): String =
+        "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_DPI=$dpi DROIDNUX_LOCALE=${glibcLocale()} " +
+            "exec ${if (wayland) PLASMA_SESSION_SCRIPT else SESSION_SCRIPT}"
 
     /** Android's language as a glibc locale name ("it_IT"); the session checks Debian has it. */
     private fun glibcLocale(): String {
@@ -287,6 +294,90 @@ object DesktopEnvironment {
         done
     """.trimIndent() + "\n"
 
+    /** Session script part: DroidNux's Mesa for the session's apps. */
+    private val GPU_ENV = """
+        # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed,
+        # otherwise the distro's software rendering.
+        MESA=$MESA_PREFIX
+        if [ -f "${'$'}MESA/droidnux-mesa.version" ]; then
+            export LD_LIBRARY_PATH=${'$'}MESA/lib/aarch64-linux-gnu${'$'}{LD_LIBRARY_PATH:+:${'$'}LD_LIBRARY_PATH}
+            export VK_DRIVER_FILES=${'$'}MESA/share/vulkan/icd.d/freedreno_icd.aarch64.json
+            export __GLX_VENDOR_LIBRARY_NAME=droidnux
+            export __EGL_VENDOR_LIBRARY_FILENAMES=${'$'}MESA/share/glvnd/egl_vendor.d/50_droidnux.json
+            export MESA_LOADER_DRIVER_OVERRIDE=zink
+            export GALLIUM_DRIVER=zink
+            # Samsung's KGSL (One UI) needs Turnip's UBWC flag hint: without
+            # it, whole frames flash while Firefox scrolls (WebRender on Zink).
+            export FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1
+            # Swapchain images in AHardwareBuffers from the X server, which
+            # shows full-screen ones without copying them (Mesa patch 0003).
+            export DROIDNUX_AHB_SOCKET=/tmp/.droidnux-ahb
+            # Video decoding by the app's MediaCodec (guest/va), for players
+            # like mpv and ffmpeg; Firefox keeps software decoding (droidnux.js).
+            if [ -f "${'$'}MESA/lib/aarch64-linux-gnu/dri/droidnux_drv_video.so" ]; then
+                export LIBVA_DRIVERS_PATH=${'$'}MESA/lib/aarch64-linux-gnu/dri
+                export LIBVA_DRIVER_NAME=droidnux
+            fi
+        else
+            # With DRI3 but no device, Debian's GLX tries Zink; with no
+            # Vulkan driver Zink fails and Mesa 25.0 deadlocks on its own
+            # instance_lock in the error path (zink_destroy_screen). GTK
+            # opens GLX at startup, so the whole session would stop.
+            # Plain software GLX (llvmpipe over MIT-SHM) instead.
+            export LIBGL_DRI3_DISABLE=1
+        fi
+    """.trimIndent()
+
+    /** Session script part: Android's language. */
+    private val LOCALE_ENV = """
+        # Android's language, once its locale is generated (about a second, the first time).
+        if [ -f /usr/share/i18n/locales/${'$'}DROIDNUX_LOCALE ]; then
+            locale -a | grep -qx "${'$'}DROIDNUX_LOCALE.utf8" ||
+                localedef -i "${'$'}DROIDNUX_LOCALE" -c -f UTF-8 "${'$'}DROIDNUX_LOCALE.UTF-8"
+            export LANG=${'$'}DROIDNUX_LOCALE.UTF-8
+        fi
+    """.trimIndent()
+
+    /** Session script part: the device's storage in the home folder. */
+    private val SDCARD_LINK = """
+        # The device's storage in the home folder (when the app may access it).
+        if [ -d $GUEST_SDCARD ] && [ ! -e /root/Android ] && [ ! -L /root/Android ]; then
+            ln -s $GUEST_SDCARD /root/Android
+        fi
+    """.trimIndent()
+
+    /** Session script part, inside D-Bus: sound. */
+    private val SESSION_SERVICES = """
+        # Session services without systemd start here, on the session bus.
+        if command -v pipewire > /dev/null; then
+            # Its clients give up if its socket is not there yet: wait for it,
+            # not for the one the last session left behind.
+            rm -f "${'$'}XDG_RUNTIME_DIR/pipewire-0" "${'$'}XDG_RUNTIME_DIR/pipewire-0-manager"
+            pipewire &
+            i=0
+            while [ ! -S "${'$'}XDG_RUNTIME_DIR/pipewire-0" ] && [ ${'$'}i -lt 50 ]; do sleep 0.1; i=${'$'}((i + 1)); done
+            wireplumber &
+            pipewire-pulse &
+        fi
+    """.trimIndent()
+
+    /** Session script part, inside D-Bus: apps the app starts, once the process LAUNCH_AFTER runs. */
+    private val LAUNCH_LOOP = """
+        # Apps the app starts (its app list, Android shortcuts), by desktop id: they
+        # must run in this proot, which a separate one would kill when it exits.
+        rm -f $LAUNCH_FIFO && mkfifo -m 600 $LAUNCH_FIFO
+        # Apps started before the desktop shares its theme keep default icons.
+        (until pgrep -x ${'$'}LAUNCH_AFTER > /dev/null; do sleep 0.2; done; sleep 1
+        while :; do
+            while read -r id; do
+                case "${'$'}id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+                for d in /usr/local/share/applications /usr/share/applications; do
+                    [ -f "${'$'}d/${'$'}id.desktop" ] && { gio launch "${'$'}d/${'$'}id.desktop" & break; }
+                done
+            done < $LAUNCH_FIFO
+        done) &
+    """.trimIndent()
+
     private val SESSION = """
         #!/bin/sh
         # Written by DroidNux: starts the desktop on the app's X server.
@@ -309,36 +400,7 @@ object DesktopEnvironment {
             # its children still demand F_SEAL_SHRINK: every tab crashes with
             # "Shared memory PlatformHandle is not safe to map" (Firefox 154+).
             export MOZ_SHM_NO_SEALS=1
-            # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed,
-            # otherwise the distro's software rendering.
-            MESA=$MESA_PREFIX
-            if [ -f "${'$'}MESA/droidnux-mesa.version" ]; then
-                export LD_LIBRARY_PATH=${'$'}MESA/lib/aarch64-linux-gnu${'$'}{LD_LIBRARY_PATH:+:${'$'}LD_LIBRARY_PATH}
-                export VK_DRIVER_FILES=${'$'}MESA/share/vulkan/icd.d/freedreno_icd.aarch64.json
-                export __GLX_VENDOR_LIBRARY_NAME=droidnux
-                export __EGL_VENDOR_LIBRARY_FILENAMES=${'$'}MESA/share/glvnd/egl_vendor.d/50_droidnux.json
-                export MESA_LOADER_DRIVER_OVERRIDE=zink
-                export GALLIUM_DRIVER=zink
-                # Samsung's KGSL (One UI) needs Turnip's UBWC flag hint: without
-                # it, whole frames flash while Firefox scrolls (WebRender on Zink).
-                export FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1
-                # Swapchain images in AHardwareBuffers from the X server, which
-                # shows full-screen ones without copying them (Mesa patch 0003).
-                export DROIDNUX_AHB_SOCKET=/tmp/.droidnux-ahb
-                # Video decoding by the app's MediaCodec (guest/va), for players
-                # like mpv and ffmpeg; Firefox keeps software decoding (droidnux.js).
-                if [ -f "${'$'}MESA/lib/aarch64-linux-gnu/dri/droidnux_drv_video.so" ]; then
-                    export LIBVA_DRIVERS_PATH=${'$'}MESA/lib/aarch64-linux-gnu/dri
-                    export LIBVA_DRIVER_NAME=droidnux
-                fi
-            else
-                # With DRI3 but no device, Debian's GLX tries Zink; with no
-                # Vulkan driver Zink fails and Mesa 25.0 deadlocks on its own
-                # instance_lock in the error path (zink_destroy_screen). GTK
-                # opens GLX at startup, so the whole session would stop.
-                # Plain software GLX (llvmpipe over MIT-SHM) instead.
-                export LIBGL_DRI3_DISABLE=1
-            fi
+${GPU_ENV.prependIndent("            ")}
             mkdir -p "${'$'}XDG_RUNTIME_DIR" && chmod 700 "${'$'}XDG_RUNTIME_DIR"
             mkdir -p /tmp/.ICE-unix && chmod 1777 /tmp/.ICE-unix
 
@@ -346,52 +408,80 @@ object DesktopEnvironment {
             i=0
             while [ ! -S /tmp/.X11-unix/X$DISPLAY ] && [ ${'$'}i -lt 100 ]; do sleep 0.1; i=${'$'}((i + 1)); done
 
-            # Android's language, once its locale is generated (about a second, the first time).
-            if [ -f /usr/share/i18n/locales/${'$'}DROIDNUX_LOCALE ]; then
-                locale -a | grep -qx "${'$'}DROIDNUX_LOCALE.utf8" ||
-                    localedef -i "${'$'}DROIDNUX_LOCALE" -c -f UTF-8 "${'$'}DROIDNUX_LOCALE.UTF-8"
-                export LANG=${'$'}DROIDNUX_LOCALE.UTF-8
-            fi
+${LOCALE_ENV.prependIndent("            ")}
 
             if [ -n "${'$'}DROIDNUX_XKB_LAYOUT" ]; then
                 setxkbmap "${'$'}DROIDNUX_XKB_LAYOUT" || echo "setxkbmap ${'$'}DROIDNUX_XKB_LAYOUT failed"
             fi
 
-            # The device's storage in the home folder (when the app may access it).
-            if [ -d $GUEST_SDCARD ] && [ ! -e /root/Android ] && [ ! -L /root/Android ]; then
-                ln -s $GUEST_SDCARD /root/Android
-            fi
+${SDCARD_LINK.prependIndent("            ")}
 
             exec dbus-launch --exit-with-session "${'$'}0" --in-dbus
         fi
 
-        # Session services without systemd start here, on the session bus.
-        if command -v pipewire > /dev/null; then
-            # Its clients give up if its socket is not there yet: wait for it,
-            # not for the one the last session left behind.
-            rm -f "${'$'}XDG_RUNTIME_DIR/pipewire-0" "${'$'}XDG_RUNTIME_DIR/pipewire-0-manager"
-            pipewire &
-            i=0
-            while [ ! -S "${'$'}XDG_RUNTIME_DIR/pipewire-0" ] && [ ${'$'}i -lt 50 ]; do sleep 0.1; i=${'$'}((i + 1)); done
-            wireplumber &
-            pipewire-pulse &
-        fi
+${SESSION_SERVICES.prependIndent("        ")}
         # The interface size, once xfsettingsd and the panel are up.
         if [ -n "${'$'}DROIDNUX_DPI" ]; then (sleep 4; $UI_SCALE_SCRIPT "${'$'}DROIDNUX_DPI") & fi
-        # Apps the app starts (its app list, Android shortcuts), by desktop id: they
-        # must run in this proot, which a separate one would kill when it exits.
-        rm -f $LAUNCH_FIFO && mkfifo -m 600 $LAUNCH_FIFO
-        # Apps started before xfsettingsd shares the theme keep default icons.
-        (until pgrep -x xfsettingsd > /dev/null; do sleep 0.2; done; sleep 1
-        while :; do
-            while read -r id; do
-                case "${'$'}id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
-                for d in /usr/local/share/applications /usr/share/applications; do
-                    [ -f "${'$'}d/${'$'}id.desktop" ] && { gio launch "${'$'}d/${'$'}id.desktop" & break; }
-                done
-            done < $LAUNCH_FIFO
-        done) &
+        LAUNCH_AFTER=xfsettingsd
+${LAUNCH_LOOP.prependIndent("        ")}
         startxfce4
+        echo $SESSION_END_MARKER
+    """.trimIndent() + "\n"
+
+    // shortcut: Plasma is installed by hand in the Wayland build's rootfs and
+    // needs the Mesa component with GBM (dn4, not released yet); no interface
+    // size or DroidNux defaults yet. Fase 4b, step 3.
+    private val PLASMA_SESSION = """
+        #!/bin/sh
+        # Written by DroidNux: starts Plasma, its KWin nested on the app's
+        # Wayland compositor. Runs twice: first to set up and start D-Bus, then
+        # inside it (--in-dbus).
+        if [ "${'$'}1" != --in-dbus ]; then
+            export XDG_RUNTIME_DIR=/tmp/runtime-${'$'}(id -u)
+            # The app's compositor; KWin puts its own socket in XDG_RUNTIME_DIR.
+            export WAYLAND_DISPLAY=/tmp/wayland-$DISPLAY
+            export XDG_SESSION_TYPE=wayland
+            export SHELL=/bin/bash
+            export MOZ_SHM_NO_SEALS=1 # see SESSION
+${GPU_ENV.prependIndent("            ")}
+            if [ -f "${'$'}MESA/droidnux-mesa.version" ]; then
+                # KWin renders into GBM buffers from the app (Mesa patch 0004).
+                export GBM_BACKENDS_PATH=${'$'}MESA/lib/aarch64-linux-gnu/gbm
+            fi
+            # Turnip on KGSL has no calibrated timestamps: Zink answers
+            # GL_TIMESTAMP with a GPU round trip, which KWin asks every frame.
+            export KWIN_NO_TIMER_QUERY=1
+            mkdir -p "${'$'}XDG_RUNTIME_DIR" && chmod 700 "${'$'}XDG_RUNTIME_DIR"
+            # Xwayland's sockets, made by KWin.
+            mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+
+            # The compositor starts with the app; wait for its socket.
+            i=0
+            while [ ! -S "${'$'}WAYLAND_DISPLAY" ] && [ ${'$'}i -lt 100 ]; do sleep 0.1; i=${'$'}((i + 1)); done
+
+${LOCALE_ENV.prependIndent("            ")}
+
+            # The keyboard layout: KWin's own (kxkbrc, unless the user set one), and
+            # the keymap the app's compositor sends, which it reads on first use.
+            config=${'$'}{XDG_CONFIG_HOME:-/root/.config}
+            mkdir -p "${'$'}config"
+            layout=${'$'}{DROIDNUX_XKB_LAYOUT:-us}
+            [ -f "${'$'}config/kxkbrc" ] || printf '[Layout]\nLayoutList=%s\nUse=true\n' "${'$'}layout" > "${'$'}config/kxkbrc"
+            printf 'xkb_keymap { xkb_keycodes { include "evdev+aliases(qwerty)" }; xkb_types { include "complete" };
+                xkb_compat { include "complete" }; xkb_symbols { include "pc+%s+inet(evdev)" }; };\n' "${'$'}layout" |
+                xkbcomp -w 0 -xkb - /tmp/.droidnux-keymap.xkb || echo "keymap for ${'$'}layout failed"
+            # Without systemd: Plasma starts its services itself.
+            [ -f "${'$'}config/startkderc" ] || printf '[General]\nsystemdBoot=false\n' > "${'$'}config/startkderc"
+
+${SDCARD_LINK.prependIndent("            ")}
+
+            exec dbus-run-session "${'$'}0" --in-dbus
+        fi
+
+${SESSION_SERVICES.prependIndent("        ")}
+        LAUNCH_AFTER=plasmashell
+${LAUNCH_LOOP.prependIndent("        ")}
+        startplasma-wayland
         echo $SESSION_END_MARKER
     """.trimIndent() + "\n"
 

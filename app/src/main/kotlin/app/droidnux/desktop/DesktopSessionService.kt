@@ -66,7 +66,7 @@ class DesktopSessionService : Service() {
         val container = Container(this)
         val rootfs = container.installer.rootfsDir(distro)
         DesktopEnvironment.prepare(rootfs, java.io.File(applicationInfo.nativeLibraryDir))
-        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, dpi))
+        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, dpi, wayland = resources.getBoolean(R.bool.wayland_frontend)))
         session = process
         Log.i(TAG, "session started (layout $layout)")
         scope.launch {
