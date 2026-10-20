@@ -12,13 +12,48 @@ if(NOT ANDROID_ABI STREQUAL "arm64-v8a")
 endif()
 
 set(THIRD_PARTY ${CMAKE_CURRENT_LIST_DIR}/../../../../third_party)
-set(PROOT_SRC ${THIRD_PARTY}/proot/src)
+set(PROOT_UPSTREAM_SRC ${THIRD_PARTY}/proot/src)
 set(TALLOC_SRC ${THIRD_PARTY}/talloc)
 set(PROOT_VERSION "5.1.107.97")
 
-if(NOT EXISTS ${PROOT_SRC}/cli/proot.c)
+if(NOT EXISTS ${PROOT_UPSTREAM_SRC}/cli/proot.c)
     message(FATAL_ERROR "third_party/proot is empty: run 'git submodule update --init'")
 endif()
+
+# ---------------------------------------------------------------------------
+# proot sources with DroidNux's patches (proot-patches/, applied in order),
+# copied out of the submodule so that it stays a clean upstream checkout.
+# Files are only rewritten when their content changes, so a reconfigure does
+# not rebuild proot.
+
+file(GLOB PROOT_PATCHES ${CMAKE_CURRENT_LIST_DIR}/proot-patches/*.patch)
+list(SORT PROOT_PATCHES)
+file(GLOB_RECURSE PROOT_UPSTREAM_FILES ${PROOT_UPSTREAM_SRC}/*)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${PROOT_PATCHES} ${PROOT_UPSTREAM_FILES})
+
+find_package(Git REQUIRED)
+set(PROOT_STAGING ${CMAKE_CURRENT_BINARY_DIR}/proot-staging)
+set(PROOT_SRC ${CMAKE_CURRENT_BINARY_DIR}/proot-patched/src)
+file(REMOVE_RECURSE ${PROOT_STAGING})
+file(COPY ${PROOT_UPSTREAM_SRC} DESTINATION ${PROOT_STAGING})
+foreach(PATCH ${PROOT_PATCHES})
+    # Outside any repository (GIT_CEILING_DIRECTORIES), git apply is a plain
+    # patch tool. --ignore-whitespace: Windows checkouts may have CRLF.
+    execute_process(
+        COMMAND ${CMAKE_COMMAND} -E env GIT_CEILING_DIRECTORIES=${CMAKE_CURRENT_BINARY_DIR}
+            ${GIT_EXECUTABLE} apply --ignore-whitespace ${PATCH}
+        WORKING_DIRECTORY ${PROOT_STAGING}
+        RESULT_VARIABLE PATCH_RESULT)
+    if(NOT PATCH_RESULT EQUAL 0)
+        message(FATAL_ERROR "proot patch ${PATCH} does not apply")
+    endif()
+endforeach()
+file(GLOB_RECURSE PROOT_STAGED_FILES RELATIVE ${PROOT_STAGING}/src ${PROOT_STAGING}/src/*)
+foreach(FILE ${PROOT_STAGED_FILES})
+    get_filename_component(DIR ${PROOT_SRC}/${FILE} DIRECTORY)
+    file(MAKE_DIRECTORY ${DIR})
+    file(COPY_FILE ${PROOT_STAGING}/src/${FILE} ${PROOT_SRC}/${FILE} ONLY_IF_DIFFERENT)
+endforeach()
 
 # Third-party code we do not debug: always optimized, so that debug builds
 # measure the same container performance as release builds. Its warnings are

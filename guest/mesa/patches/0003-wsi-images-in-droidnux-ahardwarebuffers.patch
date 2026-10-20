@@ -1,0 +1,345 @@
+wsi: swapchain images in AHardwareBuffers from the DroidNux display server
+
+With DROIDNUX_AHB_SOCKET set, native DRM images of BGRA swapchains are
+imported from buffers the app allocates (one connection per buffer, see
+display/src/main/cpp/core/allocator.h), with an explicit linear layout at
+the buffer's row pitch. The display server recognizes them when they come
+back through DRI3 and hands full-screen ones to Android's compositor as
+they are. Rows are added when the driver pads the image.
+
+--- a/src/vulkan/wsi/wsi_common.c
++++ b/src/vulkan/wsi/wsi_common.c
+@@ -886,10 +886,20 @@
+ 
+ #ifndef _WIN32
+    image->dma_buf_fd = -1;
++   image->droidnux_conn = -1;
++   image->droidnux_fd = -1;
+    for (uint32_t i = 0; i < WSI_ES_COUNT; i++)
+       image->explicit_sync[i].fd = -1;
+ #endif
+ 
++#if HAVE_LIBDRM
++   if (info->droidnux_ahb) {
++      result = wsi_droidnux_alloc_image(chain, info, image);
++      if (result != VK_SUCCESS)
++         goto fail;
++   }
++#endif
++
+    result = wsi->CreateImage(chain->device, &info->create,
+                              &chain->alloc, &image->image);
+    if (result != VK_SUCCESS)
+@@ -1024,6 +1034,10 @@
+ #ifndef _WIN32
+    if (image->dma_buf_fd >= 0)
+       close(image->dma_buf_fd);
++   if (image->droidnux_fd >= 0)
++      close(image->droidnux_fd);
++   if (image->droidnux_conn >= 0)
++      close(image->droidnux_conn);
+ #endif
+ 
+    if (image->explicit_sync[WSI_ES_ACQUIRE].semaphore) {
+--- a/src/vulkan/wsi/wsi_common_drm.c
++++ b/src/vulkan/wsi/wsi_common_drm.c
+@@ -42,6 +42,9 @@
+ #include <unistd.h>
+ #include <stdlib.h>
+ #include <stdio.h>
++#include <string.h>
++#include <sys/socket.h>
++#include <sys/un.h>
+ #include <xf86drm.h>
+ 
+ static VkResult
+@@ -575,6 +578,223 @@
+                             const struct wsi_image_info *info,
+                             struct wsi_image *image);
+ 
++/* DroidNux allocator protocol (display/src/main/cpp/core/allocator.h in
++ * DroidNux): one connection per buffer, a request, a reply with the
++ * buffer's dma-buf; the buffer lives until the connection is closed.
++ */
++#define DROIDNUX_AHB_MAGIC 0x41584e44 /* "DNXA" */
++#define DROIDNUX_AHB_VERSION 1
++
++struct droidnux_ahb_request {
++   uint32_t magic, version, width, height, drm_format;
++};
++
++struct droidnux_ahb_reply {
++   int32_t status; /* 0, or a negative errno */
++   uint32_t stride; /* bytes */
++   uint64_t size;
++};
++
++static int
++droidnux_ahb_connect(void)
++{
++   const char *path = getenv("DROIDNUX_AHB_SOCKET");
++   struct sockaddr_un addr = { .sun_family = AF_UNIX };
++   if (path == NULL || path[0] == '\0' || strlen(path) >= sizeof(addr.sun_path))
++      return -1;
++   strcpy(addr.sun_path, path);
++
++   int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
++   if (fd < 0)
++      return -1;
++   if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
++      close(fd);
++      return -1;
++   }
++   return fd;
++}
++
++/* Whether the swapchain's images can come from the DroidNux allocator:
++ * single-plane BGRA (DRM ARGB8888) the server can take as a linear buffer.
++ */
++static bool
++droidnux_ahb_usable(const VkSwapchainCreateInfoKHR *pCreateInfo,
++                    const uint64_t *modifiers, uint32_t modifier_count)
++{
++   if (pCreateInfo->imageFormat != VK_FORMAT_B8G8R8A8_UNORM &&
++       pCreateInfo->imageFormat != VK_FORMAT_B8G8R8A8_SRGB)
++      return false;
++   if (pCreateInfo->imageArrayLayers != 1)
++      return false;
++
++   bool linear = false;
++   for (uint32_t i = 0; i < modifier_count; i++)
++      linear |= modifiers[i] == DRM_FORMAT_MOD_LINEAR;
++   if (!linear)
++      return false;
++
++   int fd = droidnux_ahb_connect();
++   if (fd < 0)
++      return false;
++   close(fd);
++   return true;
++}
++
++/* Asks for a width x rows buffer; on success the image owns the connection
++ * and the dma-buf, replacing any it had.
++ */
++static VkResult
++droidnux_ahb_request(struct wsi_image *image, uint32_t width, uint32_t rows,
++                     uint32_t *stride)
++{
++   int conn = droidnux_ahb_connect();
++   if (conn < 0)
++      return vk_errorf(NULL, VK_ERROR_OUT_OF_DEVICE_MEMORY,
++                       "DroidNux allocator: cannot connect: %s", strerror(errno));
++
++   const struct droidnux_ahb_request request = {
++      .magic = DROIDNUX_AHB_MAGIC,
++      .version = DROIDNUX_AHB_VERSION,
++      .width = width,
++      .height = rows,
++      .drm_format = DRM_FORMAT_ARGB8888,
++   };
++   struct droidnux_ahb_reply reply = { .status = -EIO };
++   char control[CMSG_SPACE(sizeof(int))];
++   struct iovec iov = { .iov_base = &reply, .iov_len = sizeof(reply) };
++   struct msghdr msg = {
++      .msg_iov = &iov,
++      .msg_iovlen = 1,
++      .msg_control = control,
++      .msg_controllen = sizeof(control),
++   };
++   int fd = -1;
++
++   if (send(conn, &request, sizeof(request), MSG_NOSIGNAL) == sizeof(request) &&
++       recvmsg(conn, &msg, MSG_CMSG_CLOEXEC | MSG_WAITALL) == sizeof(reply)) {
++      struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
++      if (cmsg && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS)
++         memcpy(&fd, CMSG_DATA(cmsg), sizeof(fd));
++   }
++   if (reply.status != 0 || fd < 0) {
++      if (fd >= 0)
++         close(fd);
++      close(conn);
++      return vk_errorf(NULL, VK_ERROR_OUT_OF_DEVICE_MEMORY,
++                       "DroidNux allocator: no %ux%u buffer (%d)",
++                       request.width, request.height, reply.status);
++   }
++
++   if (image->droidnux_fd >= 0)
++      close(image->droidnux_fd);
++   if (image->droidnux_conn >= 0)
++      close(image->droidnux_conn);
++   image->droidnux_conn = conn;
++   image->droidnux_fd = fd;
++   image->droidnux_size = reply.size;
++   *stride = reply.stride;
++   return VK_SUCCESS;
++}
++
++VkResult
++wsi_droidnux_alloc_image(const struct wsi_swapchain *chain,
++                         const struct wsi_image_info *info,
++                         struct wsi_image *image)
++{
++   uint32_t stride;
++   VkResult result = droidnux_ahb_request(image, info->create.extent.width,
++                                          info->create.extent.height, &stride);
++   if (result != VK_SUCCESS)
++      return result;
++
++   /* The explicit layout CreateImage is about to read. */
++   struct wsi_image_info *mutable_info = (struct wsi_image_info *)info;
++   mutable_info->droidnux_plane = (VkSubresourceLayout) {
++      .offset = 0,
++      .size = image->droidnux_size,
++      .rowPitch = stride,
++   };
++   return VK_SUCCESS;
++}
++
++static VkResult
++wsi_create_droidnux_image_mem(const struct wsi_swapchain *chain,
++                              const struct wsi_image_info *info,
++                              struct wsi_image *image)
++{
++   const struct wsi_device *wsi = chain->wsi;
++   VkResult result;
++
++   VkMemoryRequirements reqs;
++   wsi->GetImageMemoryRequirements(chain->device, image->image, &reqs);
++   if (reqs.size > image->droidnux_size) {
++      /* The driver pads the image (rows aligned): ask for enough rows. The
++       * row pitch depends only on the width, so the layout holds.
++       */
++      uint32_t pitch = info->droidnux_plane.rowPitch, stride;
++      uint32_t rows = (uint32_t)((reqs.size + pitch - 1) / pitch);
++      result = droidnux_ahb_request(image, info->create.extent.width, rows, &stride);
++      if (result != VK_SUCCESS)
++         return result;
++      if (stride != pitch)
++         return vk_errorf(NULL, VK_ERROR_OUT_OF_DEVICE_MEMORY,
++                          "DroidNux allocator: stride %u for %u rows, %u before",
++                          stride, rows, pitch);
++   }
++   if (reqs.size > image->droidnux_size)
++      return vk_errorf(NULL, VK_ERROR_OUT_OF_DEVICE_MEMORY,
++                       "DroidNux allocator: buffer of %llu bytes, image needs %llu",
++                       (unsigned long long)image->droidnux_size, (unsigned long long)reqs.size);
++
++   /* Vulkan owns the fd it imports. */
++   int import_fd = os_dupfd_cloexec(image->droidnux_fd);
++   if (import_fd < 0)
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++
++   const struct wsi_memory_allocate_info memory_wsi_info = {
++      .sType = VK_STRUCTURE_TYPE_WSI_MEMORY_ALLOCATE_INFO_MESA,
++      .pNext = NULL,
++      .implicit_sync = !info->explicit_sync && !chain->dma_buf_semaphore,
++      .dma_buf_sync_file = chain->dma_buf_semaphore,
++   };
++   const VkImportMemoryFdInfoKHR memory_import_info = {
++      .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
++      .pNext = &memory_wsi_info,
++      .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
++      .fd = import_fd,
++   };
++   const VkMemoryDedicatedAllocateInfo memory_dedicated_info = {
++      .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
++      .pNext = &memory_import_info,
++      .image = image->image,
++      .buffer = VK_NULL_HANDLE,
++   };
++   const VkMemoryAllocateInfo memory_info = {
++      .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
++      .pNext = &memory_dedicated_info,
++      .allocationSize = reqs.size,
++      .memoryTypeIndex =
++         wsi_select_device_memory_type(wsi, reqs.memoryTypeBits),
++   };
++   result = wsi->AllocateMemory(chain->device, &memory_info,
++                                &chain->alloc, &image->memory);
++   if (result != VK_SUCCESS) {
++      close(import_fd);
++      return result;
++   }
++
++   image->dma_buf_fd = os_dupfd_cloexec(image->droidnux_fd);
++   if (image->dma_buf_fd < 0)
++      return VK_ERROR_OUT_OF_HOST_MEMORY;
++
++   image->drm_modifier = DRM_FORMAT_MOD_LINEAR;
++   image->num_planes = 1;
++   image->sizes[0] = image->droidnux_size;
++   image->row_pitches[0] = info->droidnux_plane.rowPitch;
++   image->offsets[0] = 0;
++   return VK_SUCCESS;
++}
++
+ static VkResult
+ wsi_configure_native_image(const struct wsi_swapchain *chain,
+                            const VkSwapchainCreateInfoKHR *pCreateInfo,
+@@ -712,7 +932,21 @@
+             break;
+       }
+ 
+-      if (image_modifier_count > 0) {
++      if (image_modifier_count > 0 &&
++          droidnux_ahb_usable(pCreateInfo, image_modifiers, image_modifier_count)) {
++         vk_free(&chain->alloc, image_modifiers);
++         info->create.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
++         info->droidnux_ahb = true;
++         info->droidnux_explicit = (VkImageDrmFormatModifierExplicitCreateInfoEXT) {
++            .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
++            .drmFormatModifier = DRM_FORMAT_MOD_LINEAR,
++            .drmFormatModifierPlaneCount = 1,
++            .pPlaneLayouts = &info->droidnux_plane,
++         };
++         __vk_append_struct(&info->create, &info->droidnux_explicit);
++         info->create_mem = wsi_create_droidnux_image_mem;
++         return VK_SUCCESS;
++      } else if (image_modifier_count > 0) {
+          info->create.tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT;
+          info->drm_mod_list = (VkImageDrmFormatModifierListCreateInfoEXT) {
+             .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,
+--- a/src/vulkan/wsi/wsi_common_private.h
++++ b/src/vulkan/wsi/wsi_common_private.h
+@@ -133,6 +133,15 @@
+    VkResult (*finish_create)(const struct wsi_swapchain *chain,
+                              const struct wsi_image_info *info,
+                              struct wsi_image *image);
++
++   /* DroidNux: the images live in AHardwareBuffers the app allocates, so
++    * its display server can hand them to Android's compositor as they are.
++    * The explicit layout replaces drm_mod_list; its row pitch is set for
++    * each image from the buffer the app returned (all the same in practice).
++    */
++   bool droidnux_ahb;
++   VkImageDrmFormatModifierExplicitCreateInfoEXT droidnux_explicit;
++   VkSubresourceLayout droidnux_plane;
+ };
+ 
+ enum wsi_explicit_sync_timelines
+@@ -189,6 +198,12 @@
+    uint32_t row_pitches[4];
+ #ifndef _WIN32
+    int dma_buf_fd;
++   /* DroidNux: connection to the app's allocator, which keeps the buffer
++    * alive until it is closed, and the buffer's dma-buf.
++    */
++   int droidnux_conn;
++   int droidnux_fd;
++   uint64_t droidnux_size;
+ #endif
+    void *cpu_map;
+ 
+@@ -389,6 +404,11 @@
+                           VkDevice device);
+ 
+ VkResult
++wsi_droidnux_alloc_image(const struct wsi_swapchain *chain,
++                         const struct wsi_image_info *info,
++                         struct wsi_image *image);
++
++VkResult
+ wsi_drm_configure_image(const struct wsi_swapchain *chain,
+                         const VkSwapchainCreateInfoKHR *pCreateInfo,
+                         const struct wsi_drm_image_params *params,

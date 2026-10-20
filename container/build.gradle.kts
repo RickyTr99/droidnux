@@ -9,12 +9,17 @@ android {
 
     defaultConfig {
         minSdk = libs.versions.minSdk.get().toInt()
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             abiFilters += "arm64-v8a"
         }
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=none")
+                // CI sets DROIDNUX_CCACHE=ccache to cache native builds.
+                System.getenv("DROIDNUX_CCACHE")?.let {
+                    arguments += listOf("-DCMAKE_C_COMPILER_LAUNCHER=$it", "-DCMAKE_CXX_COMPILER_LAUNCHER=$it")
+                }
             }
         }
     }
@@ -36,4 +41,8 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.commons.compress)
+    implementation(libs.xz)
+
+    androidTestImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.runner)
 }

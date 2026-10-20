@@ -15,7 +15,13 @@ android {
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_static")
+                // CI sets DROIDNUX_CCACHE=ccache to cache native builds.
+                System.getenv("DROIDNUX_CCACHE")?.let {
+                    arguments += listOf("-DCMAKE_C_COMPILER_LAUNCHER=$it", "-DCMAKE_CXX_COMPILER_LAUNCHER=$it")
+                }
                 cppFlags += listOf("-std=c++20")
+                // Only our libraries: Termux:X11's own Xlorie target is not used.
+                targets += listOf("droidnux-display", "droidnux-guest-shm", "droidnux-guest-pipewire")
             }
         }
     }

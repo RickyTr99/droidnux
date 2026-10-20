@@ -10,8 +10,11 @@ data class CommandResult(val exitCode: Int, val output: String)
 /** Entry point of the container layer for the rest of the app. */
 class Container(context: Context) {
 
+    private val context = context.applicationContext
+
     val proot = Proot(context)
     val installer = RootfsInstaller(context)
+    val components = ComponentInstaller(File(context.cacheDir, "downloads"))
 
     /** Runs proot itself, without a rootfs. */
     suspend fun prootVersion(): CommandResult = run(proot.versionCommand())
@@ -19,7 +22,7 @@ class Container(context: Context) {
     /** Runs [command] inside the installed [distro]. */
     suspend fun exec(distro: Distro, command: List<String>): CommandResult {
         check(installer.isInstalled(distro)) { "${distro.displayName} is not installed" }
-        return run(proot.guestCommand(installer.rootfsDir(distro), command))
+        return run(guestCommand(distro, command))
     }
 
     suspend fun shell(distro: Distro, script: String): CommandResult =
@@ -32,11 +35,18 @@ class Container(context: Context) {
      */
     fun spawnShell(distro: Distro, script: String): Process {
         check(installer.isInstalled(distro)) { "${distro.displayName} is not installed" }
-        val command = proot.guestCommand(installer.rootfsDir(distro), listOf("/bin/sh", "-c", script))
+        val command = guestCommand(distro, listOf("/bin/sh", "-c", script))
         return ProcessBuilder(command)
             .redirectErrorStream(true)
             .apply { environment().putAll(proot.hostEnvironment()) }
             .start()
+    }
+
+    /** proot command for [distro], with the guest network settings refreshed first. */
+    private fun guestCommand(distro: Distro, command: List<String>): List<String> {
+        val rootfs = installer.rootfsDir(distro)
+        NetworkConfig.writeResolvConf(context, rootfs)
+        return proot.guestCommand(rootfs, command)
     }
 
     private suspend fun run(command: List<String>, workDir: File? = null): CommandResult =

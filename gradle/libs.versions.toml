@@ -12,6 +12,9 @@ coreKtx = "1.19.1"
 lifecycle = "2.11.0"
 coroutines = "1.11.0"
 commonsCompress = "1.28.0"
+xz = "1.12"
+junit = "4.13.2"
+androidxTestRunner = "1.7.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -25,6 +28,10 @@ compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview"
 compose-material3 = { module = "androidx.compose.material3:material3" }
 kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
 commons-compress = { module = "org.apache.commons:commons-compress", version.ref = "commonsCompress" }
+# XZ decoder for commons-compress (component archives), pure Java.
+xz = { module = "org.tukaani:xz", version.ref = "xz" }
+junit = { module = "junit:junit", version.ref = "junit" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

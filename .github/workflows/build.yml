@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, phase*]
   pull_request:
   workflow_dispatch:
 
@@ -18,26 +18,71 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Host tools
+        run: sudo apt-get update -q && sudo apt-get install -y -q bison ccache
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
-
       - name: Install NDK and CMake
         run: |
           NDK=$(sed -n 's/^ndk = "\(.*\)"/\1/p' gradle/libs.versions.toml)
           CMAKE=$(sed -n 's/^cmake = "\(.*\)"/\1/p' gradle/libs.versions.toml)
-          sdkmanager --install "ndk;$NDK" "cmake;$CMAKE" "platforms;android-37.0" "build-tools;36.1.0" > /dev/null
+          # The runner image ships the Android SDK (ANDROID_HOME) and its cmdline-tools.
+          SDKMANAGER=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -n1)
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "ndk;$NDK" "cmake;$CMAKE" "platforms;android-37.0" "build-tools;36.1.0" > /dev/null
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache  # ccache 4 default location
+          key: ccache-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ github.ref_name }}-
+            ccache-main-
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # The same debug key as the developer's PC, so CI APKs install over local builds.
+      - name: Debug key
+        env:
+          DEBUG_KEYSTORE: ${{ secrets.DEBUG_KEYSTORE }}
+        if: env.DEBUG_KEYSTORE != ''
+        run: mkdir -p ~/.android && echo "$DEBUG_KEYSTORE" | base64 -d > ~/.android/debug.keystore
+
       - name: Build debug APK
-        run: ./gradlew assembleDebug --console=plain
+        env:
+          DROIDNUX_CCACHE: ccache
+          CCACHE_MAXSIZE: 2G
+          CCACHE_BASEDIR: ${{ github.workspace }}
+        run: |
+          ./gradlew assembleDebug --console=plain
+          ccache -s
 
       - uses: actions/upload-artifact@v4
         with:
           name: droidnux-debug-${{ github.sha }}
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+
+      # X server libraries and generated headers, so Windows hosts can build
+      # the X11 front-end without a Linux toolchain (tools/fetch-x11-prebuilt.sh).
+      - name: Package X server prebuilt
+        run: |
+          B=$(ls -d display/.cxx/Debug/*/arm64-v8a/termux-x11 | head -n1)
+          OUT=prebuilt/x11/arm64-v8a
+          mkdir -p "$OUT/lib" "$OUT/include"
+          find "$B" -name '*.a' -exec cp {} "$OUT/lib/" \;
+          (cd "$B" && find -L . -name '*.h' -not -path '*/CMakeFiles/*' -print0 | tar --null -chf - -T -) | tar -C "$OUT/include" -xf -
+          git -C third_party/termux-x11 rev-parse HEAD > "$OUT/termux-x11.commit"
+          echo "$(ls "$OUT/lib" | wc -l) libraries, $(find "$OUT/include" -name '*.h' | wc -l) headers"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: x11-prebuilt-arm64-v8a
+          path: prebuilt/x11
+          retention-days: 30

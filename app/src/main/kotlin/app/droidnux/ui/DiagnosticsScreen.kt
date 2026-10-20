@@ -1,6 +1,9 @@
 package app.droidnux.ui
 
 import android.content.Intent
+import android.net.Uri
+import android.os.Environment
+import android.provider.Settings
 import android.text.format.Formatter
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -28,6 +32,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -35,15 +42,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.droidnux.R
 import app.droidnux.container.CommandResult
+import app.droidnux.container.Component
 import app.droidnux.container.InstallProgress
+import app.droidnux.desktop.DesktopActivity
+import app.droidnux.display.X11Server
 import app.droidnux.spike.BufferSpikeActivity
 
 @Composable
-fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
+fun DiagnosticsScreen(viewModel: AppViewModel = viewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Column(
@@ -60,7 +71,11 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             Column {
-                Text(stringResource(R.string.phase0_title), style = MaterialTheme.typography.headlineMedium)
+                Text(
+                    stringResource(R.string.phase0_title),
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
                 Text(
                     stringResource(R.string.phase0_subtitle),
                     style = MaterialTheme.typography.bodyMedium,
@@ -73,11 +88,18 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
             }
 
             Section(stringResource(R.string.section_rootfs)) {
-                RootfsSection(state, onInstall = viewModel::install, onCancel = viewModel::cancelInstall)
+                InstallSection(
+                    name = state.distro.displayName,
+                    sizeBytes = state.distro.sizeBytes,
+                    state = state.rootfs,
+                    onInstall = viewModel::install,
+                    onCancel = viewModel::cancelInstall,
+                    reinstallWarning = stringResource(R.string.rootfs_reinstall_text),
+                )
             }
 
             Section(stringResource(R.string.section_container)) {
-                if (state.rootfs == RootfsState.Installed) {
+                if (state.rootfs == InstallState.Installed) {
                     Button(onClick = viewModel::runUname, enabled = !state.running) {
                         Text(stringResource(R.string.action_run))
                     }
@@ -96,9 +118,25 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
                 }
             }
 
+            if (state.rootfs == InstallState.Installed) {
+                Section(stringResource(R.string.section_desktop)) {
+                    DesktopSection(state, onInstall = viewModel::installDesktop)
+                }
+                Section(stringResource(R.string.section_gpu)) {
+                    ComponentSection(
+                        Component.MESA, stringResource(R.string.gpu_mesa, Component.MESA.version), state, viewModel,
+                    )
+                }
+                Section(stringResource(R.string.section_theme)) {
+                    ComponentSection(
+                        Component.THEME, stringResource(R.string.theme_component, Component.THEME.version), state, viewModel,
+                    )
+                }
+            }
+
             Section(stringResource(R.string.section_display)) {
                 Mono(state.display ?: stringResource(R.string.status_checking))
-                if (state.rootfs == RootfsState.Installed) {
+                if (state.rootfs == InstallState.Installed) {
                     val context = LocalContext.current
                     ActionRow {
                         FilledTonalButton(onClick = {
@@ -112,21 +150,49 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
 }
 
 @Composable
-private fun RootfsSection(state: DiagnosticsState, onInstall: () -> Unit, onCancel: () -> Unit) {
+private fun ComponentSection(component: Component, name: String, state: AppState, viewModel: AppViewModel) {
+    val install = state.components[component.id] ?: InstallState.Checking
+    if (component.sha256.isEmpty()) {
+        Status(stringResource(R.string.component_unreleased, name))
+    } else {
+        InstallSection(
+            name = name,
+            sizeBytes = component.sizeBytes,
+            state = install,
+            onInstall = { viewModel.installComponent(component) },
+            onCancel = { viewModel.cancelComponent(component) },
+        )
+    }
+    state.componentVersions[component.id]?.takeIf { install != InstallState.Installed }?.let {
+        Spacer(Modifier.padding(top = 8.dp))
+        Status(stringResource(R.string.component_installed_version, it))
+    }
+}
+
+@Composable
+private fun InstallSection(
+    name: String,
+    sizeBytes: Long,
+    state: InstallState,
+    onInstall: () -> Unit,
+    onCancel: () -> Unit,
+    reinstallWarning: String? = null, // asks before reinstalling, which deletes what is installed
+) {
     val context = LocalContext.current
+    var confirming by remember { mutableStateOf(false) }
     fun size(bytes: Long) = Formatter.formatShortFileSize(context, bytes)
 
-    Text(state.distro.displayName, style = MaterialTheme.typography.titleMedium)
+    Text(name, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
     Spacer(Modifier.padding(top = 4.dp))
 
-    when (val rootfs = state.rootfs) {
-        RootfsState.Checking -> Status(stringResource(R.string.status_checking))
-        RootfsState.NotInstalled -> {
-            Status(stringResource(R.string.status_not_installed, size(state.distro.sizeBytes)))
+    when (state) {
+        InstallState.Checking -> Status(stringResource(R.string.status_checking))
+        InstallState.NotInstalled -> {
+            Status(stringResource(R.string.status_not_installed, size(sizeBytes)))
             ActionRow { Button(onClick = onInstall) { Text(stringResource(R.string.action_install)) } }
         }
-        is RootfsState.Installing -> {
-            val progress = rootfs.progress
+        is InstallState.Installing -> {
+            val progress = state.progress
             val (label, fraction) = when (progress) {
                 is InstallProgress.Downloading -> stringResource(
                     R.string.status_downloading, size(progress.bytes), size(progress.total),
@@ -145,16 +211,96 @@ private fun RootfsSection(state: DiagnosticsState, onInstall: () -> Unit, onCanc
             }
             ActionRow { TextButton(onClick = onCancel) { Text(stringResource(R.string.action_cancel)) } }
         }
-        RootfsState.Installed -> {
+        InstallState.Installed -> {
             Status(stringResource(R.string.status_installed))
-            ActionRow { FilledTonalButton(onClick = onInstall) { Text(stringResource(R.string.action_reinstall)) } }
+            ActionRow {
+                FilledTonalButton(onClick = { if (reinstallWarning != null) confirming = true else onInstall() }) {
+                    Text(stringResource(R.string.action_reinstall))
+                }
+            }
+            if (confirming && reinstallWarning != null) {
+                AlertDialog(
+                    onDismissRequest = { confirming = false },
+                    title = { Text(stringResource(R.string.rootfs_reinstall_title, name)) },
+                    text = { Text(reinstallWarning) },
+                    confirmButton = {
+                        TextButton(onClick = { confirming = false; onInstall() }) {
+                            Text(stringResource(R.string.action_reinstall), color = MaterialTheme.colorScheme.error)
+                        }
+                    },
+                    // The safe choice is the one under a stray tap's thumb.
+                    dismissButton = { Button(onClick = { confirming = false }) { Text(stringResource(R.string.action_cancel)) } },
+                )
+            }
         }
-        is RootfsState.Failed -> {
-            Status(stringResource(R.string.status_failed, rootfs.message), error = true)
+        is InstallState.Failed -> {
+            Status(stringResource(R.string.status_failed, state.message), error = true)
             ActionRow { Button(onClick = onInstall) { Text(stringResource(R.string.action_install)) } }
         }
     }
 }
+
+/** Shared storage for the guest: needs "all files access", granted in Android's settings. */
+@Composable
+private fun StorageAccess() {
+    val context = LocalContext.current
+    var granted by remember { mutableStateOf(Environment.isExternalStorageManager()) }
+    LifecycleResumeEffect(Unit) {
+        granted = Environment.isExternalStorageManager()
+        onPauseOrDispose {}
+    }
+    Spacer(Modifier.padding(top = 12.dp))
+    Status(stringResource(if (granted) R.string.storage_granted else R.string.storage_denied))
+    AnimatedVisibility(visible = !granted) {
+        ActionRow {
+            FilledTonalButton(onClick = {
+                context.startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.fromParts("package", context.packageName, null),
+                    ),
+                )
+            }) { Text(stringResource(R.string.action_allow_storage)) }
+        }
+    }
+}
+
+@Composable
+private fun DesktopSection(state: AppState, onInstall: () -> Unit) {
+    val context = LocalContext.current
+    when {
+        !X11Server.available -> Status(stringResource(R.string.desktop_no_x11), error = true)
+        state.desktopInstalling -> {
+            Status(stringResource(R.string.desktop_installing))
+            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
+        }
+        state.desktopInstalled -> {
+            Status(
+                stringResource(if (state.desktopUpToDate) R.string.desktop_installed else R.string.desktop_update),
+            )
+            ActionRow {
+                Button(onClick = { context.startActivity(Intent(context, DesktopActivity::class.java)) }) { Text(stringResource(R.string.action_open_desktop)) }
+                if (!state.desktopUpToDate) {
+                    FilledTonalButton(onClick = onInstall) { Text(stringResource(R.string.action_update_desktop)) }
+                }
+            }
+            StorageAccess()
+        }
+        else -> {
+            Status(stringResource(R.string.desktop_not_installed))
+            ActionRow { Button(onClick = onInstall) { Text(stringResource(R.string.action_install_desktop)) } }
+        }
+    }
+    if (state.desktopLog.isNotEmpty()) {
+        Spacer(Modifier.padding(top = 12.dp))
+        Mono(state.desktopLog)
+    }
+}
+
+/**
+ * Desktop size as a fraction of the screen, remembered across launches.
+ * Applied when the desktop opens, also to a running one.
+ */
 
 @Composable
 private fun Section(title: String, content: @Composable () -> Unit) {

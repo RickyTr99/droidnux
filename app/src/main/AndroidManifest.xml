@@ -1,6 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- The microphone as the desktop's audio input, also while it is in the background. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The device's storage, mounted in the guest as /sdcard. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <!-- Asks to run without battery restrictions: the desktop keeps running in the background. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <application
         android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
@@ -18,6 +29,45 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- The desktop, its X server and its session live in their own
+             process: a crash there never takes down the rest of the app.
+             Its own task too: the app's icon always leads to the home
+             screen, and the desktop is a separate entry in recent apps. -->
+        <activity
+            android:name=".desktop.DesktopActivity"
+            android:exported="false"
+            android:process=":desktop"
+            android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.desktop"
+            android:resizeableActivity="true"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
+            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
+
+        <service
+            android:name=".desktop.DesktopSessionService"
+            android:exported="false"
+            android:process=":desktop"
+            android:foregroundServiceType="specialUse|microphone">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Runs a Linux desktop session (X server and container) chosen by the user" />
+        </service>
+
+        <!-- Optional: gives the desktop the keys Android keeps (Meta, Alt+Tab). -->
+        <service
+            android:name=".desktop.DesktopKeysService"
+            android:exported="false"
+            android:label="@string/keys_service_label"
+            android:process=":desktop"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/desktop_keys_service" />
+        </service>
 
         <activity
             android:name=".spike.BufferSpikeActivity"
