@@ -84,8 +84,7 @@ object DesktopEnvironment {
             overwrite = false,
         )
         writeFile(rootfs, FIREFOX_PREFS_PATH, FIREFOX_PREFS.toByteArray())
-        writeFile(rootfs, FIREFOX_AUTOCONFIG_PATH, FIREFOX_AUTOCONFIG.toByteArray())
-        writeFile(rootfs, FIREFOX_CFG_PATH, FIREFOX_CFG.toByteArray())
+        OBSOLETE_FILES.forEach { removeFile(rootfs, it) }
     }
 
     /** Printed by the session script when the desktop logs out. */
@@ -139,12 +138,6 @@ object DesktopEnvironment {
             export SHELL=/bin/bash
             # MIT-SHM segments the X server can attach.
             export LD_PRELOAD=$GUEST_LIB_DIR/$SHM_LIBRARY${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}
-            # Firefox's media decoder processes fail in their seccomp sandbox
-            # under proot (video: "Failed to copy image data", audio: "no
-            # decoder found"), so no video plays. Same as the content sandbox
-            # in droidnux.js; Firefox has no prefs for these two.
-            export MOZ_DISABLE_RDD_SANDBOX=1
-            export MOZ_DISABLE_UTILITY_SANDBOX=1
             # Android's SELinux denies reopening a memfd through /proc/self/fd,
             # so Firefox's parent process falls back to unsealed shm_open while
             # its children still demand F_SEAL_SHRINK: every tab crashes with
@@ -216,39 +209,19 @@ object DesktopEnvironment {
     /** Default prefs of Debian's Firefox ESR (browser/defaults/preferences, next to Debian's own). */
     private const val FIREFOX_PREFS_PATH = "/usr/lib/firefox-esr/browser/defaults/preferences/droidnux.js"
 
-    // Under proot, Firefox's content processes crash in their seccomp sandbox
-    // (SIGSEGV at startup, pages never load). VA-API decoding through the app
-    // costs Firefox more CPU than software (it reimports every frame), so it
-    // stays off there (PLAN.md, phase 2).
+    // VA-API decoding through the app costs Firefox more CPU than software (it
+    // reimports every frame), so it stays off there (PLAN.md, phase 2).
     private val FIREFOX_PREFS = """
         // Written by DroidNux.
-        pref("security.sandbox.content.level", 0);
         pref("media.hardware-video-decoding.enabled", false);
     """.trimIndent() + "\n"
 
-    /** Autoconfig prefs: they must sit in the app's defaults/pref to load [FIREFOX_CFG]. */
-    private const val FIREFOX_AUTOCONFIG_PATH = "/usr/lib/firefox-esr/defaults/pref/droidnux-autoconfig.js"
-    private const val FIREFOX_CFG_PATH = "/usr/lib/firefox-esr/droidnux.cfg"
-
-    private val FIREFOX_AUTOCONFIG = """
-        // Written by DroidNux.
-        pref("general.config.filename", "droidnux.cfg");
-        pref("general.config.obscure_value", 0);
-        pref("general.config.sandbox_enabled", false);
-    """.trimIndent() + "\n"
-
-    // With the content sandbox off (FIREFOX_PREFS) Firefox shows a warning bar
-    // in every window and no pref hides it, so this script turns it off at
-    // startup. Firefox skips the first line of an autoconfig file.
-    private val FIREFOX_CFG = """
-        // Written by DroidNux.
-        try {
-          ChromeUtils.importESModule("resource://gre/modules/SandboxUtils.sys.mjs")
-            .SandboxUtils.maybeWarnAboutDisabledContentSandbox = () => {};
-        } catch (e) {
-          Cu.reportError(e);
-        }
-    """.trimIndent() + "\n"
+    // Written by earlier versions, when Firefox's sandbox crashed under proot:
+    // an autoconfig script hiding the "sandbox disabled" warning bar.
+    private val OBSOLETE_FILES = listOf(
+        "/usr/lib/firefox-esr/defaults/pref/droidnux-autoconfig.js",
+        "/usr/lib/firefox-esr/droidnux.cfg",
+    )
 
     // Under proot PipeWire's Flatpak check fails for every client: opening
     // /proc/<pid>/root gives ENOENT (proot resolves the link to the rootfs' host
@@ -311,5 +284,13 @@ object DesktopEnvironment {
             temp.delete()
             throw IOException("cannot replace $path")
         }
+    }
+
+    /** Deletes [path] in the guest, never through a guest symlink to the host (File.delete unlinks a link). */
+    private fun removeFile(rootfs: File, path: String) {
+        val file = File(rootfs, path.removePrefix("/"))
+        val root = rootfs.canonicalPath
+        val parent = file.parentFile!!.canonicalPath
+        if (parent == root || parent.startsWith("$root/")) file.delete()
     }
 }
