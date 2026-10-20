@@ -7,8 +7,9 @@
 #   DN_PROOT_ENV='PROOT_STATS=1' tools/dn-guest.sh 'cmd'    # extra environment for proot
 #
 # Needs a debuggable build installed and the rootfs installed from the app.
+# DN_PKG=app.droidnux.wl selects the Wayland debug app.
 set -e
-PKG=app.droidnux.debug
+PKG=${DN_PKG:-app.droidnux.debug}
 ADB=${ADB:-adb}
 export MSYS_NO_PATHCONV=1
 LIB=$("$ADB" shell dumpsys package $PKG | sed -n 's/^ *legacyNativeLibraryDir=//p' | tr -d '\r')/arm64

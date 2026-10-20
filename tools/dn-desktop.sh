@@ -7,4 +7,4 @@ set -e
 ADB=${ADB:-adb}
 EXTRA=
 [ -n "$1" ] && EXTRA="--ef app.droidnux.desktop.SCALE $1"
-"$ADB" shell am start -W -n app.droidnux.debug/app.droidnux.desktop.DesktopActivity $EXTRA
+"$ADB" shell am start -W -n ${DN_PKG:-app.droidnux.debug}/app.droidnux.desktop.DesktopActivity $EXTRA

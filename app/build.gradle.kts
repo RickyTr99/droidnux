@@ -47,6 +47,12 @@ android {
         debug {
             applicationIdSuffix = ".debug"
         }
+        // Debug build of the Wayland front-end, installed next to the X11 debug app.
+        create("wayland") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".wl"
+            matchingFallbacks += "debug"
+        }
         release {
             if (!signingProps.isEmpty) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
@@ -62,6 +68,8 @@ android {
             useLegacyPackaging = true
         }
     }
+
+    sourceSets.getByName("wayland").manifest.srcFile("src/debug/AndroidManifest.xml")
 
     buildFeatures {
         compose = true
