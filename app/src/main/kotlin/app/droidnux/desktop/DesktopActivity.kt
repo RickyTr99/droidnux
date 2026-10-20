@@ -188,6 +188,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         if (hasFocus) {
             capturePointer()
             clipboardToX()
+        } else {
+            releaseKeys()
         }
     }
 
@@ -315,10 +317,19 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         val scanCode = event.scanCode.takeIf { it > 0 } ?: SOFT_KEYS[event.keyCode] ?: 0
         if (scanCode <= 0 || !X11Server.running || isSystemKey(event.keyCode)) return false
         when (event.action) {
-            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) X11Server.key(scanCode, true)
-            KeyEvent.ACTION_UP -> X11Server.key(scanCode, false)
+            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0 && keysDown.add(scanCode)) X11Server.key(scanCode, true)
+            KeyEvent.ACTION_UP -> if (keysDown.remove(scanCode)) X11Server.key(scanCode, false)
         }
         return true
+    }
+
+    /** Keys pressed in X: their release may never reach X (menu opened, focus lost). */
+    private val keysDown = mutableSetOf<Int>()
+
+    /** Releases in X the keys still held, e.g. Ctrl and Alt of the menu shortcut. */
+    private fun releaseKeys() {
+        if (X11Server.running) keysDown.forEach { X11Server.key(it, false) }
+        keysDown.clear()
     }
 
     /** Ctrl+Alt+Space: free in XFCE and in common Linux apps. */
@@ -426,6 +437,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         if (menu.isOpen) {
             menu.close()
         } else {
+            // The menu takes the keys from now on, their releases included.
+            releaseKeys()
             // The pointer must reach the menu: Android draws it again until the menu closes.
             surfaceView.releasePointerCapture()
             menu.open(trackpadMode, desktopScale, uiScale)
