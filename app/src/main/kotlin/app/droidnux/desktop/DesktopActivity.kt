@@ -330,8 +330,38 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
             return object : BaseInputConnection(this, false) {
+                /**
+                 * Text the keyboard is still composing (a word, a CJK syllable): already typed
+                 * in X, and corrected with Backspace as it changes, as X has no preedit from us.
+                 */
+                private var composing = ""
+
+                private fun replaceComposing(text: String) {
+                    val common = composing.commonPrefixWith(text)
+                    repeat(composing.codePointCount(common.length, composing.length)) { tapKey(KEY_BACKSPACE) }
+                    if (text.length > common.length) X11Server.text(text.substring(common.length))
+                    composing = text
+                }
+
+                override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
+                    replaceComposing(text.toString())
+                    return true
+                }
+
+                override fun finishComposingText(): Boolean {
+                    composing = ""
+                    return true
+                }
+
                 override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
-                    if (text.toString() == "\n") tapKey(KEY_ENTER) else X11Server.text(text)
+                    when {
+                        composing.isNotEmpty() -> {
+                            replaceComposing(text.toString())
+                            composing = ""
+                        }
+                        text.toString() == "\n" -> tapKey(KEY_ENTER)
+                        else -> X11Server.text(text)
+                    }
                     return true
                 }
 
