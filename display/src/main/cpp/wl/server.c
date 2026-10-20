@@ -13,6 +13,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/eventfd.h>
+#include <sys/file.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -258,6 +259,17 @@ static int listen_socket(const char* path) {
         return -1;
     }
     strcpy(addr.sun_path, path);
+    /* libwayland's lock next to the socket: compositors in the guest
+     * (kwin_wayland_wrapper) that find it free take the name and replace the
+     * socket. Held until the process exits. */
+    char lock_path[sizeof(addr.sun_path) + 5];
+    snprintf(lock_path, sizeof(lock_path), "%s.lock", path);
+    int lock_fd = open(lock_path, O_RDWR | O_CREAT | O_CLOEXEC, 0660);
+    if (lock_fd < 0 || flock(lock_fd, LOCK_EX | LOCK_NB) != 0) {
+        log(ERROR, "%s: %s", lock_path, strerror(errno));
+        if (lock_fd >= 0) close(lock_fd);
+        return -1;
+    }
     int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
     if (fd < 0) return -1;
     unlink(path);
