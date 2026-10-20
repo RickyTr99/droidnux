@@ -39,7 +39,7 @@ object DesktopEnvironment {
 
     private val PACKAGES = listOf(
         "xfce4", "xfce4-terminal", "dbus-x11", "x11-xserver-utils", "xkb-data",
-        "adwaita-icon-theme", "fonts-dejavu-core",
+        "adwaita-icon-theme", "fonts-dejavu-core", "tzdata",
         // DroidNux's look (XSETTINGS_DEFAULTS, PANEL_DEFAULTS); Papirus comes in the theme component.
         "arc-theme", "fonts-inter", "xfce4-whiskermenu-plugin", "xfce4-docklike-plugin", "xfce4-pulseaudio-plugin",
         // SVG loader for gdk-pixbuf: XFCE's default wallpaper and many icons are SVG.

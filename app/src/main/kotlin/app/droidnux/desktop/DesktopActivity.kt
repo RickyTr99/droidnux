@@ -51,7 +51,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** Desktop pixels per surface pixel (the desktop runs below native resolution). */
     private var scale = 1f
-    /** Requested desktop size as a fraction of the screen, from [EXTRA_SCALE]. */
+    /** Desktop size as a fraction of the screen: the session menu's (saved), or [EXTRA_SCALE]. */
     private var desktopScale = DEFAULT_SCALE
     private var surfaceWidth = 0
     private var surfaceHeight = 0
@@ -81,6 +81,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 clipboard.setPrimaryClip(ClipData.newPlainText("DroidNux", text))
             }
         }
+        desktopScale = prefs.getFloat(PREF_DESKTOP_SCALE, DEFAULT_SCALE)
         desktopScale = scaleOf(intent)
         window.attributes = window.attributes.apply {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
@@ -468,6 +469,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
         override fun onScaleChanged(scale: Float) {
             desktopScale = scale.coerceIn(MIN_SCALE, MAX_SCALE)
+            prefs.edit().putFloat(PREF_DESKTOP_SCALE, desktopScale).apply()
             if (surfaceWidth > 0) resizeDesktop()
             applyUiScale() // same physical size at the new resolution
         }
@@ -559,6 +561,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val PREFS = "desktop"
         private const val PREF_TRACKPAD = "trackpad"
         private const val PREF_UI_SCALE = "ui_scale"
+        private const val PREF_DESKTOP_SCALE = "desktop_scale"
         private const val BASE_DPI = 96
         private const val MIN_DPI = 48
         private const val MAX_DPI = 384

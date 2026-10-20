@@ -63,6 +63,8 @@ class Proot(context: Context) {
             add("-w"); add(workDir)
             add("/usr/bin/env"); add("-i")
             addAll(GUEST_ENVIRONMENT.map { (k, v) -> "$k=$v" })
+            // Android's time zone (the guest's /etc/localtime says UTC).
+            add("TZ=${java.util.TimeZone.getDefault().id}")
             addAll(command)
         }
 
