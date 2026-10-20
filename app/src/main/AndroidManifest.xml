@@ -51,6 +51,21 @@
                 android:value="Runs a Linux desktop session (X server and container) chosen by the user" />
         </service>
 
+        <!-- Optional: gives the desktop the keys Android keeps (Meta, Alt+Tab). -->
+        <service
+            android:name=".desktop.DesktopKeysService"
+            android:exported="false"
+            android:label="@string/keys_service_label"
+            android:process=":desktop"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/desktop_keys_service" />
+        </service>
+
         <activity
             android:name=".spike.BufferSpikeActivity"
             android:exported="false"

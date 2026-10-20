@@ -1,9 +1,11 @@
 package app.droidnux.ui
 
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -79,11 +81,13 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.droidnux.MainActivity
 import app.droidnux.R
 import app.droidnux.container.Component
 import app.droidnux.container.DesktopEnvironment.LinuxApp
 import app.droidnux.desktop.DesktopActivity
+import app.droidnux.desktop.DesktopKeysService
 import app.droidnux.desktop.DesktopSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -404,6 +408,7 @@ private fun SettingsTab(padding: PaddingValues) {
             InfoRow(stringResource(R.string.settings_layout), onClick = { choosingLayout = true }) {
                 Text(layoutName(settings.layout), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
             }
+            SystemKeysRow()
             Text(
                 stringResource(R.string.settings_next_session),
                 fontSize = 13.sp,
@@ -416,6 +421,30 @@ private fun SettingsTab(padding: PaddingValues) {
         LayoutDialog(settings.layout, onDismiss = { choosingLayout = false }) { layout ->
             save { it.copy(layout = layout) }
             choosingLayout = false
+        }
+    }
+}
+
+/** The accessibility service that hands the desktop Meta, Alt+Tab and the other keys Android keeps. */
+@Composable
+private fun SystemKeysRow() {
+    val context = LocalContext.current
+    var enabled by remember { mutableStateOf(DesktopKeysService.isEnabled(context)) }
+    LifecycleResumeEffect(Unit) {
+        enabled = DesktopKeysService.isEnabled(context)
+        onPauseOrDispose { }
+    }
+    InfoRow(
+        stringResource(R.string.settings_system_keys),
+        text = stringResource(if (enabled) R.string.settings_system_keys_on else R.string.settings_system_keys_off),
+    ) {
+        if (!enabled) {
+            FilledTonalButton(onClick = {
+                val details = Intent("android.settings.ACCESSIBILITY_DETAILS_SETTINGS")
+                    .putExtra(Intent.EXTRA_COMPONENT_NAME, ComponentName(context, DesktopKeysService::class.java).flattenToString())
+                runCatching { context.startActivity(details) }
+                    .onFailure { context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            }) { Text(stringResource(R.string.action_turn_on)) }
         }
     }
 }

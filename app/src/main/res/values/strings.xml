@@ -137,4 +137,10 @@
     <string name="check_files_text">Photos, downloads and documents in the desktop’s Android folder.</string>
     <string name="check_notifications">Notifications</string>
     <string name="check_notifications_text">Show that the desktop is open and let you close it.</string>
+    <string name="settings_system_keys">System keys</string>
+    <string name="settings_system_keys_on">Meta, Alt+Tab and the other shortcuts go to the desktop</string>
+    <string name="settings_system_keys_off">Android keeps Meta, Alt+Tab and some shortcuts. Turn on DroidNux in the accessibility settings to give them to the desktop.</string>
+    <string name="action_turn_on">Turn on</string>
+    <string name="keys_service_label">DroidNux keys</string>
+    <string name="keys_service_description">Gives the Linux desktop the keyboard shortcuts Android keeps for itself (Meta, Alt+Tab, Ctrl+Esc), only while the desktop is on screen. It reads nothing else.</string>
 </resources>

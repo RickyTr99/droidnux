@@ -225,6 +225,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     override fun onBackPressed() = toggleMenu()
 
     override fun onDestroy() {
+        if (focused === this) focused = null
         if (current === this) {
             current = null
             X11Server.onClipboard = null
@@ -239,6 +240,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
      */
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        focused = if (hasFocus) this else focused.takeIf { it !== this }
         if (hasFocus) {
             capturePointer()
             clipboardToX()
@@ -591,6 +593,15 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
         /** The desktop on screen, if any (main thread only). */
         private var current: DesktopActivity? = null
+
+        /** The desktop while it has the window focus (main thread only). */
+        private var focused: DesktopActivity? = null
+
+        /**
+         * A key from [DesktopKeysService], before Android's own shortcuts see
+         * it: true when the focused desktop took it. Main thread.
+         */
+        fun onSystemKey(event: KeyEvent): Boolean = focused?.sendPhysicalKey(event) ?: false
 
         /** Closes the desktop activity, when the session ends. Main thread. */
         fun finishCurrent() {
