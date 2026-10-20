@@ -7,9 +7,11 @@
 #include <android/log.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <wayland-server-protocol.h>
 
 #include "private.h"
+#include "presentation-time-protocol.h"
 #include "xdg-shell-protocol.h"
 
 #define log(prio, ...) __android_log_print(ANDROID_LOG_##prio, "DroidNux.WL", __VA_ARGS__)
@@ -26,6 +28,7 @@ struct dnx_wl_xdg_surface {
 
 static struct wl_list toplevels;       /* mapped dnx_wl_xdg_surface */
 static struct wl_list frame_callbacks; /* committed wl_callback resources */
+static struct wl_list feedbacks;       /* committed wp_presentation_feedback, user data: their surface */
 static struct dnx_wl_surface* shown;
 
 struct dnx_wl_surface* dnx_wl_shown_surface(void) {
@@ -130,11 +133,31 @@ static void update_shown(void) {
     set_shown(top ? top->surface : NULL);
 }
 
+/* shortcut: a commit counts as presented at the next vsync (the presenter's
+ * SHOWN event would be exact); nested compositors take their refresh rate
+ * from it. */
+static void send_feedback(struct wl_resource* feedback, bool presented) {
+    int64_t vsync = dnx_wl_vsync_ns();
+    if (!presented || vsync <= 0) {
+        wp_presentation_feedback_send_discarded(feedback);
+        return;
+    }
+    uint64_t seconds = (uint64_t) (vsync / 1000000000);
+    uint32_t refresh = (uint32_t) (1000000000 / dnx_presenter_refresh_rate());
+    wp_presentation_feedback_send_presented(feedback, (uint32_t) (seconds >> 32), (uint32_t) seconds,
+                                            (uint32_t) (vsync % 1000000000), refresh, 0, 0,
+                                            WP_PRESENTATION_FEEDBACK_KIND_VSYNC);
+}
+
 void dnx_wl_surface_on_frame(void) {
     uint32_t now = dnx_wl_now_ms();
     struct wl_resource *callback, *next;
     wl_resource_for_each_safe(callback, next, &frame_callbacks) {
         wl_callback_send_done(callback, now);
+        wl_resource_destroy(callback);
+    }
+    wl_resource_for_each_safe(callback, next, &feedbacks) {
+        send_feedback(callback, wl_resource_get_user_data(callback) == shown);
         wl_resource_destroy(callback);
     }
     present_shown();
@@ -507,6 +530,11 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
         wl_list_init(&s->pending_frames);
         dnx_wl_request_frame();
     }
+    if (!wl_list_empty(&s->pending_feedbacks)) {
+        wl_list_insert_list(feedbacks.prev, &s->pending_feedbacks);
+        wl_list_init(&s->pending_feedbacks);
+        dnx_wl_request_frame();
+    }
 
     if (s->role == DNX_WL_ROLE_XDG && s->xdg) xdg_commit(s->xdg);
     if (s->role == DNX_WL_ROLE_CURSOR) dnx_wl_seat_cursor_committed(s);
@@ -541,7 +569,43 @@ static void surface_destroyed(struct wl_resource* resource) {
     set_buffer(&s->pending_buffer, &s->pending_buffer_destroy, NULL);
     struct wl_resource *callback, *next;
     wl_resource_for_each_safe(callback, next, &s->pending_frames) wl_resource_destroy(callback);
+    wl_resource_for_each_safe(callback, next, &s->pending_feedbacks) wl_resource_destroy(callback);
+    wl_resource_for_each_safe(callback, next, &feedbacks) {
+        if (wl_resource_get_user_data(callback) != s) continue;
+        wp_presentation_feedback_send_discarded(callback);
+        wl_resource_destroy(callback);
+    }
     free(s);
+}
+
+/* -- wp_presentation ------------------------------------------------------- */
+
+static void presentation_feedback(struct wl_client* client, struct wl_resource* resource,
+                                  struct wl_resource* surface_resource, uint32_t id) {
+    struct dnx_wl_surface* s = wl_resource_get_user_data(surface_resource);
+    struct wl_resource* feedback = wl_resource_create(client, &wp_presentation_feedback_interface, 1, id);
+    if (!feedback) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(feedback, NULL, s, callback_destroyed);
+    wl_list_insert(s->pending_feedbacks.prev, wl_resource_get_link(feedback));
+}
+
+static const struct wp_presentation_interface presentation_impl = {
+    .destroy = destroy_resource,
+    .feedback = presentation_feedback,
+};
+
+static void presentation_bind(struct wl_client* client, void* data, uint32_t version, uint32_t id) {
+    (void) data;
+    struct wl_resource* resource = wl_resource_create(client, &wp_presentation_interface, (int) version, id);
+    if (!resource) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(resource, &presentation_impl, NULL, NULL);
+    wp_presentation_send_clock_id(resource, CLOCK_MONOTONIC);
 }
 
 /* -- wl_region (input and opaque regions are not used) --------------------- */
@@ -567,6 +631,7 @@ static void compositor_create_surface(struct wl_client* client, struct wl_resour
     s->pending_buffer_destroy.notify = on_pending_buffer_destroy;
     s->buffer_destroy.notify = on_buffer_destroy;
     wl_list_init(&s->pending_frames);
+    wl_list_init(&s->pending_feedbacks);
     wl_resource_set_implementation(s->resource, &surface_impl, s, surface_destroyed);
 }
 
@@ -599,4 +664,6 @@ void dnx_wl_surface_init(struct wl_display* display) {
     wl_list_init(&frame_callbacks);
     wl_global_create(display, &wl_compositor_interface, 5, NULL, compositor_bind);
     wl_global_create(display, &xdg_wm_base_interface, 6, NULL, wm_base_bind);
+    wl_list_init(&feedbacks);
+    wl_global_create(display, &wp_presentation_interface, 1, NULL, presentation_bind);
 }

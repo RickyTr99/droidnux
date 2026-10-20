@@ -65,15 +65,25 @@ uint32_t dnx_wl_now_ms(void) {
 /* -- Frame clock ---------------------------------------------------------- */
 
 /* Vsync thread: wake the compositor thread. */
+static atomic_llong vsync_ns;
+
 static void on_vsync(int64_t frame_time_ns, void* data) {
-    (void) frame_time_ns;
     (void) data;
+    atomic_store(&vsync_ns, frame_time_ns);
     eventfd_write(vsync_fd, 1);
+}
+
+int64_t dnx_wl_vsync_ns(void) {
+    return atomic_load(&vsync_ns);
 }
 
 void dnx_wl_request_frame(void) {
     if (!atomic_exchange(&vsync_requested, true)) dnx_presenter_request_vsync();
 }
+
+static void send_output_state(struct wl_resource* output);
+static struct wl_list outputs; /* bound wl_output resources */
+static int announced_refresh_rate;
 
 static int on_vsync_fd(int fd, uint32_t mask, void* data) {
     (void) mask;
@@ -81,6 +91,12 @@ static int on_vsync_fd(int fd, uint32_t mask, void* data) {
     eventfd_t count;
     eventfd_read(fd, &count);
     atomic_store(&vsync_requested, false);
+    /* The presenter learns the display's rate after the first frames:
+     * nested compositors pace themselves by the announced mode. */
+    if (dnx_presenter_refresh_rate() != announced_refresh_rate) {
+        struct wl_resource* output;
+        wl_resource_for_each(output, &outputs) send_output_state(output);
+    }
     dnx_wl_surface_on_frame();
     return 0;
 }
@@ -97,16 +113,15 @@ static const struct wl_output_interface output_impl = {.release = output_release
 static void send_output_state(struct wl_resource* output) {
     wl_output_send_geometry(output, 0, 0, 0, 0, WL_OUTPUT_SUBPIXEL_UNKNOWN, "DroidNux", "Android",
                             WL_OUTPUT_TRANSFORM_NORMAL);
+    announced_refresh_rate = dnx_presenter_refresh_rate();
     wl_output_send_mode(output, WL_OUTPUT_MODE_CURRENT | WL_OUTPUT_MODE_PREFERRED, dnx_wl_width, dnx_wl_height,
-                        dnx_presenter_refresh_rate() * 1000);
+                        announced_refresh_rate * 1000);
     int version = wl_resource_get_version(output);
     if (version >= WL_OUTPUT_SCALE_SINCE_VERSION) wl_output_send_scale(output, 1);
     if (version >= WL_OUTPUT_NAME_SINCE_VERSION) wl_output_send_name(output, "DROIDNUX-1");
     if (version >= WL_OUTPUT_DESCRIPTION_SINCE_VERSION) wl_output_send_description(output, "DroidNux desktop");
     if (version >= WL_OUTPUT_DONE_SINCE_VERSION) wl_output_send_done(output);
 }
-
-static struct wl_list outputs; /* bound wl_output resources */
 
 static void output_unbind(struct wl_resource* resource) {
     wl_list_remove(wl_resource_get_link(resource));

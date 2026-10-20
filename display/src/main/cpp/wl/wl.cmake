@@ -87,6 +87,7 @@ target_sources(droidnux-display PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/server.c
     ${CMAKE_CURRENT_LIST_DIR}/surface.c
     ${CMAKE_CURRENT_LIST_DIR}/protocols/linux-dmabuf-v1-protocol.c
+    ${CMAKE_CURRENT_LIST_DIR}/protocols/presentation-time-protocol.c
     ${CMAKE_CURRENT_LIST_DIR}/protocols/xdg-shell-protocol.c)
 set_source_files_properties(
     ${CMAKE_CURRENT_LIST_DIR}/dmabuf.c ${CMAKE_CURRENT_LIST_DIR}/seat.c ${CMAKE_CURRENT_LIST_DIR}/server.c

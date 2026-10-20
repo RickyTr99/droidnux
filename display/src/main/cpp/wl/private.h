@@ -30,7 +30,8 @@ struct dnx_wl_surface {
     struct wl_listener pending_buffer_destroy;
     bool pending_attach;
     struct dnx_wl_damage pending_damage;
-    struct wl_list pending_frames; /* wl_callback resources */
+    struct wl_list pending_frames;    /* wl_callback resources */
+    struct wl_list pending_feedbacks; /* wp_presentation_feedback resources */
 
     /* The committed buffer, held until the next one replaces it. */
     struct wl_resource* buffer;
@@ -49,6 +50,8 @@ extern int dnx_wl_width, dnx_wl_height;
 /* Asks for a vsync: frame callbacks and presenter retries run on it. */
 void dnx_wl_request_frame(void);
 uint32_t dnx_wl_now_ms(void);
+/* CLOCK_MONOTONIC time of the latest vsync, in nanoseconds. */
+int64_t dnx_wl_vsync_ns(void);
 
 /* Any thread: delivers a presenter buffer event to the compositor thread. */
 struct dnx_wl_dmabuf;
