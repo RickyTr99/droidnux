@@ -220,6 +220,7 @@ public:
         if (width != width_ || height != height_) {
             reallocateFramesLocked(width, height);
         }
+        setShownSizeLocked(width, height);
         recordDamageLocked(rects, count);
         if (count > 0) pending_ = true;
         if (!pending_ || surface_ == nullptr) return false;
@@ -300,6 +301,7 @@ public:
         auto start = std::chrono::steady_clock::now();
         std::lock_guard lock(mutex_);
         if (surface_ == nullptr) return false;
+        setShownSizeLocked(width, height);
         ASurfaceTransaction* t = ASurfaceTransaction_create();
         // The client waited for its rendering before presenting (no implicit
         // sync on KGSL, Mesa patch 0001): no acquire fence.
@@ -523,6 +525,13 @@ private:
         for (CursorBuffer& c : cursors_) c.busy = false;
     }
 
+    void setShownSizeLocked(uint32_t width, uint32_t height) {
+        if (width == shownWidth_ && height == shownHeight_) return;
+        shownWidth_ = width;
+        shownHeight_ = height;
+        cursorDirty_ = true;
+    }
+
     void reallocateFramesLocked(uint32_t width, uint32_t height) {
         for (FrameBuffer& b : frames_) {
             dnx_gpu_image_free(b.gpuImage);  // present() runs on the GPU copy thread
@@ -616,7 +625,7 @@ private:
 
     void applyCursorLocked(ASurfaceTransaction* t, Completion* completion) {
         cursorDirty_ = false;
-        bool show = cursorVisible_ && cursorWidth_ > 0 && cursorHeight_ > 0 && width_ > 0;
+        bool show = cursorVisible_ && cursorWidth_ > 0 && cursorHeight_ > 0 && shownWidth_ > 0;
         if (!show) {
             ASurfaceTransaction_setVisibility(t, cursorSurface_, ASURFACE_TRANSACTION_VISIBILITY_HIDE);
             return;
@@ -624,8 +633,8 @@ private:
         if (cursorImageDirty_ && !uploadCursorLocked(t, completion)) return;
 
         // Framebuffer to surface scale (the desktop may run below native resolution).
-        float sx = static_cast<float>(windowWidth_) / static_cast<float>(width_);
-        float sy = static_cast<float>(windowHeight_) / static_cast<float>(height_);
+        float sx = static_cast<float>(windowWidth_) / static_cast<float>(shownWidth_);
+        float sy = static_cast<float>(windowHeight_) / static_cast<float>(shownHeight_);
         ARect source{0, 0, static_cast<int32_t>(cursorWidth_), static_cast<int32_t>(cursorHeight_)};
         int32_t left = static_cast<int32_t>((cursorX_ - cursorHotX_) * sx);
         int32_t top = static_cast<int32_t>((cursorY_ - cursorHotY_) * sy);
@@ -698,6 +707,9 @@ private:
     FrameBuffer frames_[kBufferCount];
     uint32_t width_ = 0;
     uint32_t height_ = 0;
+    // The frame on screen, ours or a client's: the cursor's coordinates.
+    uint32_t shownWidth_ = 0;
+    uint32_t shownHeight_ = 0;
     bool swizzle_ = false;
     int onScreen_ = -1;
     External external_;  // client buffer on screen (or about to be), instead of frames_[onScreen_]

@@ -65,6 +65,9 @@ void dnx_wl_dmabuf_size(struct dnx_wl_dmabuf* buffer, int32_t* width, int32_t* h
 /* A surface took it as its current buffer / let it go (then it may be released). */
 void dnx_wl_dmabuf_use(struct dnx_wl_dmabuf* buffer);
 void dnx_wl_dmabuf_unuse(struct dnx_wl_dmabuf* buffer);
+/* Its pixels from a CPU mapping (fourcc format), or NULL; end_read after a non-NULL one. */
+const uint8_t* dnx_wl_dmabuf_begin_read(struct dnx_wl_dmabuf* buffer, uint32_t* format, uint32_t* stride);
+void dnx_wl_dmabuf_end_read(struct dnx_wl_dmabuf* buffer);
 /* Shows it as the desktop; false if the presenter cannot take it yet. */
 bool dnx_wl_dmabuf_present(struct dnx_wl_dmabuf* buffer, const dnx_box* rects, int count);
 /* A presenter event for it, on the compositor thread. */

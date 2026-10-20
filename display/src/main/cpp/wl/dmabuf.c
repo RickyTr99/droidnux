@@ -101,23 +101,36 @@ void dnx_wl_dmabuf_on_presenter_event(struct dnx_wl_dmabuf* b, bool released) {
     dmabuf_free_if_unused(b);
 }
 
-static bool present_copy(struct dnx_wl_dmabuf* b, const dnx_box* rects, int count) {
+const uint8_t* dnx_wl_dmabuf_begin_read(struct dnx_wl_dmabuf* b, uint32_t* format, uint32_t* stride) {
     if (!b->map) {
         size_t size = (size_t) b->offset + (size_t) b->stride * (size_t) b->height;
         void* map = mmap(NULL, size, PROT_READ, MAP_SHARED, b->fd, 0);
         if (map == MAP_FAILED) {
             log(ERROR, "dma-buf mmap: %s", strerror(errno));
-            return true; /* nothing to retry */
+            return NULL;
         }
         b->map = map;
         b->map_size = size;
     }
     struct dma_buf_sync sync = {.flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ};
     ioctl(b->fd, DMA_BUF_IOCTL_SYNC, &sync);
-    bool ok = dnx_presenter_present((const uint8_t*) b->map + b->offset, (uint32_t) b->width, (uint32_t) b->height,
-                                    b->stride, DNX_PIXEL_BGRX8888, NULL, NULL, rects, count);
-    sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
+    *format = b->format;
+    *stride = b->stride;
+    return (const uint8_t*) b->map + b->offset;
+}
+
+void dnx_wl_dmabuf_end_read(struct dnx_wl_dmabuf* b) {
+    struct dma_buf_sync sync = {.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ};
     ioctl(b->fd, DMA_BUF_IOCTL_SYNC, &sync);
+}
+
+static bool present_copy(struct dnx_wl_dmabuf* b, const dnx_box* rects, int count) {
+    uint32_t format, stride;
+    const uint8_t* data = dnx_wl_dmabuf_begin_read(b, &format, &stride);
+    if (!data) return true; /* nothing to retry */
+    bool ok = dnx_presenter_present(data, (uint32_t) b->width, (uint32_t) b->height, stride, DNX_PIXEL_BGRX8888,
+                                    NULL, NULL, rects, count);
+    dnx_wl_dmabuf_end_read(b);
     return ok;
 }
 

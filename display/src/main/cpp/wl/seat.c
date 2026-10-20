@@ -199,27 +199,47 @@ void dnx_wl_seat_surface_destroyed(struct dnx_wl_surface* surface) {
 
 /* -- Cursor ----------------------------------------------------------------- */
 
+#define DRM_FORMAT_ARGB8888 0x34325241 /* fourcc AR24 */
+
+/* Shm buffers from toolkits, dma-bufs from compositors such as KWin. */
 void dnx_wl_seat_cursor_committed(struct dnx_wl_surface* s) {
     struct wl_shm_buffer* shm = s->buffer ? wl_shm_buffer_get(s->buffer) : NULL;
-    if (!shm || wl_shm_buffer_get_format(shm) != WL_SHM_FORMAT_ARGB8888) {
+    struct dnx_wl_dmabuf* dmabuf = shm ? NULL : dnx_wl_dmabuf_get(s->buffer);
+    const uint8_t* data = NULL;
+    int32_t width = 0, height = 0;
+    uint32_t stride = 0, format = 0;
+    if (shm && wl_shm_buffer_get_format(shm) == WL_SHM_FORMAT_ARGB8888) {
+        wl_shm_buffer_begin_access(shm);
+        data = wl_shm_buffer_get_data(shm);
+        width = wl_shm_buffer_get_width(shm);
+        height = wl_shm_buffer_get_height(shm);
+        stride = (uint32_t) wl_shm_buffer_get_stride(shm);
+    } else if (dmabuf) {
+        dnx_wl_dmabuf_size(dmabuf, &width, &height);
+        data = dnx_wl_dmabuf_begin_read(dmabuf, &format, &stride);
+        if (data && format != DRM_FORMAT_ARGB8888) {
+            dnx_wl_dmabuf_end_read(dmabuf);
+            data = NULL;
+        }
+    }
+    if (!data) {
         dnx_presenter_set_cursor(NULL, 0, 0, 0, 0);
         return;
     }
-    int32_t width = wl_shm_buffer_get_width(shm), height = wl_shm_buffer_get_height(shm);
-    int32_t stride = wl_shm_buffer_get_stride(shm);
     uint32_t* rgba = malloc(sizeof(uint32_t) * (size_t) width * (size_t) height);
-    if (!rgba) return;
-    wl_shm_buffer_begin_access(shm);
-    const uint8_t* data = wl_shm_buffer_get_data(shm);
     /* Premultiplied 0xAARRGGBB to the layer's premultiplied RGBA bytes, as in x11/output.c. */
-    for (int32_t y = 0; y < height; y++) {
-        const uint32_t* row = (const uint32_t*) (data + (size_t) y * (size_t) stride);
+    for (int32_t y = 0; rgba && y < height; y++) {
+        const uint32_t* row = (const uint32_t*) (data + (size_t) y * stride);
         for (int32_t x = 0; x < width; x++) {
             uint32_t p = row[x];
             rgba[y * width + x] = (p & 0xFF00FF00) | ((p & 0x00FF0000) >> 16) | ((p & 0x000000FF) << 16);
         }
     }
-    wl_shm_buffer_end_access(shm);
+    if (shm)
+        wl_shm_buffer_end_access(shm);
+    else
+        dnx_wl_dmabuf_end_read(dmabuf);
+    if (!rgba) return;
     dnx_presenter_set_cursor(rgba, (uint32_t) width, (uint32_t) height, s->hotspot_x, s->hotspot_y);
     free(rgba);
 }
