@@ -13,6 +13,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.PointerIcon
 import android.view.View
 import android.view.ViewGroup
 import android.view.animation.PathInterpolator
@@ -59,6 +60,8 @@ class SessionMenu(
         isClickable = true
         setOnClickListener { close() }
         setOnGenericMotionListener { _, _ -> true } // hover stays here, not on the desktop under it
+        // Android's own pointer, which the desktop under the menu hides (X draws its cursor there).
+        pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_ARROW)
     }
 
     val isOpen: Boolean get() = opened
@@ -237,6 +240,7 @@ class SessionMenu(
             contentDescription = context.getString(description)
             background = ripple(Color.TRANSPARENT, dp(22f))
             isFocusable = true
+            pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_HAND)
             setOnClickListener { onClick() }
             addView(icon(icon, tint))
             layoutParams = LinearLayout.LayoutParams(dp(48), dp(44))
@@ -249,6 +253,7 @@ class SessionMenu(
             background = ripple(Color.TRANSPARENT, dp(22f))
             setPadding(dp(14), 0, dp(14), 0)
             isFocusable = true
+            pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_HAND)
             setOnClickListener { onClick() }
             addView(icon, LinearLayout.LayoutParams(dp(20), dp(20)).apply { marginEnd = dp(8) })
             text.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
@@ -266,6 +271,7 @@ class SessionMenu(
             background = ripple(fill, dp(22f))
             setPadding(dp(20), 0, dp(20), 0)
             isFocusable = true
+            pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_HAND)
             setOnClickListener { onClick() }
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(44))
         }
