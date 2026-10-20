@@ -48,7 +48,11 @@ object DesktopEnvironment {
 
     private val PACKAGES = listOf(
         "xfce4", "xfce4-terminal", "dbus-x11", "x11-xserver-utils", "xkb-data",
+        // The browser pinned in the dock (PANEL_DEFAULTS).
+        "firefox-esr",
         "adwaita-icon-theme", "fonts-dejavu-core", "tzdata",
+        // Android's language in the desktop's apps (SESSION generates the locale).
+        "locales",
         // DroidNux's look (XSETTINGS_DEFAULTS, PANEL_DEFAULTS); Papirus comes in the theme component.
         "arc-theme", "fonts-inter", "xfce4-whiskermenu-plugin", "xfce4-docklike-plugin", "xfce4-pulseaudio-plugin",
         // The app's list of Linux apps: gio starts them, rsvg-convert draws their icons (APPS_SCRIPT).
@@ -65,16 +69,33 @@ object DesktopEnvironment {
     private const val PACKAGES_MARKER = "var/lib/droidnux/desktop-packages"
 
     /** Guest shell script installing or updating the desktop (needs network). */
-    fun installScript(): String = """
+    fun installScript(): String {
+        val language = java.util.Locale.getDefault().language.takeIf { Regex("[a-z]{2,3}").matches(it) } ?: "en"
+        return """
         set -e
         export DEBIAN_FRONTEND=noninteractive
         apt-get update
+        # The slim Debian image drops every translation (/usr/share/locale/*):
+        # let Android's language back in. Packages installed before this was
+        # here are reinstalled once to get theirs.
+        TRANSLATIONS=/etc/dpkg/dpkg.cfg.d/droidnux-translations
+        if ! grep -qs "/locale/$language/" ${'$'}TRANSLATIONS; then
+            printf 'path-include /usr/share/locale/%s/*\npath-include /usr/share/locale/%s_*/*\n' $language $language > ${'$'}TRANSLATIONS
+            installed=${'$'}(dpkg-query -W -f '${'$'}{db:Status-Abbrev} ${'$'}{Package}\n' | awk '${'$'}1 == "ii" { print ${'$'}2 }' |
+                grep -E '^(xfce4|xfwm4|xfdesktop4|thunar|libxfce4|libxfconf|xfconf|exo-utils|libexo|libgarcon|garcon|tumbler|libgtk-3|libglib2|mousepad|ristretto|xfce4-.*-plugin)' || true)
+            [ -z "${'$'}installed" ] || apt-get install -y --reinstall --no-install-recommends ${'$'}installed
+        fi
         apt-get install -y --no-install-recommends ${PACKAGES.joinToString(" ")}
+        # Firefox's interface in that language, when Debian has it.
+        if apt-cache show firefox-esr-l10n-$language > /dev/null 2>&1; then
+            apt-get install -y --no-install-recommends firefox-esr-l10n-$language
+        fi
         apt-get clean
         mkdir -p /${PACKAGES_MARKER.substringBeforeLast('/')}
         echo '${PACKAGES.joinToString(" ")}' > /$PACKAGES_MARKER
         echo DROIDNUX_INSTALL_OK
-    """.trimIndent()
+        """.trimIndent()
+    }
 
     /** True when the desktop packages are present in [rootfs]. */
     fun isInstalled(rootfs: File): Boolean =
@@ -114,7 +135,14 @@ object DesktopEnvironment {
 
     /** Command starting the session, with the X keyboard [layout] (e.g. "it"). */
     fun sessionCommand(layout: String, dpi: Int): String =
-        "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_DPI=$dpi exec $SESSION_SCRIPT"
+        "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_DPI=$dpi DROIDNUX_LOCALE=${glibcLocale()} exec $SESSION_SCRIPT"
+
+    /** Android's language as a glibc locale name ("it_IT"); the session checks Debian has it. */
+    private fun glibcLocale(): String {
+        val locale = java.util.Locale.getDefault()
+        val name = "${locale.language}_${locale.country.ifEmpty { locale.language.uppercase() }}"
+        return name.takeIf { Regex("[a-z]{2,3}_[A-Z]{2}").matches(it) } ?: "C"
+    }
 
     /** Command applying the interface size ([dpi], 96 = 1x) to the running session. */
     fun uiScaleCommand(dpi: Int): String = "$UI_SCALE_SCRIPT $dpi"
@@ -318,6 +346,13 @@ object DesktopEnvironment {
             i=0
             while [ ! -S /tmp/.X11-unix/X$DISPLAY ] && [ ${'$'}i -lt 100 ]; do sleep 0.1; i=${'$'}((i + 1)); done
 
+            # Android's language, once its locale is generated (about a second, the first time).
+            if [ -f /usr/share/i18n/locales/${'$'}DROIDNUX_LOCALE ]; then
+                locale -a | grep -qx "${'$'}DROIDNUX_LOCALE.utf8" ||
+                    localedef -i "${'$'}DROIDNUX_LOCALE" -c -f UTF-8 "${'$'}DROIDNUX_LOCALE.UTF-8"
+                export LANG=${'$'}DROIDNUX_LOCALE.UTF-8
+            fi
+
             if [ -n "${'$'}DROIDNUX_XKB_LAYOUT" ]; then
                 setxkbmap "${'$'}DROIDNUX_XKB_LAYOUT" || echo "setxkbmap ${'$'}DROIDNUX_XKB_LAYOUT failed"
             fi
@@ -346,7 +381,9 @@ object DesktopEnvironment {
         # Apps the app starts (its app list, Android shortcuts), by desktop id: they
         # must run in this proot, which a separate one would kill when it exits.
         rm -f $LAUNCH_FIFO && mkfifo -m 600 $LAUNCH_FIFO
-        (while :; do
+        # Apps started before xfsettingsd shares the theme keep default icons.
+        (until pgrep -x xfsettingsd > /dev/null; do sleep 0.2; done; sleep 1
+        while :; do
             while read -r id; do
                 case "${'$'}id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
                 for d in /usr/local/share/applications /usr/share/applications; do

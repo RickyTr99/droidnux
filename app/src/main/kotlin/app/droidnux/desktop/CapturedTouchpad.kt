@@ -1,5 +1,7 @@
 package app.droidnux.desktop
 
+import android.os.Handler
+import android.os.Looper
 import android.view.MotionEvent
 import app.droidnux.display.X11Server
 import kotlin.math.abs
@@ -8,6 +10,8 @@ import kotlin.math.abs
  * A touchpad while the pointer is captured: Android then sends raw finger
  * positions (SOURCE_TOUCHPAD), so the gestures are ours. One finger moves the
  * pointer, two scroll, a tap clicks (two fingers: right button, three: middle).
+ * Tap and drag as on laptops: a finger back down right after a tap holds the
+ * left button while it moves; two quick taps are a double click.
  */
 class CapturedTouchpad {
 
@@ -19,11 +23,25 @@ class CapturedTouchpad {
     private var scrollX = 0f
     private var scrollY = 0f
     private var pressedButton = 0
+    private val handler = Handler(Looper.getMainLooper())
+    /** A one-finger tap waits [TAP_DRAG_MS] for a second touch before it clicks. */
+    private var pendingTap = false
+    private var dragging = false
+    private val tapClick = Runnable {
+        pendingTap = false
+        click(1)
+    }
 
     /** [unit]: touchpad units per desktop pixel. */
     fun onEvent(event: MotionEvent, unit: Float): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                if (pendingTap) {
+                    handler.removeCallbacks(tapClick)
+                    pendingTap = false
+                    dragging = true
+                    X11Server.button(1, true)
+                }
                 downTime = event.eventTime
                 fingers = 1
                 travel = 0f
@@ -37,10 +55,18 @@ class CapturedTouchpad {
             }
             MotionEvent.ACTION_MOVE -> move(event, unit)
             MotionEvent.ACTION_UP -> {
-                if (travel < TAP_SLOP * unit && event.eventTime - downTime < TAP_TIMEOUT_MS && pressedButton == 0) {
-                    val button = when (fingers) { 1 -> 1; 2 -> 3; else -> 2 }
-                    X11Server.button(button, true)
-                    X11Server.button(button, false)
+                val tap = travel < TAP_SLOP * unit && event.eventTime - downTime < TAP_TIMEOUT_MS && pressedButton == 0
+                when {
+                    dragging -> {
+                        X11Server.button(1, false)
+                        dragging = false
+                        if (tap) click(1) // the second tap of a double click
+                    }
+                    tap && fingers == 1 -> {
+                        pendingTap = true
+                        handler.postDelayed(tapClick, TAP_DRAG_MS)
+                    }
+                    tap -> click(if (fingers == 2) 3 else 2)
                 }
                 fingers = 0
             }
@@ -57,6 +83,11 @@ class CapturedTouchpad {
             else -> return false
         }
         return true
+    }
+
+    private fun click(button: Int) {
+        X11Server.button(button, true)
+        X11Server.button(button, false)
     }
 
     private fun move(event: MotionEvent, unit: Float) {
@@ -103,6 +134,7 @@ class CapturedTouchpad {
     private companion object {
         const val MAX_POINTERS = 10
         const val TAP_TIMEOUT_MS = 200
+        const val TAP_DRAG_MS = 180L // libinput waits about as long
         const val TAP_SLOP = 12f   // desktop pixels a tap may travel
         const val SCROLL_STEP = 24f // desktop pixels per scroll notch
     }
