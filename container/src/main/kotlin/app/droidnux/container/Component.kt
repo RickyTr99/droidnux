@@ -25,13 +25,13 @@ data class Component(
     companion object {
         private const val RELEASES = "https://github.com/RickyTr99/droidnux/releases/download"
 
-        /** Turnip (Vulkan on Adreno through KGSL), Zink (OpenGL on Vulkan) and the VA-API driver: guest/mesa, guest/va. */
+        /** Turnip (Vulkan on Adreno through KGSL), Zink (OpenGL on Vulkan), GBM (KWin) and the VA-API driver: guest/mesa, guest/va. */
         val MESA = Component(
             id = "mesa",
-            version = "26.2.5-dn3",
-            url = "$RELEASES/mesa-26.2.5-dn3/droidnux-mesa-26.2.5-dn3-arm64.tar.xz",
-            sha256 = "9de4ae08ac96954130f30f8d040fb742a6d2352fec90db7508bc0b50082bc20c",
-            sizeBytes = 5_214_696,
+            version = "26.2.5-dn4",
+            url = "$RELEASES/mesa-26.2.5-dn4/droidnux-mesa-26.2.5-dn4-arm64.tar.xz",
+            sha256 = "2a2e97cb162feeab9c465a37b2feb0ecec267659b848eadf01cf410954dd523c",
+            sizeBytes = 5_231_000,
             guestPath = DesktopEnvironment.MESA_PREFIX,
         )
 
