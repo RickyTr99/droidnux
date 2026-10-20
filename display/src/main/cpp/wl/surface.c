@@ -29,6 +29,8 @@ struct dnx_wl_xdg_surface {
 static struct wl_list toplevels;       /* mapped dnx_wl_xdg_surface */
 static struct wl_list frame_callbacks; /* committed wl_callback resources */
 static struct wl_list feedbacks;       /* committed wp_presentation_feedback, user data: their surface */
+static struct wl_list held_feedbacks;  /* those of a frame waiting for the next vsync */
+static bool frame_sent;                /* a frame went to the presenter since the last vsync */
 static struct dnx_wl_surface* shown;
 
 struct dnx_wl_surface* dnx_wl_shown_surface(void) {
@@ -72,11 +74,17 @@ static void damage_all(struct dnx_wl_surface* s) {
 
 /* -- Presentation --------------------------------------------------------- */
 
-/* Shows the damage of the shown surface; what the presenter cannot take yet
- * is retried on the next vsync. */
-static void present_shown(void) {
+/* Shows the damage of the shown surface, at most one frame per vsync: a
+ * second one before the vsync would replace the first before Android latches
+ * it. What waits, or what the presenter cannot take yet, goes on the next
+ * vsync. True if a frame went to the presenter. */
+static bool present_shown(void) {
     struct dnx_wl_surface* s = shown;
-    if (!s || !s->buffer || s->damage.count == 0) return;
+    if (!s || !s->buffer || s->damage.count == 0) return false;
+    if (frame_sent) {
+        dnx_wl_request_frame();
+        return false;
+    }
     struct wl_shm_buffer* shm = wl_shm_buffer_get(s->buffer);
     struct dnx_wl_dmabuf* dmabuf = shm ? NULL : dnx_wl_dmabuf_get(s->buffer);
     if (shm) {
@@ -85,7 +93,7 @@ static void present_shown(void) {
     }
     if (!shm && !dmabuf) {
         s->damage.count = 0;
-        return;
+        return false;
     }
 
     dnx_box rects[DNX_WL_MAX_DAMAGE];
@@ -98,7 +106,7 @@ static void present_shown(void) {
     }
     if (count == 0) {
         s->damage.count = 0;
-        return;
+        return false;
     }
 
     bool ok;
@@ -111,10 +119,12 @@ static void present_shown(void) {
                                    count);
         wl_shm_buffer_end_access(shm);
     }
-    if (ok)
+    if (ok) {
         s->damage.count = 0;
-    else
-        dnx_wl_request_frame();
+        frame_sent = true;
+    }
+    dnx_wl_request_frame(); /* to retry, or to let the next frame through */
+    return ok;
 }
 
 static void set_shown(struct dnx_wl_surface* s) {
@@ -133,23 +143,56 @@ static void update_shown(void) {
     set_shown(top ? top->surface : NULL);
 }
 
-/* shortcut: a commit counts as presented at the next vsync (the presenter's
- * SHOWN event would be exact); nested compositors take their refresh rate
- * from it. */
-static void send_feedback(struct wl_resource* feedback, bool presented) {
-    int64_t vsync = dnx_wl_vsync_ns();
-    if (!presented || vsync <= 0) {
-        wp_presentation_feedback_send_discarded(feedback);
-        return;
-    }
-    uint64_t seconds = (uint64_t) (vsync / 1000000000);
+/* Feedback for a frame the presenter took: presented at the next vsync (the
+ * one Android latches it on). Sent at once, not at that vsync, so a nested
+ * compositor starts its next frame a vsync ahead (KWin's frame takes most of
+ * a 120 Hz vsync); present_shown() holds that frame for its own vsync. */
+static int64_t predict_presentation(void) {
+    static int64_t last;
+    int64_t vsync = dnx_wl_vsync_ns(), interval = 1000000000 / dnx_presenter_refresh_rate();
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    int64_t now = (int64_t) ts.tv_sec * 1000000000 + ts.tv_nsec;
+    int64_t t = vsync > 0 && vsync <= now ? vsync + ((now - vsync) / interval + 1) * interval : now;
+    if (t < last + interval && last - now < 2 * interval) t = last + interval;
+    last = t;
+    return t;
+}
+
+static void send_presented(struct wl_resource* feedback, int64_t when) {
+    uint64_t seconds = (uint64_t) (when / 1000000000);
     uint32_t refresh = (uint32_t) (1000000000 / dnx_presenter_refresh_rate());
     wp_presentation_feedback_send_presented(feedback, (uint32_t) (seconds >> 32), (uint32_t) seconds,
-                                            (uint32_t) (vsync % 1000000000), refresh, 0, 0,
+                                            (uint32_t) (when % 1000000000), refresh, 0, 0,
                                             WP_PRESENTATION_FEEDBACK_KIND_VSYNC);
 }
 
+/* A commit that showed nothing new counts as presented at the next vsync. */
+static void send_feedback(struct wl_resource* feedback, bool presented) {
+    int64_t vsync = dnx_wl_vsync_ns();
+    if (presented && vsync > 0)
+        send_presented(feedback, vsync);
+    else
+        wp_presentation_feedback_send_discarded(feedback);
+}
+
+/* The held frame went to the presenter (or never will, for another surface). */
+static void flush_held_feedbacks(bool presented) {
+    int64_t when = presented ? predict_presentation() : 0;
+    struct wl_resource *feedback, *next;
+    wl_resource_for_each_safe(feedback, next, &held_feedbacks) {
+        if (presented && wl_resource_get_user_data(feedback) == shown)
+            send_presented(feedback, when);
+        else if (!presented && wl_resource_get_user_data(feedback) == shown)
+            continue;
+        else
+            wp_presentation_feedback_send_discarded(feedback);
+        wl_resource_destroy(feedback);
+    }
+}
+
 void dnx_wl_surface_on_frame(void) {
+    frame_sent = false;
     uint32_t now = dnx_wl_now_ms();
     struct wl_resource *callback, *next;
     wl_resource_for_each_safe(callback, next, &frame_callbacks) {
@@ -160,7 +203,7 @@ void dnx_wl_surface_on_frame(void) {
         send_feedback(callback, wl_resource_get_user_data(callback) == shown);
         wl_resource_destroy(callback);
     }
-    present_shown();
+    flush_held_feedbacks(present_shown());
 }
 
 void dnx_wl_surface_redraw(void) {
@@ -530,16 +573,38 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
         wl_list_init(&s->pending_frames);
         dnx_wl_request_frame();
     }
-    if (!wl_list_empty(&s->pending_feedbacks)) {
-        wl_list_insert_list(feedbacks.prev, &s->pending_feedbacks);
-        wl_list_init(&s->pending_feedbacks);
-        dnx_wl_request_frame();
-    }
 
     if (s->role == DNX_WL_ROLE_XDG && s->xdg) xdg_commit(s->xdg);
     if (s->role == DNX_WL_ROLE_CURSOR) dnx_wl_seat_cursor_committed(s);
-    if (s == shown) present_shown();
+    bool presented = false, held = false;
+    if (s == shown && s->damage.count > 0) {
+        presented = present_shown();
+        held = !presented && s->damage.count > 0;
+    }
     if (s != shown) s->damage.count = 0; /* shown again only with full damage */
+
+    if (!wl_list_empty(&s->pending_feedbacks)) {
+        struct wl_resource *feedback, *next;
+        if (presented) {
+            int64_t when = predict_presentation();
+            wl_resource_for_each_safe(feedback, next, &s->pending_feedbacks) {
+                send_presented(feedback, when);
+                wl_resource_destroy(feedback);
+            }
+        } else if (held) {
+            /* This commit replaces the content held so far. */
+            wl_resource_for_each_safe(feedback, next, &held_feedbacks) {
+                wp_presentation_feedback_send_discarded(feedback);
+                wl_resource_destroy(feedback);
+            }
+            wl_list_insert_list(held_feedbacks.prev, &s->pending_feedbacks);
+            wl_list_init(&s->pending_feedbacks);
+        } else {
+            wl_list_insert_list(feedbacks.prev, &s->pending_feedbacks);
+            wl_list_init(&s->pending_feedbacks);
+            dnx_wl_request_frame();
+        }
+    }
 }
 
 static const struct wl_surface_interface surface_impl = {
@@ -570,10 +635,13 @@ static void surface_destroyed(struct wl_resource* resource) {
     struct wl_resource *callback, *next;
     wl_resource_for_each_safe(callback, next, &s->pending_frames) wl_resource_destroy(callback);
     wl_resource_for_each_safe(callback, next, &s->pending_feedbacks) wl_resource_destroy(callback);
-    wl_resource_for_each_safe(callback, next, &feedbacks) {
-        if (wl_resource_get_user_data(callback) != s) continue;
-        wp_presentation_feedback_send_discarded(callback);
-        wl_resource_destroy(callback);
+    struct wl_list* lists[] = {&feedbacks, &held_feedbacks};
+    for (size_t i = 0; i < sizeof(lists) / sizeof(lists[0]); i++) {
+        wl_resource_for_each_safe(callback, next, lists[i]) {
+            if (wl_resource_get_user_data(callback) != s) continue;
+            wp_presentation_feedback_send_discarded(callback);
+            wl_resource_destroy(callback);
+        }
     }
     free(s);
 }
@@ -665,5 +733,6 @@ void dnx_wl_surface_init(struct wl_display* display) {
     wl_global_create(display, &wl_compositor_interface, 5, NULL, compositor_bind);
     wl_global_create(display, &xdg_wm_base_interface, 6, NULL, wm_base_bind);
     wl_list_init(&feedbacks);
+    wl_list_init(&held_feedbacks);
     wl_global_create(display, &wp_presentation_interface, 1, NULL, presentation_bind);
 }
