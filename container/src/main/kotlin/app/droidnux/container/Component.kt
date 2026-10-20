@@ -40,8 +40,8 @@ data class Component(
             id = "theme",
             version = "20250501-dn1",
             url = "$RELEASES/theme-20250501-dn1/droidnux-theme-20250501-dn1.tar.xz",
-            sha256 = "70ac8aa52f274adac2636170284f05c58b7a26a23f4ba1180e73bf1e9f5a1113",
-            sizeBytes = 17_736_244,
+            sha256 = "e247749f3fba45cecd559f7caa53672b26b675660ee18f662eae05723a32f6ba",
+            sizeBytes = 17_731_972,
             guestPath = DesktopEnvironment.THEME_PREFIX,
         )
 
