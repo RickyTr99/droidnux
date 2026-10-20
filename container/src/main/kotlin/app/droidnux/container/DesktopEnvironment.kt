@@ -48,15 +48,38 @@ object DesktopEnvironment {
     private const val XDG_DEFAULTS = "/etc/xdg/droidnux"
     private const val XFCONF_DEFAULTS = "$XDG_DEFAULTS/xfce4/xfconf/xfce-perchannel-xml"
 
-    private val PACKAGES = listOf(
+    /** The same for Plasma: kdeglobals picks [PLASMA_LOOK_AND_FEEL], applied by Plasma on first login. */
+    private const val PLASMA_DEFAULTS = "/etc/xdg/droidnux-plasma"
+    private const val PLASMA_LOOK_AND_FEEL = "/usr/share/plasma/look-and-feel/org.droidnux.desktop"
+
+    /** XFCE on the app's X server. */
+    private val XFCE_PACKAGES = listOf(
         "xfce4", "xfce4-terminal", "dbus-x11", "x11-xserver-utils", "xkb-data",
-        // The browser pinned in the dock (PANEL_DEFAULTS).
-        "firefox-esr",
-        "adwaita-icon-theme", "fonts-dejavu-core", "tzdata",
-        // Android's language in the desktop's apps (SESSION generates the locale).
-        "locales",
+        "adwaita-icon-theme",
         // DroidNux's look (XSETTINGS_DEFAULTS, PANEL_DEFAULTS); Papirus comes in the theme component.
         "arc-theme", "fonts-inter", "xfce4-whiskermenu-plugin", "xfce4-docklike-plugin", "xfce4-pulseaudio-plugin",
+    )
+
+    /** Plasma on the app's Wayland compositor, with KDE's everyday apps. */
+    private val PLASMA_PACKAGES = listOf(
+        "plasma-workspace", "plasma-desktop", "kwin-wayland", "breeze", "xkb-data",
+        // The session bus without dbus-user-session, which pulls in systemd.
+        "dbus-x11",
+        // xkbcomp builds the keymap the compositor sends (PLASMA_SESSION).
+        "x11-xkb-utils",
+        "systemsettings", "kinfocenter", "plasma-systemmonitor", "plasma-pa", "xdg-desktop-portal-kde",
+        "konsole", "dolphin", "kwrite", "ark", "gwenview", "okular", "kde-spectacle",
+        // GTK apps (Firefox) in Breeze, set from System Settings.
+        "breeze-gtk-theme", "kde-config-gtk-style",
+    )
+
+    /** What both desktops need. */
+    private val COMMON_PACKAGES = listOf(
+        // The browser pinned in the dock (PANEL_DEFAULTS).
+        "firefox-esr",
+        "fonts-dejavu-core", "tzdata",
+        // Android's language in the desktop's apps (SESSION generates the locale).
+        "locales",
         // The app's list of Linux apps: gio starts them, rsvg-convert draws their icons (APPS_SCRIPT).
         "libglib2.0-bin", "librsvg2-bin",
         // SVG loader for gdk-pixbuf: XFCE's default wallpaper and many icons are SVG.
@@ -67,11 +90,14 @@ object DesktopEnvironment {
         "pipewire", "pipewire-pulse", "pipewire-alsa", "wireplumber",
     )
 
+    private fun packages(wayland: Boolean) = (if (wayland) PLASMA_PACKAGES else XFCE_PACKAGES) + COMMON_PACKAGES
+
     /** Written by [installScript]: the package list of the last successful install. */
     private const val PACKAGES_MARKER = "var/lib/droidnux/desktop-packages"
 
-    /** Guest shell script installing or updating the desktop (needs network). */
-    fun installScript(): String {
+    /** Guest shell script installing or updating the desktop, Plasma when [wayland] (needs network). */
+    fun installScript(wayland: Boolean): String {
+        val packages = packages(wayland).joinToString(" ")
         val language = java.util.Locale.getDefault().language.takeIf { Regex("[a-z]{2,3}").matches(it) } ?: "en"
         return """
         set -e
@@ -87,25 +113,27 @@ object DesktopEnvironment {
                 grep -E '^(xfce4|xfwm4|xfdesktop4|thunar|libxfce4|libxfconf|xfconf|exo-utils|libexo|libgarcon|garcon|tumbler|libgtk-3|libglib2|mousepad|ristretto|xfce4-.*-plugin)' || true)
             [ -z "${'$'}installed" ] || apt-get install -y --reinstall --no-install-recommends ${'$'}installed
         fi
-        apt-get install -y --no-install-recommends ${PACKAGES.joinToString(" ")}
+        apt-get install -y --no-install-recommends $packages
         # Firefox's interface in that language, when Debian has it.
         if apt-cache show firefox-esr-l10n-$language > /dev/null 2>&1; then
             apt-get install -y --no-install-recommends firefox-esr-l10n-$language
         fi
         apt-get clean
         mkdir -p /${PACKAGES_MARKER.substringBeforeLast('/')}
-        echo '${PACKAGES.joinToString(" ")}' > /$PACKAGES_MARKER
+        echo '$packages' > /$PACKAGES_MARKER
         echo DROIDNUX_INSTALL_OK
         """.trimIndent()
     }
 
-    /** True when the desktop packages are present in [rootfs]. */
-    fun isInstalled(rootfs: File): Boolean =
-        File(rootfs, "usr/bin/startxfce4").exists() && File(rootfs, "usr/bin/dbus-launch").exists()
+    /** True when the desktop packages (Plasma when [wayland]) are present in [rootfs]. */
+    fun isInstalled(rootfs: File, wayland: Boolean): Boolean =
+        if (wayland) File(rootfs, "usr/bin/startplasma-wayland").exists()
+        else File(rootfs, "usr/bin/startxfce4").exists() && File(rootfs, "usr/bin/dbus-launch").exists()
 
     /** False when this version of the app needs packages the last install did not have. */
-    fun isUpToDate(rootfs: File): Boolean =
-        runCatching { File(rootfs, PACKAGES_MARKER).readText().trim() }.getOrNull() == PACKAGES.joinToString(" ")
+    fun isUpToDate(rootfs: File, wayland: Boolean): Boolean =
+        runCatching { File(rootfs, PACKAGES_MARKER).readText().trim().split(" ").toSet() }.getOrNull() ==
+            packages(wayland).toSet()
 
     /**
      * Writes the session script, DroidNux defaults and guest libraries into
@@ -129,6 +157,10 @@ object DesktopEnvironment {
         writeFile(rootfs, "$XFCONF_DEFAULTS/xsettings.xml", XSETTINGS_DEFAULTS.toByteArray())
         writeFile(rootfs, "$XFCONF_DEFAULTS/xfce4-panel.xml", PANEL_DEFAULTS.toByteArray())
         writeFile(rootfs, "$XDG_DEFAULTS/xfce4/panel/docklike.rc", DOCK_DEFAULTS.toByteArray())
+        writeFile(rootfs, "$PLASMA_DEFAULTS/kdeglobals", "[KDE]\nLookAndFeelPackage=org.droidnux.desktop\n".toByteArray())
+        writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/metadata.json", PLASMA_LNF_METADATA.toByteArray())
+        writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/contents/defaults", PLASMA_LNF_DEFAULTS.toByteArray())
+        writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/contents/layouts/org.kde.plasma.desktop-layout.js", PLASMA_LAYOUT.toByteArray())
         writeFile(rootfs, FIREFOX_PREFS_PATH, FIREFOX_PREFS.toByteArray())
         OBSOLETE_FILES.forEach { removeFile(rootfs, it) }
     }
@@ -428,9 +460,7 @@ ${LAUNCH_LOOP.prependIndent("        ")}
         echo $SESSION_END_MARKER
     """.trimIndent() + "\n"
 
-    // shortcut: Plasma is installed by hand in the Wayland build's rootfs and
-    // needs the Mesa component with GBM (dn4, not released yet); no interface
-    // size or DroidNux defaults yet. Fase 4b, step 3.
+    // shortcut: no interface size yet (KWin's scale). Fase 4b, step 3.
     private val PLASMA_SESSION = """
         #!/bin/sh
         # Written by DroidNux: starts Plasma, its KWin nested on the app's
@@ -442,6 +472,7 @@ ${LAUNCH_LOOP.prependIndent("        ")}
             export WAYLAND_DISPLAY=/tmp/wayland-$DISPLAY
             export XDG_SESSION_TYPE=wayland
             export SHELL=/bin/bash
+            export XDG_CONFIG_DIRS=$PLASMA_DEFAULTS:/etc/xdg
             export MOZ_SHM_NO_SEALS=1 # see SESSION
 ${GPU_ENV.prependIndent("            ")}
             if [ -f "${'$'}MESA/droidnux-mesa.version" ]; then
@@ -483,6 +514,68 @@ ${SESSION_SERVICES.prependIndent("        ")}
 ${LAUNCH_LOOP.prependIndent("        ")}
         startplasma-wayland
         echo $SESSION_END_MARKER
+    """.trimIndent() + "\n"
+
+    /** DroidNux's look-and-feel for Plasma: Breeze Dark, the default panel with only installed apps pinned. */
+    private val PLASMA_LNF_METADATA = """
+        {
+            "KPackageStructure": "Plasma/LookAndFeel",
+            "KPlugin": {
+                "Id": "org.droidnux.desktop",
+                "Name": "DroidNux",
+                "Description": "Breeze Dark, set up for DroidNux",
+                "License": "GPLv3+"
+            }
+        }
+    """.trimIndent() + "\n"
+
+    /** Breeze Dark's defaults (org.kde.breezedark.desktop). */
+    private val PLASMA_LNF_DEFAULTS = """
+        [kdeglobals][KDE]
+        widgetStyle=Breeze
+
+        [kdeglobals][General]
+        ColorScheme=BreezeDark
+
+        [kdeglobals][Icons]
+        Theme=breeze-dark
+
+        [plasmarc][Theme]
+        name=default
+
+        [Wallpaper]
+        Image=Next
+
+        [kcminputrc][Mouse]
+        cursorTheme=breeze_cursors
+
+        [kwinrc][org.kde.kdecoration2]
+        library=org.kde.breeze
+        theme=Breeze
+
+        [KSplash]
+        Theme=org.kde.Breeze
+    """.trimIndent() + "\n"
+
+    // The task manager's default launchers include Discover, which is not
+    // installed (an empty icon).
+    private val PLASMA_LAYOUT = """
+        loadTemplate("org.kde.plasma.desktop.defaultPanel")
+
+        for (const desktop of desktopsForActivity(currentActivity())) {
+            desktop.wallpaperPlugin = "org.kde.image"
+        }
+        for (const panel of panels()) {
+            for (const tasks of panel.widgets("org.kde.plasma.icontasks")) {
+                tasks.currentConfigGroup = ["General"]
+                tasks.writeConfig("launchers", [
+                    "applications:systemsettings.desktop",
+                    "preferred://filemanager",
+                    "preferred://browser",
+                    "applications:org.kde.konsole.desktop",
+                ])
+            }
+        }
     """.trimIndent() + "\n"
 
     /** Default prefs of Debian's Firefox ESR (browser/defaults/preferences, next to Debian's own). */

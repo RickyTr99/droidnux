@@ -5,6 +5,7 @@ import android.app.Application
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.droidnux.R
 import app.droidnux.container.CommandResult
 import app.droidnux.container.Component
 import app.droidnux.container.Container
@@ -77,6 +78,8 @@ data class AppState(
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val container = Container(application)
+    /** The Wayland build installs Plasma instead of XFCE. */
+    private val wayland = application.resources.getBoolean(R.bool.wayland_frontend)
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
@@ -97,7 +100,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 runCatching { DisplayCore.probe() }.getOrElse { it.toString() }
             }
             val (desktop, upToDate) = withContext(Dispatchers.IO) {
-                DesktopEnvironment.isInstalled(rootfs) to DesktopEnvironment.isUpToDate(rootfs)
+                DesktopEnvironment.isInstalled(rootfs, wayland) to DesktopEnvironment.isUpToDate(rootfs, wayland)
             }
             Component.ALL.forEach { refreshComponent(it) }
             _state.update {
@@ -191,7 +194,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             var total = 0
             var done = 0
             runCatching {
-                val process = container.spawnShell(distro, DesktopEnvironment.installScript())
+                val process = container.spawnShell(distro, DesktopEnvironment.installScript(wayland))
                 process.inputStream.bufferedReader().forEachLine { line ->
                     if (line == "DROIDNUX_INSTALL_OK") success = true
                     APT_SUMMARY.find(line)?.let { total = it.groupValues[1].toInt() + it.groupValues[2].toInt() }
@@ -202,7 +205,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 process.waitFor()
             }.onFailure { e -> _state.update { it.copy(desktopLog = e.toString()) } }
-            (success && DesktopEnvironment.isInstalled(rootfs)) to DesktopEnvironment.isUpToDate(rootfs)
+            (success && DesktopEnvironment.isInstalled(rootfs, wayland)) to DesktopEnvironment.isUpToDate(rootfs, wayland)
         }
         val (installed, upToDate) = ok
         _state.update { it.copy(desktopInstalling = false, desktopInstalled = installed, desktopUpToDate = upToDate) }
@@ -231,7 +234,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             _state.update { it.copy(rootfs = InstallState.Installed) }
             val (desktop, upToDate) = withContext(Dispatchers.IO) {
-                DesktopEnvironment.isInstalled(rootfs) to DesktopEnvironment.isUpToDate(rootfs)
+                DesktopEnvironment.isInstalled(rootfs, wayland) to DesktopEnvironment.isUpToDate(rootfs, wayland)
             }
             _state.update { it.copy(desktopInstalled = desktop, desktopUpToDate = upToDate) }
             Component.ALL.forEach { refreshComponent(it) } // a fresh rootfs has no components
