@@ -17,6 +17,12 @@ object DesktopEnvironment {
     private const val SHM_LIBRARY = "libdroidnux-guest-shm.so"
     private const val GUEST_LIB_DIR = "/usr/local/lib/droidnux"
 
+    /** Sound: DroidNux's PipeWire sink (guest/pipewire), in PipeWire's module directory. */
+    private const val PIPEWIRE_MODULE = "libpipewire-module-droidnux.so"
+    private const val PIPEWIRE_MODULE_DIR = "/usr/lib/aarch64-linux-gnu/pipewire-0.3"
+    private const val PIPEWIRE_CONF = "/etc/pipewire/pipewire.conf.d/50-droidnux.conf"
+    private const val WIREPLUMBER_CONF = "/etc/wireplumber/wireplumber.conf.d/50-droidnux.conf"
+
     /** Where the Mesa component (guest/mesa) is unpacked. */
     const val MESA_PREFIX = "/opt/droidnux/mesa"
 
@@ -27,8 +33,8 @@ object DesktopEnvironment {
         "librsvg2-common",
         // H.264 and AAC for Firefox: its bundled decoders cover only VP8/VP9/AV1/Opus/Vorbis.
         "libavcodec61",
-        // No PipeWire yet: under proot its daemon stops answering clients after
-        // the first reply and wireplumber spins at 100% CPU (PLAN.md, phase 3).
+        // Sound, played by the app (PIPEWIRE_CONF); PulseAudio and ALSA clients too.
+        "pipewire", "pipewire-pulse", "pipewire-alsa", "wireplumber",
     )
 
     /** Written by [installScript]: the package list of the last successful install. */
@@ -66,6 +72,9 @@ object DesktopEnvironment {
             rootfs, "$GUEST_LIB_DIR/$SHM_LIBRARY", File(nativeLibraryDir, SHM_LIBRARY).readBytes(),
             mode = 0x1A4,
         )
+        writeFile(rootfs, "$PIPEWIRE_MODULE_DIR/$PIPEWIRE_MODULE", File(nativeLibraryDir, PIPEWIRE_MODULE).readBytes())
+        writeFile(rootfs, PIPEWIRE_CONF, PIPEWIRE_DEFAULTS.toByteArray())
+        writeFile(rootfs, WIREPLUMBER_CONF, WIREPLUMBER_DEFAULTS.toByteArray())
         // Android composes the screen: a compositing window manager would only
         // add a second, slower composition pass.
         writeFile(
@@ -138,6 +147,16 @@ object DesktopEnvironment {
         fi
 
         # Session services without systemd start here, on the session bus.
+        if command -v pipewire > /dev/null; then
+            # Its clients give up if its socket is not there yet: wait for it,
+            # not for the one the last session left behind.
+            rm -f "${'$'}XDG_RUNTIME_DIR/pipewire-0" "${'$'}XDG_RUNTIME_DIR/pipewire-0-manager"
+            pipewire &
+            i=0
+            while [ ! -S "${'$'}XDG_RUNTIME_DIR/pipewire-0" ] && [ ${'$'}i -lt 50 ]; do sleep 0.1; i=${'$'}((i + 1)); done
+            wireplumber &
+            pipewire-pulse &
+        fi
         exec startxfce4
     """.trimIndent() + "\n"
 
@@ -152,6 +171,33 @@ object DesktopEnvironment {
         // Written by DroidNux.
         pref("security.sandbox.content.level", 0);
         pref("media.hardware-video-decoding.enabled", false);
+    """.trimIndent() + "\n"
+
+    // Under proot PipeWire's Flatpak check fails for every client: opening
+    // /proc/<pid>/root gives ENOENT (proot resolves the link to the rootfs' host
+    // path). PipeWire then takes each client for a sandboxed app and waits for a
+    // portal that never answers (clients connect and get no reply), and
+    // WirePlumber gives them read-only access (no streams). There is no Flatpak
+    // in the container: access by socket, and full permissions.
+    private val PIPEWIRE_DEFAULTS = """
+        # Written by DroidNux.
+        module.access.args = {
+            access.socket = { pipewire-0 = "unrestricted", pipewire-0-manager = "unrestricted" }
+        }
+        # The sink that plays through the app (AAudio).
+        context.modules = [
+            { name = libpipewire-module-droidnux flags = [ nofail ] }
+        ]
+    """.trimIndent() + "\n"
+
+    private val WIREPLUMBER_DEFAULTS = """
+        # Written by DroidNux (see PIPEWIRE_DEFAULTS).
+        access.rules = [
+          {
+            matches = [ { pipewire.sec.flatpak = "true" } ]
+            actions = { update-props = { access = "default", default_permissions = "all" } }
+          }
+        ]
     """.trimIndent() + "\n"
 
     private val XFWM4_DEFAULTS = """

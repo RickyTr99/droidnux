@@ -1,0 +1,515 @@
+/*
+ * PipeWire module for the container: an Audio/Sink that plays through the
+ * app's AAudio output (display/src/main/cpp/core/audio_output.cpp), protocol
+ * in audio_protocol.h.
+ *
+ * The sink drives the guest's graph with a timer, as a sound card does with
+ * its interrupt. The AAudio callback drains the shared ring at the device's
+ * clock, and a DLL on the ring's fill corrects the timer, so the graph follows
+ * the device's clock with no message per period.
+ *
+ * Built with the NDK (display/src/main/cpp/CMakeLists.txt) as
+ * libpipewire-module-droidnux.so, but loaded by the guest's PipeWire under
+ * glibc: it links to nothing, and its undefined symbols (libpipewire's, and
+ * libc functions whose ABI matches bionic's) are resolved at load time. Not
+ * there: bionic's __errno (see below), fortify, the stack protector and libm
+ * (the DLL avoids exp()). For quick tests it also builds in the container:
+ *   gcc -O2 -shared -fPIC -I<dir of audio_protocol.h> -I/usr/include/pipewire-0.3 \
+ *       -I/usr/include/spa-0.2 module-droidnux.c -o libpipewire-module-droidnux.so
+ *
+ * Loaded by the pipewire.conf.d file that DesktopEnvironment writes.
+ */
+
+#include <errno.h>
+#include <math.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/syscall.h>
+#include <sys/un.h>
+#include <time.h>
+#include <unistd.h>
+
+#include <spa/param/audio/format-utils.h>
+#include <spa/utils/result.h>
+
+#include <pipewire/impl.h>
+
+#include "audio_protocol.h"
+
+#ifdef __BIONIC__
+/* bionic's errno is *__errno(); glibc only has __errno_location(). */
+extern int* __errno_location(void);
+__attribute__((visibility("hidden"))) int* __errno(void) {
+    return __errno_location();
+}
+#endif
+
+#define NAME "droidnux"
+
+PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
+#define PW_LOG_TOPIC_DEFAULT mod_topic
+
+#define RATE 48000u
+#define CHANNELS 2u
+#define FRAME_SIZE (CHANNELS * sizeof(float))
+#define RING_FRAMES 8192u /* 170 ms, above PipeWire's largest default quantum */
+/* Fill kept in the ring above one device burst at every period: the timer's
+ * jitter under proot. */
+#define MARGIN_FRAMES (RATE / 200u) /* 5 ms */
+/* After START, the first period waits for the device to run (no sound is lost
+ * while AAudio starts), but not forever: a device that fails to start must not
+ * stop the graph. */
+#define START_POLL_NS (5 * SPA_NSEC_PER_MSEC)
+#define START_TIMEOUT_NS (500 * SPA_NSEC_PER_MSEC)
+/* Largest fill error the DLL sees, in frames, and its bandwidth (spa/utils/dll.h). */
+#define MAX_ERROR 256.0
+#define DLL_BW 0.016
+
+static const struct spa_dict_item module_props[] = {
+    {PW_KEY_MODULE_AUTHOR, "DroidNux"},
+    {PW_KEY_MODULE_DESCRIPTION, "Audio output through the DroidNux app (AAudio)"},
+    {PW_KEY_MODULE_VERSION, "1"},
+};
+
+/* Second-order DLL, as spa/utils/dll.h, which needs exp() from libm. */
+struct dll {
+    double z1, z2, z3;
+    double w0, w1, w2;
+    uint32_t period;
+};
+
+struct impl {
+    struct pw_context* context;
+    struct pw_impl_module* module;
+    struct spa_hook module_listener;
+    struct pw_loop* data_loop;
+
+    struct pw_core* core;
+    struct spa_hook core_proxy_listener;
+    bool do_disconnect;
+
+    struct pw_stream* stream;
+    struct spa_hook stream_listener;
+    bool running; /* main loop: START sent */
+
+    int sock;
+    dnx_audio_ring* ring;
+    float* samples;
+    size_t ring_size;
+
+    /* Data loop only. */
+    struct spa_source* timer;
+    struct spa_io_position* position;
+    bool active;  /* the timer runs */
+    bool started; /* periods tick */
+    uint64_t start_time, next_time;
+    struct dll dll;
+    double corr;
+};
+
+static uint64_t now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return SPA_TIMESPEC_TO_NSEC(&ts);
+}
+
+static void dll_init(struct dll* dll) {
+    dll->z1 = dll->z2 = dll->z3 = 0.0;
+    dll->period = 0;
+}
+
+static void dll_set_bw(struct dll* dll, double bw, uint32_t period, uint32_t rate) {
+    double w = 2 * M_PI * bw * period / rate;
+    /* 1 - exp(-x): x is below 0.35 up to PipeWire's quantum limit (8192),
+     * where this series is off by less than 3e-6. */
+    double x = 20.0 * w;
+    dll->w0 = x * (1 - x / 2 * (1 - x / 3 * (1 - x / 4 * (1 - x / 5))));
+    dll->w1 = w * 1.5 / period;
+    dll->w2 = w / 1.5;
+    dll->period = period;
+}
+
+static double dll_update(struct dll* dll, double err) {
+    dll->z1 += dll->w0 * (dll->w1 * err - dll->z1);
+    dll->z2 += dll->w0 * (dll->z1 - dll->z2);
+    dll->z3 += dll->w2 * dll->z2;
+    return 1.0 - (dll->z2 + dll->z3);
+}
+
+static void send_message(struct impl* impl, uint32_t type) {
+    dnx_audio_header header = {type, 0};
+    if (impl->sock >= 0 && send(impl->sock, &header, sizeof(header), MSG_NOSIGNAL) != sizeof(header))
+        pw_log_warn("cannot reach the app: %m");
+}
+
+static void set_timeout(struct impl* impl, uint64_t time) {
+    struct timespec value = {(time_t) (time / SPA_NSEC_PER_SEC), (long) (time % SPA_NSEC_PER_SEC)};
+    struct timespec interval = {0, 0};
+    pw_loop_update_timer(impl->data_loop, impl->timer, &value, &interval, true);
+}
+
+static uint32_t target_fill(const struct impl* impl) {
+    return __atomic_load_n(&impl->ring->burst, __ATOMIC_RELAXED) + MARGIN_FRAMES;
+}
+
+/* Data loop: the device runs (or never will), the first period starts with
+ * the target fill of silence. */
+static void begin_periods(struct impl* impl, uint64_t now) {
+    uint32_t read = __atomic_load_n(&impl->ring->read_index, __ATOMIC_ACQUIRE);
+    uint32_t fill = SPA_MIN(target_fill(impl), RING_FRAMES / 2);
+    for (uint32_t i = 0; i < fill; i++) {
+        float* frame = impl->samples + ((read + i) & (RING_FRAMES - 1)) * CHANNELS;
+        for (uint32_t c = 0; c < CHANNELS; c++) frame[c] = 0.0f;
+    }
+    __atomic_store_n(&impl->ring->write_index, read + fill, __ATOMIC_RELEASE);
+    dll_init(&impl->dll);
+    impl->corr = 1.0;
+    impl->next_time = now;
+    impl->started = true;
+}
+
+static void on_timeout(void* data, uint64_t expirations) {
+    struct impl* impl = data;
+    struct spa_io_position* pos = impl->position;
+    uint64_t now = now_ns(), duration, current;
+    uint32_t rate, burst, fill;
+    (void) expirations;
+
+    if (!impl->active) return;
+    burst = __atomic_load_n(&impl->ring->burst, __ATOMIC_RELAXED);
+    if (!impl->started) {
+        if (burst == 0 && now - impl->start_time < START_TIMEOUT_NS) {
+            set_timeout(impl, now + START_POLL_NS);
+            return;
+        }
+        if (burst == 0) pw_log_warn("the app's audio output did not start");
+        begin_periods(impl, now);
+    }
+
+    if (SPA_LIKELY(pos != NULL)) {
+        duration = pos->clock.target_duration;
+        rate = pos->clock.target_rate.denom;
+    } else {
+        duration = 1024;
+        rate = RATE;
+    }
+    if (duration == 0 || rate == 0) {
+        duration = 1024;
+        rate = RATE;
+    }
+
+    fill = __atomic_load_n(&impl->ring->write_index, __ATOMIC_RELAXED) -
+           __atomic_load_n(&impl->ring->read_index, __ATOMIC_ACQUIRE);
+    if (fill > RING_FRAMES) fill = RING_FRAMES;
+    /* Only while the device drains the ring: a stopped one would wind the DLL up. */
+    if (burst != 0) {
+        if (impl->dll.period != duration) dll_set_bw(&impl->dll, DLL_BW, (uint32_t) duration, rate);
+        double error = (double) fill - (double) target_fill(impl);
+        impl->corr = SPA_CLAMPD(dll_update(&impl->dll, SPA_CLAMPD(error, -MAX_ERROR, MAX_ERROR)), 0.95, 1.05);
+    }
+
+    current = impl->next_time;
+    impl->next_time += (uint64_t) (duration / impl->corr * 1e9 / rate);
+    /* Late by more than a period (the process was stalled): catch up at once
+     * rather than with a burst of periods. */
+    if (impl->next_time + duration * SPA_NSEC_PER_SEC / rate < now) {
+        current = now;
+        impl->next_time = now + duration * SPA_NSEC_PER_SEC / rate;
+    }
+
+    if (SPA_LIKELY(pos != NULL)) {
+        pos->clock.nsec = current;
+        pos->clock.rate = pos->clock.target_rate;
+        pos->clock.position += pos->clock.duration;
+        pos->clock.duration = pos->clock.target_duration;
+        pos->clock.delay = fill + __atomic_load_n(&impl->ring->latency, __ATOMIC_RELAXED);
+        pos->clock.rate_diff = impl->corr;
+        pos->clock.next_nsec = impl->next_time;
+    }
+    set_timeout(impl, impl->next_time);
+    pw_stream_trigger_process(impl->stream);
+}
+
+/* Data loop: one period of the graph's output into the ring. */
+static void stream_process(void* data) {
+    struct impl* impl = data;
+    struct pw_buffer* buffer = pw_stream_dequeue_buffer(impl->stream);
+    if (buffer == NULL) return;
+
+    struct spa_data* d = &buffer->buffer->datas[0];
+    const float* src = NULL;
+    uint32_t frames = 0;
+    if (d->data != NULL && d->chunk != NULL) {
+        uint32_t offset = SPA_MIN(d->chunk->offset, d->maxsize);
+        frames = SPA_MIN(d->chunk->size, d->maxsize - offset) / FRAME_SIZE;
+        src = SPA_PTROFF(d->data, offset, const float);
+    }
+    if (impl->started) {
+        uint32_t write = __atomic_load_n(&impl->ring->write_index, __ATOMIC_RELAXED);
+        uint32_t read = __atomic_load_n(&impl->ring->read_index, __ATOMIC_ACQUIRE);
+        uint32_t space = RING_FRAMES - SPA_MIN(write - read, RING_FRAMES);
+        if (frames > space) {
+            pw_log_debug("ring full, %u frames dropped", frames - space);
+            frames = space;
+        }
+        for (uint32_t done = 0; done < frames;) {
+            uint32_t at = (write + done) & (RING_FRAMES - 1);
+            uint32_t n = SPA_MIN(frames - done, RING_FRAMES - at);
+            memcpy(impl->samples + at * CHANNELS, src + done * CHANNELS, n * FRAME_SIZE);
+            done += n;
+        }
+        __atomic_store_n(&impl->ring->write_index, write + frames, __ATOMIC_RELEASE);
+    }
+    pw_stream_queue_buffer(impl->stream, buffer);
+}
+
+static int do_start(struct spa_loop* loop, bool async, uint32_t seq, const void* data, size_t size,
+                    void* user_data) {
+    struct impl* impl = user_data;
+    (void) loop, (void) async, (void) seq, (void) data, (void) size;
+    /* The device is stopped: drop what it did not play last time. */
+    __atomic_store_n(&impl->ring->write_index, __atomic_load_n(&impl->ring->read_index, __ATOMIC_ACQUIRE),
+                     __ATOMIC_RELEASE);
+    impl->active = true;
+    impl->started = false;
+    impl->start_time = now_ns();
+    set_timeout(impl, impl->start_time + START_POLL_NS);
+    return 0;
+}
+
+static int do_stop(struct spa_loop* loop, bool async, uint32_t seq, const void* data, size_t size,
+                   void* user_data) {
+    struct impl* impl = user_data;
+    (void) loop, (void) async, (void) seq, (void) data, (void) size;
+    impl->active = false;
+    impl->started = false;
+    set_timeout(impl, 0);
+    return 0;
+}
+
+static void stream_state_changed(void* data, enum pw_stream_state old, enum pw_stream_state state,
+                                 const char* error) {
+    struct impl* impl = data;
+    (void) old;
+    if (state == PW_STREAM_STATE_STREAMING) {
+        if (!impl->running) {
+            impl->running = true;
+            pw_loop_invoke(impl->data_loop, do_start, 0, NULL, 0, true, impl);
+            send_message(impl, DNX_AUDIO_START);
+        }
+        return;
+    }
+    if (impl->running) {
+        impl->running = false;
+        pw_loop_invoke(impl->data_loop, do_stop, 0, NULL, 0, true, impl);
+        send_message(impl, DNX_AUDIO_STOP);
+    }
+    if (state == PW_STREAM_STATE_ERROR || state == PW_STREAM_STATE_UNCONNECTED) {
+        pw_log_error("sink stream %s: %s", pw_stream_state_as_string(state), error ? error : "");
+        pw_impl_module_schedule_destroy(impl->module);
+    }
+}
+
+static void stream_io_changed(void* data, uint32_t id, void* area, uint32_t size) {
+    struct impl* impl = data;
+    (void) size;
+    if (id == SPA_IO_Position) impl->position = area;
+}
+
+static void stream_destroy(void* data) {
+    struct impl* impl = data;
+    spa_hook_remove(&impl->stream_listener);
+    impl->stream = NULL;
+}
+
+static const struct pw_stream_events stream_events = {
+    PW_VERSION_STREAM_EVENTS,
+    .destroy = stream_destroy,
+    .state_changed = stream_state_changed,
+    .io_changed = stream_io_changed,
+    .process = stream_process,
+};
+
+/* Connects to the app and hands it the ring. */
+static int connect_app(struct impl* impl) {
+    struct sockaddr_un address = {.sun_family = AF_UNIX};
+    int memfd = -1, res;
+
+    strcpy(address.sun_path, DNX_AUDIO_SOCKET);
+    impl->sock = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (impl->sock < 0 || connect(impl->sock, (struct sockaddr*) &address, sizeof(address)) < 0) {
+        res = -errno;
+        pw_log_error("cannot connect to %s: %m", DNX_AUDIO_SOCKET);
+        return res;
+    }
+
+    impl->ring_size = DNX_AUDIO_RING_SIZE(RING_FRAMES, CHANNELS);
+    /* No memfd_create() in bionic's headers below API 30. */
+    memfd = (int) syscall(SYS_memfd_create, "droidnux-audio", 1u /* MFD_CLOEXEC */);
+    if (memfd < 0 || ftruncate(memfd, (off_t) impl->ring_size) < 0) {
+        res = -errno;
+        pw_log_error("cannot create the ring: %m");
+        goto out;
+    }
+    impl->ring = mmap(NULL, impl->ring_size, PROT_READ | PROT_WRITE, MAP_SHARED, memfd, 0);
+    if (impl->ring == MAP_FAILED) {
+        impl->ring = NULL;
+        res = -errno;
+        pw_log_error("cannot map the ring: %m");
+        goto out;
+    }
+    impl->samples = (float*) (impl->ring + 1);
+    impl->ring->magic = DNX_AUDIO_MAGIC;
+    impl->ring->version = DNX_AUDIO_VERSION;
+    impl->ring->rate = RATE;
+    impl->ring->channels = CHANNELS;
+    impl->ring->frames = RING_FRAMES;
+
+    struct {
+        dnx_audio_header header;
+        dnx_audio_hello hello;
+    } message = {{DNX_AUDIO_HELLO, sizeof(dnx_audio_hello)}, {DNX_AUDIO_MAGIC, DNX_AUDIO_VERSION}};
+    union {
+        struct cmsghdr align;
+        char buf[CMSG_SPACE(sizeof(int))];
+    } control;
+    struct iovec iov = {&message, sizeof(message)};
+    struct msghdr msg = {.msg_iov = &iov, .msg_iovlen = 1, .msg_control = control.buf,
+                         .msg_controllen = sizeof(control.buf)};
+    memset(&control, 0, sizeof(control));
+    struct cmsghdr* cmsg = CMSG_FIRSTHDR(&msg);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+    memcpy(CMSG_DATA(cmsg), &memfd, sizeof(int));
+    if (sendmsg(impl->sock, &msg, MSG_NOSIGNAL) != (ssize_t) sizeof(message)) {
+        res = -errno;
+        pw_log_error("cannot send the ring: %m");
+        goto out;
+    }
+    res = 0;
+out:
+    if (memfd >= 0) close(memfd);
+    return res;
+}
+
+static int create_stream(struct impl* impl) {
+    struct pw_properties* props = pw_properties_new(
+        PW_KEY_MEDIA_CLASS, "Audio/Sink",
+        PW_KEY_NODE_NAME, "droidnux-output",
+        PW_KEY_NODE_DESCRIPTION, "Android",
+        PW_KEY_NODE_RATE, "1/48000",
+        /* The adapter's DSP ports take their layout from these, not from EnumFormat. */
+        PW_KEY_AUDIO_FORMAT, "F32LE",
+        PW_KEY_AUDIO_RATE, "48000",
+        PW_KEY_AUDIO_CHANNELS, "2",
+        SPA_KEY_AUDIO_POSITION, "[ FL FR ]",
+        /* Above the dummy driver and any other sink: the default output. */
+        "priority.driver", "2000",
+        "priority.session", "2000",
+        NULL);
+    if (props == NULL) return -errno;
+    pw_properties_set(props, PW_KEY_NODE_LOOP_NAME, impl->data_loop->name);
+
+    impl->stream = pw_stream_new(impl->core, "droidnux-output", props);
+    if (impl->stream == NULL) return -errno;
+    pw_stream_add_listener(impl->stream, &impl->stream_listener, &stream_events, impl);
+
+    uint8_t buffer[1024];
+    struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    struct spa_audio_info_raw info = {
+        .format = SPA_AUDIO_FORMAT_F32,
+        .rate = RATE,
+        .channels = CHANNELS,
+        .position = {SPA_AUDIO_CHANNEL_FL, SPA_AUDIO_CHANNEL_FR},
+    };
+    const struct spa_pod* params[1] = {spa_format_audio_raw_build(&b, SPA_PARAM_EnumFormat, &info)};
+    return pw_stream_connect(impl->stream, PW_DIRECTION_INPUT, PW_ID_ANY,
+                             PW_STREAM_FLAG_DRIVER | PW_STREAM_FLAG_MAP_BUFFERS | PW_STREAM_FLAG_RT_PROCESS,
+                             params, 1);
+}
+
+static void impl_destroy(struct impl* impl) {
+    if (impl->stream) pw_stream_destroy(impl->stream);
+    if (impl->core && impl->core_proxy_listener.link.next) spa_hook_remove(&impl->core_proxy_listener);
+    if (impl->core && impl->do_disconnect) pw_core_disconnect(impl->core);
+    if (impl->timer) pw_loop_destroy_source(impl->data_loop, impl->timer);
+    if (impl->data_loop) pw_context_release_loop(impl->context, impl->data_loop);
+    if (impl->ring) munmap(impl->ring, impl->ring_size);
+    if (impl->sock >= 0) close(impl->sock);
+    free(impl);
+}
+
+static void module_destroy(void* data) {
+    struct impl* impl = data;
+    spa_hook_remove(&impl->module_listener);
+    impl_destroy(impl);
+}
+
+static const struct pw_impl_module_events module_events = {
+    PW_VERSION_IMPL_MODULE_EVENTS,
+    .destroy = module_destroy,
+};
+
+static void core_destroy(void* data) {
+    struct impl* impl = data;
+    spa_hook_remove(&impl->core_proxy_listener);
+    impl->core = NULL;
+    pw_impl_module_schedule_destroy(impl->module);
+}
+
+static const struct pw_proxy_events core_proxy_events = {
+    PW_VERSION_PROXY_EVENTS,
+    .destroy = core_destroy,
+};
+
+SPA_EXPORT int pipewire__module_init(struct pw_impl_module* module, const char* args) {
+    struct pw_context* context = pw_impl_module_get_context(module);
+    struct impl* impl;
+    int res;
+    (void) args;
+
+    PW_LOG_TOPIC_INIT(mod_topic);
+
+    impl = calloc(1, sizeof(*impl));
+    if (impl == NULL) return -errno;
+    impl->sock = -1;
+    impl->module = module;
+    impl->context = context;
+
+    impl->data_loop = pw_context_acquire_loop(context, NULL);
+    if (impl->data_loop == NULL) {
+        res = -errno;
+        goto error;
+    }
+    impl->timer = pw_loop_add_timer(impl->data_loop, on_timeout, impl);
+    if (impl->timer == NULL) {
+        res = -errno;
+        goto error;
+    }
+
+    impl->core = pw_context_get_object(context, PW_TYPE_INTERFACE_Core);
+    if (impl->core == NULL) {
+        impl->core = pw_context_connect(context, NULL, 0);
+        impl->do_disconnect = true;
+    }
+    if (impl->core == NULL) {
+        res = -errno;
+        pw_log_error("cannot connect: %m");
+        goto error;
+    }
+    pw_proxy_add_listener((struct pw_proxy*) impl->core, &impl->core_proxy_listener, &core_proxy_events, impl);
+
+    if ((res = connect_app(impl)) < 0 || (res = create_stream(impl)) < 0) goto error;
+
+    pw_impl_module_add_listener(module, &impl->module_listener, &module_events, impl);
+    pw_impl_module_update_properties(module, &SPA_DICT_INIT_ARRAY(module_props));
+    pw_log_info("playing through the app, %u Hz, %u channels", RATE, CHANNELS);
+    return 0;
+
+error:
+    impl_destroy(impl);
+    return res;
+}

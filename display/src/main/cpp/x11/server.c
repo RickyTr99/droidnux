@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include "allocator.h"
+#include "audio_output.h"
 #include "dix.h"
 #include "globals.h"
 #include "input.h"
@@ -116,6 +117,11 @@ bool dnx_x11_start(const dnx_x11_config* config) {
     asprintf(&video_path, "%s/.droidnux-video", config->tmp_dir);
     dnx_video_decoder_start(video_path);
     free(video_path);
+    /* Sound from the container's PipeWire (guest/pipewire), played with AAudio. */
+    char* audio_path = NULL;
+    asprintf(&audio_path, "%s/.droidnux-audio", config->tmp_dir);
+    dnx_audio_output_start(audio_path);
+    free(audio_path);
 
     XkbBaseDirectory = strdup(config->xkb_dir);
     if (config->font_dir && access(config->font_dir, F_OK) == 0) {
