@@ -93,6 +93,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             holder.addCallback(this@DesktopActivity)
             isFocusable = true
             isFocusableInTouchMode = true
+            // It always has the focus: no keyboard focus frame around the whole desktop.
+            defaultFocusHighlightEnabled = false
             // The X cursor is drawn by the presenter; hide Android's.
             pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
             setOnGenericMotionListener { _, event -> onPointerEvent(event) }
