@@ -153,6 +153,9 @@ object DesktopEnvironment {
                 export __EGL_VENDOR_LIBRARY_FILENAMES=${'$'}MESA/share/glvnd/egl_vendor.d/50_droidnux.json
                 export MESA_LOADER_DRIVER_OVERRIDE=zink
                 export GALLIUM_DRIVER=zink
+                # Samsung's KGSL (One UI) needs Turnip's UBWC flag hint: without
+                # it, whole frames flash while Firefox scrolls (WebRender on Zink).
+                export FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1
                 # Swapchain images in AHardwareBuffers from the X server, which
                 # shows full-screen ones without copying them (Mesa patch 0003).
                 export DROIDNUX_AHB_SOCKET=/tmp/.droidnux-ahb
