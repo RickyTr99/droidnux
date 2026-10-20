@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -22,6 +23,11 @@ import android.view.SurfaceView
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.view.inputmethod.BaseInputConnection
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputMethodManager
+import android.window.OnBackInvokedDispatcher
 import android.widget.FrameLayout
 import android.widget.TextView
 import app.droidnux.container.Container
@@ -55,6 +61,11 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private val clipboardListener = ClipboardManager.OnPrimaryClipChangedListener { clipboardToX() }
     private val touchSlop by lazy { android.view.ViewConfiguration.get(this).scaledTouchSlop.toFloat() }
     private val touchpad = CapturedTouchpad()
+    /** The touchscreen in trackpad mode: the finger moves the pointer instead of clicking where it lands. */
+    private val screenTouchpad = CapturedTouchpad()
+    private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
+    private var trackpadMode = false
+    private lateinit var menu: SessionMenu
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -97,7 +108,16 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
             ))
         }
+        trackpadMode = prefs.getBoolean(PREF_TRACKPAD, false)
+        menu = SessionMenu(this, menuListener)
+        root.addView(menu.view, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
         setContentView(root)
+        // Back opens the menu instead of leaving: it has "Back to Android".
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { toggleMenu() }
+        }
         window.insetsController?.apply {
             hide(WindowInsets.Type.systemBars())
             systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
@@ -130,6 +150,9 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         clipboard.removePrimaryClipChangedListener(clipboardListener)
         super.onPause()
     }
+
+    @Deprecated("Android 12 and older; newer versions use the OnBackInvokedCallback")
+    override fun onBackPressed() = toggleMenu()
 
     override fun onDestroy() {
         if (current === this) {
@@ -169,7 +192,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun capturePointer() {
-        if (!surfaceView.hasPointerCapture()) {
+        if (!surfaceView.hasPointerCapture() && !menu.isOpen) {
             surfaceView.requestFocus()
             surfaceView.requestPointerCapture()
         }
@@ -222,6 +245,34 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private inner class DesktopSurfaceView : SurfaceView(this@DesktopActivity) {
         override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean =
             sendPhysicalKey(event) || super.dispatchKeyEventPreIme(event)
+
+        override fun onCheckIsTextEditor() = true
+
+        /** The soft keyboard: committed text goes to X as characters, its keys as key presses. */
+        override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
+            // Visible-password text: keyboards commit each character instead of composing words.
+            outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT or
+                android.text.InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
+                android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+            outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            return object : BaseInputConnection(this, false) {
+                override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
+                    if (text.toString() == "\n") tapKey(KEY_ENTER) else X11Server.text(text)
+                    return true
+                }
+
+                override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                    repeat(beforeLength) { tapKey(KEY_BACKSPACE) }
+                    repeat(afterLength) { tapKey(KEY_DELETE) }
+                    return true
+                }
+            }
+        }
+    }
+
+    private fun tapKey(evdevKeycode: Int) {
+        X11Server.key(evdevKeycode, true)
+        X11Server.key(evdevKeycode, false)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean =
@@ -232,7 +283,20 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
      * layout, as on a PC. Volume and power keys stay with Android.
      */
     private fun sendPhysicalKey(event: KeyEvent): Boolean {
-        val scanCode = event.scanCode
+        if (isMenuShortcut(event)) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) toggleMenu()
+            return true
+        }
+        if (menu.isOpen) {
+            // The menu takes the keys (focus moves with arrows and Tab); Escape closes it.
+            if (event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                if (event.action == KeyEvent.ACTION_UP) menu.close()
+                return true
+            }
+            return false
+        }
+        // The soft keyboard's keys have no scan code: map the ones it sends as key events.
+        val scanCode = event.scanCode.takeIf { it > 0 } ?: SOFT_KEYS[event.keyCode] ?: 0
         if (scanCode <= 0 || !X11Server.running || isSystemKey(event.keyCode)) return false
         when (event.action) {
             KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) X11Server.key(scanCode, true)
@@ -240,6 +304,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
         return true
     }
+
+    /** Ctrl+Alt+Space: free in XFCE and in common Linux apps. */
+    private fun isMenuShortcut(event: KeyEvent) =
+        event.keyCode == KeyEvent.KEYCODE_SPACE && event.isCtrlPressed && event.isAltPressed
 
     private fun isSystemKey(keyCode: Int) = keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
         keyCode == KeyEvent.KEYCODE_VOLUME_DOWN || keyCode == KeyEvent.KEYCODE_VOLUME_MUTE ||
@@ -325,9 +393,65 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             if (event.actionMasked == MotionEvent.ACTION_MOVE) X11Server.pointer(event.x * scale, event.y * scale)
             return true
         }
-        showCursor(false) // a finger needs no pointer; the next mouse motion brings it back
-        touch.onEvent(event, scale, touchSlop)
+        if (trackpadMode) {
+            showCursor(true)
+            // A finger crossing the screen moves the pointer across the desktop, before X's acceleration.
+            screenTouchpad.onEvent(event, 1f / scale)
+        } else {
+            showCursor(false) // a finger needs no pointer; the next mouse motion brings it back
+            touch.onEvent(event, scale, touchSlop)
+        }
         return true
+    }
+
+    // -- Session menu ------------------------------------------------------
+
+    private fun toggleMenu() {
+        if (menu.isOpen) {
+            menu.close()
+        } else {
+            // The pointer must reach the menu: Android draws it again until the menu closes.
+            surfaceView.releasePointerCapture()
+            menu.open(trackpadMode, desktopScale)
+        }
+    }
+
+    private val menuListener = object : SessionMenu.Listener {
+        override fun onToggleKeyboard() {
+            val imm = getSystemService(InputMethodManager::class.java)
+            val shown = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
+            if (shown) {
+                imm.hideSoftInputFromWindow(surfaceView.windowToken, 0)
+            } else {
+                surfaceView.requestFocus()
+                imm.showSoftInput(surfaceView, 0)
+            }
+        }
+
+        override fun onTrackpadChanged(trackpad: Boolean) {
+            trackpadMode = trackpad
+            prefs.edit().putBoolean(PREF_TRACKPAD, trackpad).apply()
+        }
+
+        override fun resolutionFor(scale: Float) =
+            "${(surfaceWidth * scale).toInt() and 1.inv()} × ${(surfaceHeight * scale).toInt() and 1.inv()}"
+
+        override fun onScaleChanged(scale: Float) {
+            desktopScale = scale.coerceIn(MIN_SCALE, MAX_SCALE)
+            if (surfaceWidth > 0) resizeDesktop()
+        }
+
+        override fun onBackToAndroid() {
+            moveTaskToBack(true)
+        }
+
+        override fun onExit() = DesktopSessionService.stop(this@DesktopActivity)
+
+        override fun onClosed() {
+            surfaceView.requestFocus()
+            capturePointer()
+        }
     }
 
     // -- Debug overlay -----------------------------------------------------
@@ -376,5 +500,31 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         const val DEFAULT_SCALE = 0.6f
         const val MIN_SCALE = 0.4f
         const val MAX_SCALE = 1f
+
+        private const val PREFS = "desktop"
+        private const val PREF_TRACKPAD = "trackpad"
+
+        private const val KEY_BACKSPACE = 14
+        private const val KEY_ENTER = 28
+        private const val KEY_DELETE = 111
+
+        /** Android keycodes the soft keyboard sends without a scan code, as evdev keycodes. */
+        private val SOFT_KEYS = mapOf(
+            KeyEvent.KEYCODE_DEL to KEY_BACKSPACE,
+            KeyEvent.KEYCODE_FORWARD_DEL to KEY_DELETE,
+            KeyEvent.KEYCODE_ENTER to KEY_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER to 96,
+            KeyEvent.KEYCODE_TAB to 15,
+            KeyEvent.KEYCODE_ESCAPE to 1,
+            KeyEvent.KEYCODE_SPACE to 57,
+            KeyEvent.KEYCODE_DPAD_UP to 103,
+            KeyEvent.KEYCODE_DPAD_DOWN to 108,
+            KeyEvent.KEYCODE_DPAD_LEFT to 105,
+            KeyEvent.KEYCODE_DPAD_RIGHT to 106,
+            KeyEvent.KEYCODE_MOVE_HOME to 102,
+            KeyEvent.KEYCODE_MOVE_END to 107,
+            KeyEvent.KEYCODE_PAGE_UP to 104,
+            KeyEvent.KEYCODE_PAGE_DOWN to 109,
+        )
     }
 }

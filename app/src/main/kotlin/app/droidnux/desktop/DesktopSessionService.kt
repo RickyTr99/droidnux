@@ -119,6 +119,11 @@ class DesktopSessionService : Service() {
         private const val EXTRA_LAYOUT = "layout"
         private const val EXIT_DELAY_MS = 500L
 
+        /** Ends the session, as the notification's Stop action does. */
+        fun stop(context: Context) {
+            context.startService(Intent(context, DesktopSessionService::class.java).setAction(ACTION_STOP))
+        }
+
         fun start(context: Context, layout: String) {
             context.startForegroundService(
                 Intent(context, DesktopSessionService::class.java).putExtra(EXTRA_LAYOUT, layout),
