@@ -4,13 +4,15 @@
  * (wl_pointer.set_cursor) and goes to the presenter's cursor layer.
  */
 #include <android/log.h>
-#include <android/sharedmem.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <linux/memfd.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
 #include <unistd.h>
 #include <wayland-server-protocol.h>
 
@@ -104,16 +106,17 @@ static void send_keymap(struct wl_resource* keyboard) {
         }
         return;
     }
+    /* A sealed memfd: clients map it MAP_PRIVATE (version 7+), which reads
+     * zeros from ashmem. memfd_create has no bionic wrapper before API 30. */
     size_t size = strlen(keymap_text) + 1;
-    int fd = ASharedMemory_create("droidnux-keymap", size);
-    if (fd < 0) return;
-    void* map = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    if (map != MAP_FAILED) {
-        memcpy(map, keymap_text, size);
-        munmap(map, size);
-        ASharedMemory_setProt(fd, PROT_READ);
-        wl_keyboard_send_keymap(keyboard, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, fd, (uint32_t) size);
+    int fd = (int) syscall(__NR_memfd_create, "droidnux-keymap", MFD_CLOEXEC | MFD_ALLOW_SEALING);
+    if (fd < 0) {
+        log(ERROR, "memfd_create: %s", strerror(errno));
+        return;
     }
+    if (write(fd, keymap_text, size) == (ssize_t) size &&
+        fcntl(fd, F_ADD_SEALS, F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE | F_SEAL_SEAL) == 0)
+        wl_keyboard_send_keymap(keyboard, WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1, fd, (uint32_t) size);
     close(fd);
 }
 
