@@ -30,6 +30,7 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
+        resValue("bool", "wayland_frontend", "false")
     }
 
     signingConfigs {
@@ -52,6 +53,7 @@ android {
             initWith(getByName("debug"))
             applicationIdSuffix = ".wl"
             matchingFallbacks += "debug"
+            resValue("bool", "wayland_frontend", "true")
         }
         release {
             if (!signingProps.isEmpty) signingConfig = signingConfigs.getByName("release")
@@ -73,6 +75,7 @@ android {
 
     buildFeatures {
         compose = true
+        resValues = true
     }
 
     compileOptions {

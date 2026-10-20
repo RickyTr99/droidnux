@@ -3,7 +3,7 @@ package app.droidnux.desktop
 import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
-import app.droidnux.display.X11Server
+import app.droidnux.display.DisplayServer
 import kotlin.math.abs
 
 /**
@@ -42,7 +42,7 @@ class TouchGestures(private val handler: Handler = Handler(Looper.getMainLooper(
                 downX = event.x
                 downY = event.y
                 downTime = event.eventTime
-                X11Server.pointer(event.x * scale, event.y * scale)
+                DisplayServer.pointer(event.x * scale, event.y * scale)
                 handler.postDelayed(longPress, LONG_PRESS_MS)
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
@@ -58,7 +58,7 @@ class TouchGestures(private val handler: Handler = Handler(Looper.getMainLooper(
                         scrolled = false
                     }
                     State.DRAGGING -> {
-                        X11Server.button(1, false)
+                        DisplayServer.button(1, false)
                         state = State.DONE
                     }
                     else -> Unit
@@ -73,11 +73,11 @@ class TouchGestures(private val handler: Handler = Handler(Looper.getMainLooper(
                 State.PENDING -> if (abs(event.x - downX) > slop || abs(event.y - downY) > slop) {
                     handler.removeCallbacks(longPress)
                     // The press happens where the finger landed, then the drag follows it.
-                    X11Server.button(1, true)
-                    X11Server.pointer(event.x * scale, event.y * scale)
+                    DisplayServer.button(1, true)
+                    DisplayServer.pointer(event.x * scale, event.y * scale)
                     state = State.DRAGGING
                 }
-                State.DRAGGING -> X11Server.pointer(event.x * scale, event.y * scale)
+                State.DRAGGING -> DisplayServer.pointer(event.x * scale, event.y * scale)
                 State.SCROLLING -> scroll(event, scale)
                 else -> Unit
             }
@@ -86,7 +86,7 @@ class TouchGestures(private val handler: Handler = Handler(Looper.getMainLooper(
                 val tap = event.actionMasked == MotionEvent.ACTION_UP && event.eventTime - downTime < TAP_MS
                 when (state) {
                     State.PENDING -> if (event.actionMasked == MotionEvent.ACTION_UP) click(1)
-                    State.DRAGGING -> X11Server.button(1, false)
+                    State.DRAGGING -> DisplayServer.button(1, false)
                     State.SCROLLING -> if (tap && !scrolled && fingers == 2) click(3)
                     else -> Unit
                 }
@@ -106,7 +106,7 @@ class TouchGestures(private val handler: Handler = Handler(Looper.getMainLooper(
         val sx = scrollX.toInt()
         val sy = scrollY.toInt()
         if (sx != 0 || sy != 0) {
-            X11Server.scroll(sx.toFloat(), sy.toFloat())
+            DisplayServer.scroll(sx.toFloat(), sy.toFloat())
             scrollX -= sx
             scrollY -= sy
             scrolled = true
@@ -114,8 +114,8 @@ class TouchGestures(private val handler: Handler = Handler(Looper.getMainLooper(
     }
 
     private fun click(button: Int) {
-        X11Server.button(button, true)
-        X11Server.button(button, false)
+        DisplayServer.button(button, true)
+        DisplayServer.button(button, false)
     }
 
     private fun centerX(event: MotionEvent, excluding: Int = -1) = center(event, excluding) { event.getX(it) }

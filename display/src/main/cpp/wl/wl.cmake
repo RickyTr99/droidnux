@@ -80,4 +80,14 @@ target_include_directories(dnx-wayland-server
 target_compile_options(dnx-wayland-server PRIVATE -fvisibility=hidden -Wno-unused-parameter)
 target_link_libraries(dnx-wayland-server PUBLIC dnx-ffi)
 
+# Our compositor.
+target_sources(droidnux-display PRIVATE
+    ${CMAKE_CURRENT_LIST_DIR}/seat.c
+    ${CMAKE_CURRENT_LIST_DIR}/server.c
+    ${CMAKE_CURRENT_LIST_DIR}/surface.c
+    ${CMAKE_CURRENT_LIST_DIR}/protocols/xdg-shell-protocol.c)
+set_source_files_properties(
+    ${CMAKE_CURRENT_LIST_DIR}/seat.c ${CMAKE_CURRENT_LIST_DIR}/server.c ${CMAKE_CURRENT_LIST_DIR}/surface.c
+    PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-Wno-unused-parameter")
+target_include_directories(droidnux-display PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(droidnux-display PRIVATE dnx-wayland-server)

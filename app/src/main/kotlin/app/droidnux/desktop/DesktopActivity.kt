@@ -31,12 +31,13 @@ import android.view.inputmethod.InputMethodManager
 import android.window.OnBackInvokedDispatcher
 import android.widget.FrameLayout
 import android.widget.TextView
+import app.droidnux.R
 import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
 import app.droidnux.container.Distro
 import app.droidnux.display.AudioFocus
 import app.droidnux.display.Presenter
-import app.droidnux.display.X11Server
+import app.droidnux.display.DisplayServer
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -71,12 +72,13 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     /** Interface size the user chose, 1 = the default; independent of the resolution ([desktopScale]). */
     private var uiScale = 1f
     private lateinit var menu: SessionMenu
+    private val wayland by lazy { resources.getBoolean(R.bool.wayland_frontend) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         current = this
         AudioFocus.init(this)
-        X11Server.onClipboard = { text ->
+        DisplayServer.onClipboard = { text ->
             handler.post {
                 clipboardText = text
                 clipboard.setPrimaryClip(ClipData.newPlainText("DroidNux", text))
@@ -189,12 +191,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** The desktop as it is now, small, for the app's home screen. */
     private fun saveThumbnail() {
-        if (!X11Server.running || surfaceWidth == 0) return
+        if (!DisplayServer.running || surfaceWidth == 0) return
         val width = THUMBNAIL_WIDTH
         val height = width * surfaceHeight / surfaceWidth
         Thread {
             runCatching {
-                val pixels = X11Server.snapshot(width, height) ?: return@Thread
+                val pixels = DisplayServer.snapshot(width, height) ?: return@Thread
                 val bitmap = android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
                 val file = thumbnailFile(this)
                 val temp = java.io.File(file.path + ".new")
@@ -246,7 +248,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         if (focused === this) focused = null
         if (current === this) {
             current = null
-            X11Server.onClipboard = null
+            DisplayServer.onClipboard = null
         }
         super.onDestroy()
     }
@@ -272,7 +274,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
      * focused, so this runs on focus and on changes made meanwhile.
      */
     private fun clipboardToX() {
-        if (!X11Server.running) return
+        if (!DisplayServer.running) return
         // The description is cheap and shows no "pasted" notice: read the text only when it changed.
         val description = clipboard.primaryClipDescription ?: return
         if (description.timestamp == clipboardStamp) return
@@ -280,7 +282,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         val text = clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
         if (text.isNullOrEmpty() || text == clipboardText) return
         clipboardText = text
-        X11Server.setClipboard(text)
+        DisplayServer.setClipboard(text)
     }
 
     private fun capturePointer() {
@@ -295,7 +297,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     override fun surfaceCreated(holder: SurfaceHolder) = Unit
 
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
-        if (!X11Server.available) {
+        if (!wayland && !DisplayServer.available) {
             overlay?.text = "This build has no X server"
             return
         }
@@ -312,16 +314,17 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         val desktopHeight = (surfaceHeight * desktopScale).toInt() and 1.inv()
         scale = desktopWidth.toFloat() / surfaceWidth
 
-        if (!X11Server.running) {
+        if (!DisplayServer.running) {
             val rootfs = Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)
-            val started = X11Server.start(rootfs, desktopWidth, desktopHeight, DPI)
-            Log.i(TAG, "X server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
-            DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout(), dpi())
+            val started = DisplayServer.start(rootfs, desktopWidth, desktopHeight, DPI, wayland = wayland)
+            Log.i(TAG, "display server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
+            // shortcut: the Wayland build starts no session yet, clients come from adb; Fase 4b step 3.
+            if (!wayland) DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout(), dpi())
             clipboardToX()
         } else {
-            X11Server.resize(desktopWidth, desktopHeight)
+            DisplayServer.resize(desktopWidth, desktopHeight)
         }
-        X11Server.redraw()
+        DisplayServer.redraw()
     }
 
     override fun surfaceDestroyed(holder: SurfaceHolder) {
@@ -357,7 +360,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 private fun replaceComposing(text: String) {
                     val common = composing.commonPrefixWith(text)
                     repeat(composing.codePointCount(common.length, composing.length)) { tapKey(KEY_BACKSPACE) }
-                    if (text.length > common.length) X11Server.text(text.substring(common.length))
+                    if (text.length > common.length) DisplayServer.text(text.substring(common.length))
                     composing = text
                 }
 
@@ -378,7 +381,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                             composing = ""
                         }
                         text.toString() == "\n" -> tapKey(KEY_ENTER)
-                        else -> X11Server.text(text)
+                        else -> DisplayServer.text(text)
                     }
                     return true
                 }
@@ -393,8 +396,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun tapKey(evdevKeycode: Int) {
-        X11Server.key(evdevKeycode, true)
-        X11Server.key(evdevKeycode, false)
+        DisplayServer.key(evdevKeycode, true)
+        DisplayServer.key(evdevKeycode, false)
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean =
@@ -419,10 +422,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
         // The soft keyboard's keys have no scan code: map the ones it sends as key events.
         val scanCode = event.scanCode.takeIf { it > 0 } ?: SOFT_KEYS[event.keyCode] ?: 0
-        if (scanCode <= 0 || !X11Server.running || isSystemKey(event.keyCode)) return false
+        if (scanCode <= 0 || !DisplayServer.running || isSystemKey(event.keyCode)) return false
         when (event.action) {
-            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0 && keysDown.add(scanCode)) X11Server.key(scanCode, true)
-            KeyEvent.ACTION_UP -> if (keysDown.remove(scanCode)) X11Server.key(scanCode, false)
+            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0 && keysDown.add(scanCode)) DisplayServer.key(scanCode, true)
+            KeyEvent.ACTION_UP -> if (keysDown.remove(scanCode)) DisplayServer.key(scanCode, false)
         }
         return true
     }
@@ -432,7 +435,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** Releases in X the keys still held, e.g. Ctrl and Alt of the menu shortcut. */
     private fun releaseKeys() {
-        if (X11Server.running) keysDown.forEach { X11Server.key(it, false) }
+        if (DisplayServer.running) keysDown.forEach { DisplayServer.key(it, false) }
         keysDown.clear()
     }
 
@@ -447,21 +450,21 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     // -- Mouse and touchpad ------------------------------------------------
 
     private fun onPointerEvent(event: MotionEvent): Boolean {
-        if (!X11Server.running) return false
+        if (!DisplayServer.running) return false
         showCursor(true)
         // Capture lost without a focus change.
         if (event.actionMasked == MotionEvent.ACTION_HOVER_MOVE) capturePointer()
         when (event.actionMasked) {
             MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_HOVER_ENTER ->
-                X11Server.pointer(event.x * scale, event.y * scale)
-            MotionEvent.ACTION_SCROLL -> X11Server.scroll(
+                DisplayServer.pointer(event.x * scale, event.y * scale)
+            MotionEvent.ACTION_SCROLL -> DisplayServer.scroll(
                 event.getAxisValue(MotionEvent.AXIS_HSCROLL),
                 -event.getAxisValue(MotionEvent.AXIS_VSCROLL), // Android: positive is up
             )
             MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE -> {
                 val button = xButton(event.actionButton) ?: return true
-                X11Server.pointer(event.x * scale, event.y * scale)
-                X11Server.button(button, event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS)
+                DisplayServer.pointer(event.x * scale, event.y * scale)
+                DisplayServer.button(button, event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS)
             }
             else -> return false
         }
@@ -470,7 +473,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** Captured mouse: relative motion, accelerated by X. */
     private fun onCapturedPointer(event: MotionEvent): Boolean {
-        if (!X11Server.running) return false
+        if (!DisplayServer.running) return false
         showCursor(true)
         if (event.isFromSource(InputDevice.SOURCE_TOUCHPAD)) {
             val range = event.device?.getMotionRange(MotionEvent.AXIS_X, InputDevice.SOURCE_TOUCHPAD)?.range ?: 0f
@@ -487,15 +490,15 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                     dx += event.getHistoricalX(i)
                     dy += event.getHistoricalY(i)
                 }
-                if (dx != 0f || dy != 0f) X11Server.pointerRelative(dx, dy)
+                if (dx != 0f || dy != 0f) DisplayServer.pointerRelative(dx, dy)
             }
-            MotionEvent.ACTION_SCROLL -> X11Server.scroll(
+            MotionEvent.ACTION_SCROLL -> DisplayServer.scroll(
                 event.getAxisValue(MotionEvent.AXIS_HSCROLL),
                 -event.getAxisValue(MotionEvent.AXIS_VSCROLL),
             )
             MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE -> {
                 val button = xButton(event.actionButton) ?: return true
-                X11Server.button(button, event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS)
+                DisplayServer.button(button, event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS)
             }
             else -> return false
         }
@@ -518,10 +521,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private fun onTouch(event: MotionEvent): Boolean {
-        if (!X11Server.running) return false
+        if (!DisplayServer.running) return false
         if (event.isFromSource(android.view.InputDevice.SOURCE_MOUSE)) {
             // Mouse drags: buttons come through onPointerEvent, positions here.
-            if (event.actionMasked == MotionEvent.ACTION_MOVE) X11Server.pointer(event.x * scale, event.y * scale)
+            if (event.actionMasked == MotionEvent.ACTION_MOVE) DisplayServer.pointer(event.x * scale, event.y * scale)
             return true
         }
         if (trackpadMode) {
@@ -602,7 +605,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private fun dpi() = (BASE_DPI * uiScale * desktopScale / DEFAULT_SCALE).roundToInt().coerceIn(MIN_DPI, MAX_DPI)
 
     private fun applyUiScale() {
-        if (!X11Server.running) return
+        if (!DisplayServer.running) return
         val command = DesktopEnvironment.uiScaleCommand(dpi())
         Thread {
             runCatching {

@@ -3,7 +3,7 @@ package app.droidnux.desktop
 import android.os.Handler
 import android.os.Looper
 import android.view.MotionEvent
-import app.droidnux.display.X11Server
+import app.droidnux.display.DisplayServer
 import kotlin.math.abs
 
 /**
@@ -40,7 +40,7 @@ class CapturedTouchpad {
                     handler.removeCallbacks(tapClick)
                     pendingTap = false
                     dragging = true
-                    X11Server.button(1, true)
+                    DisplayServer.button(1, true)
                 }
                 downTime = event.eventTime
                 fingers = 1
@@ -58,7 +58,7 @@ class CapturedTouchpad {
                 val tap = travel < TAP_SLOP * unit && event.eventTime - downTime < TAP_TIMEOUT_MS && pressedButton == 0
                 when {
                     dragging -> {
-                        X11Server.button(1, false)
+                        DisplayServer.button(1, false)
                         dragging = false
                         if (tap) click(1) // the second tap of a double click
                     }
@@ -73,10 +73,10 @@ class CapturedTouchpad {
             MotionEvent.ACTION_BUTTON_PRESS -> if (pressedButton == 0) {
                 // A clickpad has one button: two fingers on it mean the right one.
                 pressedButton = if (event.pointerCount >= 2) 3 else 1
-                X11Server.button(pressedButton, true)
+                DisplayServer.button(pressedButton, true)
             }
             MotionEvent.ACTION_BUTTON_RELEASE -> if (pressedButton != 0) {
-                X11Server.button(pressedButton, false)
+                DisplayServer.button(pressedButton, false)
                 pressedButton = 0
                 travel = Float.MAX_VALUE // the release is not a tap
             }
@@ -86,8 +86,8 @@ class CapturedTouchpad {
     }
 
     private fun click(button: Int) {
-        X11Server.button(button, true)
-        X11Server.button(button, false)
+        DisplayServer.button(button, true)
+        DisplayServer.button(button, false)
     }
 
     private fun move(event: MotionEvent, unit: Float) {
@@ -107,7 +107,7 @@ class CapturedTouchpad {
         dy /= count
         travel += abs(dx) + abs(dy)
         if (event.pointerCount == 1) {
-            X11Server.pointerRelative(dx / unit, dy / unit)
+            DisplayServer.pointerRelative(dx / unit, dy / unit)
         } else {
             // Natural scrolling, as on Android: content follows the fingers.
             scrollX -= dx / unit / SCROLL_STEP
@@ -115,7 +115,7 @@ class CapturedTouchpad {
             val sx = scrollX.toInt()
             val sy = scrollY.toInt()
             if (sx != 0 || sy != 0) {
-                X11Server.scroll(sx.toFloat(), sy.toFloat())
+                DisplayServer.scroll(sx.toFloat(), sy.toFloat())
                 scrollX -= sx
                 scrollY -= sy
             }

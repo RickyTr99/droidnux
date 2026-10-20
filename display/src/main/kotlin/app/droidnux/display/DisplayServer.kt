@@ -3,28 +3,32 @@ package app.droidnux.display
 import java.io.File
 
 /**
- * The X11 front-end: an X server running on a thread of this process, drawing
- * through [Presenter]. One per process, started once. Input methods may be
- * called from any thread.
+ * The display server the desktop's clients connect to, on a thread of this
+ * process and drawing through [Presenter]: the X11 front-end (an X server) or
+ * the Wayland one (a compositor hosting a nested one). One per process,
+ * started once. Input methods may be called from any thread.
  */
-object X11Server {
+object DisplayServer {
 
     init {
         DisplayCore // loads the native library
     }
 
-    /** False in builds without the X server (Windows builds without the CI prebuilt). */
+    /** False in builds without the X server (Windows builds without the CI prebuilt), for X11 only. */
     val available: Boolean get() = nativeAvailable()
 
-    val running: Boolean get() = available && nativeRunning()
+    val running: Boolean get() = nativeRunning()
 
     /**
-     * Starts the server for the container whose root filesystem is [rootfs]:
-     * the socket goes in its /tmp/.X11-unix, keymaps and fonts come from it.
+     * Starts the server for the container whose root filesystem is [rootfs].
+     * X11: the socket goes in its /tmp/.X11-unix, keymaps and fonts come from
+     * it. Wayland: the socket is its /tmp/wayland-[display] (/tmp is the
+     * session's XDG_RUNTIME_DIR).
      */
-    fun start(rootfs: File, width: Int, height: Int, dpi: Int, display: Int = 0): Boolean {
-        check(available) { "this build has no X server" }
+    fun start(rootfs: File, width: Int, height: Int, dpi: Int, display: Int = 0, wayland: Boolean = false): Boolean {
         val tmp = File(rootfs, "tmp").apply { mkdirs() }
+        if (wayland) return nativeStartWayland(tmp.absolutePath, display, width, height)
+        check(available) { "this build has no X server" }
         return nativeStart(
             tmp.absolutePath,
             File(rootfs, "usr/share/X11/xkb").absolutePath,
@@ -78,6 +82,7 @@ object X11Server {
     @JvmStatic private external fun nativeStart(
         tmpDir: String, xkbDir: String, fontDir: String, display: Int, width: Int, height: Int, dpi: Int,
     ): Boolean
+    @JvmStatic private external fun nativeStartWayland(tmpDir: String, display: Int, width: Int, height: Int): Boolean
     @JvmStatic private external fun nativeRunning(): Boolean
     @JvmStatic private external fun nativeResize(width: Int, height: Int)
     @JvmStatic private external fun nativeRedraw()

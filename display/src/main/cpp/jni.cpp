@@ -122,18 +122,37 @@ Java_app_droidnux_display_Presenter_nativeTakeFrameTimeMax(JNIEnv*, jclass) {
     return static_cast<jlong>(dnx_presenter_take_frame_time_max_ns());
 }
 
-// -- X11 front-end -----------------------------------------------------------
+// -- Display server: X11 or Wayland front-end ------------------------------
 
+#include <atomic>
+
+#include "dnx_wl.h"
 #if DROIDNUX_HAVE_X11
 #include "dnx_x11.h"
+#define DNX_X11_CALL(fn, ...) dnx_x11_##fn(__VA_ARGS__)
+#else
+#define DNX_X11_CALL(fn, ...) ((void) 0)
 #endif
 
+namespace {
+// Which front-end DisplayServer started; set once, before any input.
+std::atomic<bool> wayland{false};
+}  // namespace
+
+// The same call to whichever front-end runs.
+#define DNX_DISPLAY_CALL(fn, ...)                    \
+    do {                                             \
+        if (wayland) {                               \
+            dnx_wl_##fn(__VA_ARGS__);                \
+        } else {                                     \
+            DNX_X11_CALL(fn, __VA_ARGS__);           \
+        }                                            \
+    } while (0)
+
 extern "C" JNIEXPORT jboolean JNICALL
-Java_app_droidnux_display_X11Server_nativeAvailable(JNIEnv*, jclass) {
+Java_app_droidnux_display_DisplayServer_nativeAvailable(JNIEnv*, jclass) {
     return DROIDNUX_HAVE_X11 ? JNI_TRUE : JNI_FALSE;
 }
-
-#if DROIDNUX_HAVE_X11
 
 namespace {
 struct JniString {
@@ -145,8 +164,74 @@ struct JniString {
         if (chars) env->ReleaseStringUTFChars(string, chars);
     }
 };
+}  // namespace
 
-// X clients' copies go to X11Server.clipboardFromX, on the X server thread.
+extern "C" JNIEXPORT jboolean JNICALL
+Java_app_droidnux_display_DisplayServer_nativeStartWayland(JNIEnv* env, jclass, jstring tmpDir, jint display, jint width,
+                                                           jint height) {
+    JniString tmp(env, tmpDir);
+    dnx_wl_config config{tmp.chars, display, width, height};
+    if (!dnx_wl_start(&config)) return JNI_FALSE;
+    wayland = true;
+    return JNI_TRUE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_app_droidnux_display_DisplayServer_nativeRunning(JNIEnv*, jclass) {
+    if (wayland) return dnx_wl_running() ? JNI_TRUE : JNI_FALSE;
+#if DROIDNUX_HAVE_X11
+    return dnx_x11_running() ? JNI_TRUE : JNI_FALSE;
+#else
+    return JNI_FALSE;
+#endif
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeResize(JNIEnv*, jclass, jint width, jint height) {
+    DNX_DISPLAY_CALL(resize, width, height);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeRedraw(JNIEnv*, jclass) {
+    DNX_DISPLAY_CALL(redraw);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeKey(JNIEnv*, jclass, jint keycode, jboolean down) {
+    DNX_DISPLAY_CALL(key, keycode, down);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeText(JNIEnv*, jclass, jint codepoint) {
+    DNX_DISPLAY_CALL(text, static_cast<uint32_t>(codepoint));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativePointer(JNIEnv*, jclass, jfloat x, jfloat y) {
+    DNX_DISPLAY_CALL(pointer_move, x, y);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativePointerRelative(JNIEnv*, jclass, jfloat dx, jfloat dy) {
+    DNX_DISPLAY_CALL(pointer_move_relative, dx, dy);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeButton(JNIEnv*, jclass, jint button, jboolean down) {
+    DNX_DISPLAY_CALL(button, button, down);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeScroll(JNIEnv*, jclass, jfloat dx, jfloat dy) {
+    DNX_DISPLAY_CALL(scroll, dx, dy);
+}
+
+// Snapshot and clipboard: X11 only so far.
+
+#if DROIDNUX_HAVE_X11
+
+namespace {
+// X clients' copies go to DisplayServer.clipboardFromX, on the X server thread.
 JavaVM* clipboardVm;
 jclass clipboardClass;
 jmethodID clipboardMethod;
@@ -169,8 +254,8 @@ void onClipboardFromX(const char* utf8) {
 }  // namespace
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_app_droidnux_display_X11Server_nativeStart(JNIEnv* env, jclass clazz, jstring tmpDir, jstring xkbDir, jstring fontDir,
-                                                jint display, jint width, jint height, jint dpi) {
+Java_app_droidnux_display_DisplayServer_nativeStart(JNIEnv* env, jclass clazz, jstring tmpDir, jstring xkbDir,
+                                                    jstring fontDir, jint display, jint width, jint height, jint dpi) {
     JniString tmp(env, tmpDir), xkb(env, xkbDir), fonts(env, fontDir);
     if (clipboardVm == nullptr) {
         env->GetJavaVM(&clipboardVm);
@@ -182,54 +267,9 @@ Java_app_droidnux_display_X11Server_nativeStart(JNIEnv* env, jclass clazz, jstri
     return dnx_x11_start(&config) ? JNI_TRUE : JNI_FALSE;
 }
 
-extern "C" JNIEXPORT jboolean JNICALL
-Java_app_droidnux_display_X11Server_nativeRunning(JNIEnv*, jclass) {
-    return dnx_x11_running() ? JNI_TRUE : JNI_FALSE;
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_X11Server_nativeResize(JNIEnv*, jclass, jint width, jint height) {
-    dnx_x11_resize(width, height);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_X11Server_nativeRedraw(JNIEnv*, jclass) {
-    dnx_x11_redraw();
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_X11Server_nativeKey(JNIEnv*, jclass, jint keycode, jboolean down) {
-    dnx_x11_key(keycode, down);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_X11Server_nativeText(JNIEnv*, jclass, jint codepoint) {
-    dnx_x11_text(static_cast<uint32_t>(codepoint));
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_X11Server_nativePointer(JNIEnv*, jclass, jfloat x, jfloat y) {
-    dnx_x11_pointer_move(x, y);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_X11Server_nativePointerRelative(JNIEnv*, jclass, jfloat dx, jfloat dy) {
-    dnx_x11_pointer_move_relative(dx, dy);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_X11Server_nativeButton(JNIEnv*, jclass, jint button, jboolean down) {
-    dnx_x11_button(button, down);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_X11Server_nativeScroll(JNIEnv*, jclass, jfloat dx, jfloat dy) {
-    dnx_x11_scroll(dx, dy);
-}
-
 extern "C" JNIEXPORT jintArray JNICALL
-Java_app_droidnux_display_X11Server_nativeSnapshot(JNIEnv* env, jclass, jint width, jint height) {
-    if (width <= 0 || height <= 0 || width > 4096 || height > 4096) return nullptr;
+Java_app_droidnux_display_DisplayServer_nativeSnapshot(JNIEnv* env, jclass, jint width, jint height) {
+    if (wayland || width <= 0 || height <= 0 || width > 4096 || height > 4096) return nullptr;
     std::vector<uint32_t> pixels(static_cast<size_t>(width) * height);
     if (!dnx_x11_snapshot(pixels.data(), width, height)) return nullptr;
     jintArray result = env->NewIntArray(width * height);
@@ -238,12 +278,28 @@ Java_app_droidnux_display_X11Server_nativeSnapshot(JNIEnv* env, jclass, jint wid
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_X11Server_nativeSetClipboard(JNIEnv* env, jclass, jbyteArray utf8) {
+Java_app_droidnux_display_DisplayServer_nativeSetClipboard(JNIEnv* env, jclass, jbyteArray utf8) {
+    if (wayland) return;
     jsize length = env->GetArrayLength(utf8);
     jbyte* bytes = env->GetByteArrayElements(utf8, nullptr);
     if (bytes == nullptr) return;
     dnx_x11_set_clipboard(reinterpret_cast<const char*>(bytes), static_cast<size_t>(length));
     env->ReleaseByteArrayElements(utf8, bytes, JNI_ABORT);
 }
+
+#else  // Wayland only: the X11 entry points answer "nothing".
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_app_droidnux_display_DisplayServer_nativeStart(JNIEnv*, jclass, jstring, jstring, jstring, jint, jint, jint, jint) {
+    return JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jintArray JNICALL
+Java_app_droidnux_display_DisplayServer_nativeSnapshot(JNIEnv*, jclass, jint, jint) {
+    return nullptr;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeSetClipboard(JNIEnv*, jclass, jbyteArray) {}
 
 #endif  // DROIDNUX_HAVE_X11

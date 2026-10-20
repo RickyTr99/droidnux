@@ -50,7 +50,7 @@ import app.droidnux.container.CommandResult
 import app.droidnux.container.Component
 import app.droidnux.container.InstallProgress
 import app.droidnux.desktop.DesktopActivity
-import app.droidnux.display.X11Server
+import app.droidnux.display.DisplayServer
 import app.droidnux.spike.BufferSpikeActivity
 
 @Composable
@@ -269,7 +269,7 @@ private fun StorageAccess() {
 private fun DesktopSection(state: AppState, onInstall: () -> Unit) {
     val context = LocalContext.current
     when {
-        !X11Server.available -> Status(stringResource(R.string.desktop_no_x11), error = true)
+        !DisplayServer.available -> Status(stringResource(R.string.desktop_no_x11), error = true)
         state.desktopInstalling -> {
             Status(stringResource(R.string.desktop_installing))
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))
