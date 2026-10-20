@@ -47,6 +47,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private var surfaceWidth = 0
     private var surfaceHeight = 0
     private val touch = TouchGestures(handler)
+    private var cursorVisible = true
     private val clipboard by lazy { getSystemService(ClipboardManager::class.java) }
     /** Last text exchanged with X, so neither side gets its own copy back. */
     private var clipboardText: String? = null
@@ -248,6 +249,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     private fun onPointerEvent(event: MotionEvent): Boolean {
         if (!X11Server.running) return false
+        showCursor(true)
         // Capture lost without a focus change.
         if (event.actionMasked == MotionEvent.ACTION_HOVER_MOVE) capturePointer()
         when (event.actionMasked) {
@@ -270,6 +272,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     /** Captured mouse: relative motion, accelerated by X. */
     private fun onCapturedPointer(event: MotionEvent): Boolean {
         if (!X11Server.running) return false
+        showCursor(true)
         if (event.isFromSource(InputDevice.SOURCE_TOUCHPAD)) {
             val range = event.device?.getMotionRange(MotionEvent.AXIS_X, InputDevice.SOURCE_TOUCHPAD)?.range ?: 0f
             // The whole touchpad width crosses half the desktop before X's acceleration.
@@ -300,6 +303,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         return true
     }
 
+    private fun showCursor(visible: Boolean) {
+        if (visible == cursorVisible) return
+        cursorVisible = visible
+        Presenter.setCursorVisible(visible)
+    }
+
     private fun xButton(androidButton: Int) = when (androidButton) {
         MotionEvent.BUTTON_PRIMARY -> 1
         MotionEvent.BUTTON_TERTIARY -> 2
@@ -316,6 +325,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             if (event.actionMasked == MotionEvent.ACTION_MOVE) X11Server.pointer(event.x * scale, event.y * scale)
             return true
         }
+        showCursor(false) // a finger needs no pointer; the next mouse motion brings it back
         touch.onEvent(event, scale, touchSlop)
         return true
     }

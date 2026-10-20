@@ -1,9 +1,13 @@
 package app.droidnux.container
 
 import android.content.Context
+import android.os.Environment
 import android.system.ErrnoException
 import android.system.Os
 import java.io.File
+
+/** Where the device's shared storage appears in the guest. */
+internal const val GUEST_SDCARD = "/sdcard"
 
 /**
  * Builds proot command lines.
@@ -51,6 +55,10 @@ class Proot(context: Context) {
             }
             // Android has no /dev/shm; glibc shm_open() needs one.
             add("-b"); add("${File(rootfs, SHM_DIR).apply { mkdirs() }.absolutePath}:/dev/shm")
+            // The device's shared storage, once the user allows access to all files.
+            if (Environment.isExternalStorageManager()) {
+                add("-b"); add("${Environment.getExternalStorageDirectory().absolutePath}:$GUEST_SDCARD")
+            }
             addAll(gpuNodeBinds())
             add("-w"); add(workDir)
             add("/usr/bin/env"); add("-i")

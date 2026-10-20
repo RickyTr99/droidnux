@@ -29,6 +29,9 @@
     <string name="action_update_desktop">Aggiorna</string>
     <string name="desktop_size">Dimensione del desktop: %1$d%% (%2$d×%3$d)</string>
     <string name="action_open_desktop">Apri il desktop</string>
+    <string name="storage_granted">Memoria del dispositivo: in /sdcard e nella cartella Android della home.</string>
+    <string name="storage_denied">Memoria del dispositivo: consenti l’accesso a tutti i file per vederla in Linux.</string>
+    <string name="action_allow_storage">Consenti l’accesso</string>
     <string name="desktop_installing">Installazione…</string>
     <string name="session_channel">Sessione desktop</string>
     <string name="session_running">Desktop Linux in esecuzione</string>

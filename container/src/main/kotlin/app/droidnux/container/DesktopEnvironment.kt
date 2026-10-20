@@ -146,6 +146,11 @@ object DesktopEnvironment {
                 setxkbmap "${'$'}DROIDNUX_XKB_LAYOUT" || echo "setxkbmap ${'$'}DROIDNUX_XKB_LAYOUT failed"
             fi
 
+            # The device's storage in the home folder (when the app may access it).
+            if [ -d $GUEST_SDCARD ] && [ ! -e /root/Android ] && [ ! -L /root/Android ]; then
+                ln -s $GUEST_SDCARD /root/Android
+            fi
+
             exec dbus-launch --exit-with-session "${'$'}0" --in-dbus
         fi
 

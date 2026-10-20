@@ -36,6 +36,9 @@
     <string name="action_update_desktop">Update</string>
     <string name="desktop_size">Desktop size: %1$d%% (%2$d×%3$d)</string>
     <string name="action_open_desktop">Open desktop</string>
+    <string name="storage_granted">Device storage: in /sdcard and in the Android folder of the home.</string>
+    <string name="storage_denied">Device storage: allow access to all files to see it in Linux.</string>
+    <string name="action_allow_storage">Allow access</string>
     <string name="desktop_installing">Installing…</string>
     <string name="session_channel">Desktop session</string>
     <string name="session_running">Linux desktop running</string>

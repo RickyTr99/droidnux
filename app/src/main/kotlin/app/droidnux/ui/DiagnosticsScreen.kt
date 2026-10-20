@@ -1,6 +1,9 @@
 package app.droidnux.ui
 
 import android.content.Intent
+import android.net.Uri
+import android.os.Environment
+import android.provider.Settings
 import android.text.format.Formatter
 import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
@@ -42,6 +45,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import app.droidnux.R
@@ -226,6 +230,31 @@ private fun InstallSection(
     }
 }
 
+/** Shared storage for the guest: needs "all files access", granted in Android's settings. */
+@Composable
+private fun StorageAccess() {
+    val context = LocalContext.current
+    var granted by remember { mutableStateOf(Environment.isExternalStorageManager()) }
+    LifecycleResumeEffect(Unit) {
+        granted = Environment.isExternalStorageManager()
+        onPauseOrDispose {}
+    }
+    Spacer(Modifier.padding(top = 12.dp))
+    Status(stringResource(if (granted) R.string.storage_granted else R.string.storage_denied))
+    AnimatedVisibility(visible = !granted) {
+        ActionRow {
+            FilledTonalButton(onClick = {
+                context.startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.fromParts("package", context.packageName, null),
+                    ),
+                )
+            }) { Text(stringResource(R.string.action_allow_storage)) }
+        }
+    }
+}
+
 @Composable
 private fun DesktopSection(state: DiagnosticsState, onInstall: () -> Unit) {
     val context = LocalContext.current
@@ -250,6 +279,7 @@ private fun DesktopSection(state: DiagnosticsState, onInstall: () -> Unit) {
                     FilledTonalButton(onClick = onInstall) { Text(stringResource(R.string.action_update_desktop)) }
                 }
             }
+            StorageAccess()
         }
         else -> {
             Status(stringResource(R.string.desktop_not_installed))
