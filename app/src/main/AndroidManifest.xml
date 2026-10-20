@@ -28,12 +28,15 @@
         </activity>
 
         <!-- The desktop, its X server and its session live in their own
-             process: a crash there never takes down the rest of the app. -->
+             process: a crash there never takes down the rest of the app.
+             Its own task too: the app's icon always leads to the home
+             screen, and the desktop is a separate entry in recent apps. -->
         <activity
             android:name=".desktop.DesktopActivity"
             android:exported="false"
             android:process=":desktop"
             android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.desktop"
             android:resizeableActivity="true"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|density|uiMode"
             android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />

@@ -51,6 +51,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -65,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -394,6 +396,7 @@ private fun SettingsTab(padding: PaddingValues) {
                             selected = settings.trackpad == trackpad,
                             onClick = { save { it.copy(trackpad = trackpad) } },
                             shape = SegmentedButtonDefaults.itemShape(index, 2),
+                            icon = {},
                         ) { Text(stringResource(label)) }
                     }
                 }
@@ -439,8 +442,9 @@ private fun SliderRow(
             onValueChange = onChange,
             onValueChangeFinished = onDone,
             valueRange = range,
-            // 5% steps.
+            // 5% steps, without a tick mark for each.
             steps = ((range.endInclusive - range.start) * 20).roundToInt() - 1,
+            colors = SliderDefaults.colors(activeTickColor = Color.Transparent, inactiveTickColor = Color.Transparent),
         )
     }
 }

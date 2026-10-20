@@ -76,7 +76,7 @@
     <string name="settings_keyboard">Keyboard</string>
     <string name="settings_layout">Keyboard layout</string>
     <string name="settings_next_session">The layout applies the next time the desktop starts.</string>
-    <string name="layout_system">From the system (%1$s)</string>
+    <string name="layout_system">From the system · %1$s</string>
     <string name="system_installed">Installed</string>
     <string name="system_desktop_ok">Up to date</string>
     <string name="system_desktop_update">This version of the app adds packages</string>

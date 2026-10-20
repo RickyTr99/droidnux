@@ -69,7 +69,7 @@
     <string name="settings_keyboard">Tastiera</string>
     <string name="settings_layout">Layout della tastiera</string>
     <string name="settings_next_session">Il layout vale dal prossimo avvio del desktop.</string>
-    <string name="layout_system">Dal sistema (%1$s)</string>
+    <string name="layout_system">Dal sistema · %1$s</string>
     <string name="system_installed">Installato</string>
     <string name="system_desktop_ok">Aggiornato</string>
     <string name="system_desktop_update">Questa versione dell’app aggiunge pacchetti</string>
