@@ -54,7 +54,7 @@ import app.droidnux.display.X11Server
 import app.droidnux.spike.BufferSpikeActivity
 
 @Composable
-fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
+fun DiagnosticsScreen(viewModel: AppViewModel = viewModel()) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     Column(
@@ -150,7 +150,7 @@ fun DiagnosticsScreen(viewModel: DiagnosticsViewModel = viewModel()) {
 }
 
 @Composable
-private fun ComponentSection(component: Component, name: String, state: DiagnosticsState, viewModel: DiagnosticsViewModel) {
+private fun ComponentSection(component: Component, name: String, state: AppState, viewModel: AppViewModel) {
     val install = state.components[component.id] ?: InstallState.Checking
     if (component.sha256.isEmpty()) {
         Status(stringResource(R.string.component_unreleased, name))
@@ -266,7 +266,7 @@ private fun StorageAccess() {
 }
 
 @Composable
-private fun DesktopSection(state: DiagnosticsState, onInstall: () -> Unit) {
+private fun DesktopSection(state: AppState, onInstall: () -> Unit) {
     val context = LocalContext.current
     when {
         !X11Server.available -> Status(stringResource(R.string.desktop_no_x11), error = true)

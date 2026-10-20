@@ -1,6 +1,8 @@
 package app.droidnux.container
 
+import android.system.ErrnoException
 import android.system.Os
+import android.system.OsConstants
 import java.io.File
 import java.io.IOException
 
@@ -12,6 +14,13 @@ object DesktopEnvironment {
 
     const val SESSION_SCRIPT = "/usr/local/bin/droidnux-session"
     private const val UI_SCALE_SCRIPT = "/usr/local/bin/droidnux-ui-scale"
+    private const val APPS_SCRIPT = "/usr/local/bin/droidnux-apps"
+
+    /** PNG icons of the desktop's apps, kept by [APPS_SCRIPT] for Android. */
+    private const val ICON_CACHE = "/var/cache/droidnux/icons"
+
+    /** FIFO the session reads desktop ids from, to start those apps inside it. */
+    private const val LAUNCH_FIFO = "/tmp/.droidnux-launch"
     const val DISPLAY = 0
 
     /** MIT-SHM segments the app's X server can attach (display/src/main/cpp/shm). */
@@ -42,6 +51,8 @@ object DesktopEnvironment {
         "adwaita-icon-theme", "fonts-dejavu-core", "tzdata",
         // DroidNux's look (XSETTINGS_DEFAULTS, PANEL_DEFAULTS); Papirus comes in the theme component.
         "arc-theme", "fonts-inter", "xfce4-whiskermenu-plugin", "xfce4-docklike-plugin", "xfce4-pulseaudio-plugin",
+        // The app's list of Linux apps: gio starts them, rsvg-convert draws their icons (APPS_SCRIPT).
+        "libglib2.0-bin", "librsvg2-bin",
         // SVG loader for gdk-pixbuf: XFCE's default wallpaper and many icons are SVG.
         "librsvg2-common",
         // H.264 and AAC for Firefox: its bundled decoders cover only VP8/VP9/AV1/Opus/Vorbis.
@@ -82,6 +93,7 @@ object DesktopEnvironment {
     fun prepare(rootfs: File, nativeLibraryDir: File) {
         writeFile(rootfs, SESSION_SCRIPT, SESSION.toByteArray(), mode = 0x1ED /* 0755 */)
         writeFile(rootfs, UI_SCALE_SCRIPT, UI_SCALE.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, APPS_SCRIPT, APPS.toByteArray(), mode = 0x1ED)
         writeFile(
             rootfs, "$GUEST_LIB_DIR/$SHM_LIBRARY", File(nativeLibraryDir, SHM_LIBRARY).readBytes(),
             mode = 0x1A4,
@@ -106,6 +118,108 @@ object DesktopEnvironment {
 
     /** Command applying the interface size ([dpi], 96 = 1x) to the running session. */
     fun uiScaleCommand(dpi: Int): String = "$UI_SCALE_SCRIPT $dpi"
+
+    /** A launchable app of the desktop, from its .desktop file. */
+    data class LinuxApp(val id: String, val name: String, val categories: List<String>)
+
+    /** Command listing the desktop's apps (see [parseApps]), named in [language] when they can be. */
+    fun appsCommand(language: String): String =
+        "$APPS_SCRIPT ${language.filter { it.isLetter() }.ifEmpty { "en" }}"
+
+    fun parseApps(output: String): List<LinuxApp> = output.lineSequence().mapNotNull { line ->
+        val fields = line.split('\t')
+        if (fields.size < 3 || !isDesktopId(fields[0])) return@mapNotNull null
+        LinuxApp(fields[0], fields[1], fields[2].split(';').filter { it.isNotEmpty() })
+    }.toList()
+
+    /** The icon [APPS_SCRIPT] keeps for an app, if any. */
+    fun iconFile(rootfs: File, id: String): File? {
+        if (!isDesktopId(id)) return null
+        val file = File(rootfs.canonicalFile, "${ICON_CACHE.removePrefix("/")}/$id.png")
+        // Read only real files inside the rootfs, never through a guest link.
+        return file.takeIf { it.isFile && it.canonicalPath == it.path }
+    }
+
+    /**
+     * Asks the running session to start the app [id]. False when no session
+     * listens yet (none running, or still starting).
+     */
+    fun requestLaunch(rootfs: File, id: String): Boolean {
+        if (!isDesktopId(id)) return false
+        val fifo = File(rootfs, LAUNCH_FIFO.removePrefix("/"))
+        if (java.nio.file.Files.isSymbolicLink(fifo.toPath())) return false
+        return try {
+            // Non-blocking: with no reader the open fails (ENXIO) instead of waiting.
+            val fd = Os.open(fifo.path, OsConstants.O_WRONLY or OsConstants.O_NONBLOCK, 0)
+            try {
+                val line = "$id\n".toByteArray()
+                Os.write(fd, line, 0, line.size) == line.size
+            } finally {
+                Os.close(fd)
+            }
+        } catch (_: ErrnoException) {
+            false
+        }
+    }
+
+    private fun isDesktopId(id: String) = id.isNotEmpty() && id.all { it.isLetterOrDigit() || it in "._-" }
+
+    private val APPS = """
+        #!/bin/sh
+        # Written by DroidNux: lists the desktop's applications for the app, one per
+        # line (desktop id, name in the language ${'$'}1, categories; tab-separated), and
+        # keeps a PNG of each one's icon in $ICON_CACHE/<id>.png for Android.
+        CACHE=$ICON_CACHE
+        mkdir -p "${'$'}CACHE"
+        lang=${'$'}{1:-en}
+        tab=${'$'}(printf '\t')
+
+        find_icon() {
+            case "${'$'}1" in
+            /*) [ -f "${'$'}1" ] && echo "${'$'}1"; return ;;
+            '') return ;;
+            esac
+            for dir in $THEME_PREFIX/share/icons/Papirus/64x64/apps /usr/share/icons/Papirus/64x64/apps \
+                /usr/share/icons/hicolor/scalable/apps /usr/share/icons/hicolor/256x256/apps \
+                /usr/share/icons/hicolor/128x128/apps /usr/share/icons/hicolor/64x64/apps \
+                /usr/share/icons/hicolor/48x48/apps /usr/share/pixmaps; do
+                for ext in svg png; do
+                    [ -f "${'$'}dir/${'$'}1.${'$'}ext" ] && { echo "${'$'}dir/${'$'}1.${'$'}ext"; return; }
+                done
+            done
+        }
+
+        render() {
+            src=${'$'}(find_icon "${'$'}1")
+            case "${'$'}src" in
+            *.svg) rsvg-convert -w 96 -h 96 -o "${'$'}2.tmp" "${'$'}src" 2> /dev/null && mv "${'$'}2.tmp" "${'$'}2" ;;
+            *.png) cp "${'$'}src" "${'$'}2.tmp" && mv "${'$'}2.tmp" "${'$'}2" ;;
+            *) rm -f "${'$'}2" ;;
+            esac
+        }
+
+        for f in /usr/local/share/applications/*.desktop /usr/share/applications/*.desktop; do
+            [ -f "${'$'}f" ] || continue
+            id=${'$'}(basename "${'$'}f" .desktop)
+            awk -F= -v lang="${'$'}lang" '
+                /^\[/ { section = ${'$'}0; next }
+                section != "[Desktop Entry]" { next }
+                ${'$'}1 == "Type" { type = ${'$'}2 }
+                ${'$'}1 == "Name" { name = substr(${'$'}0, 6) }
+                ${'$'}1 == "Name[" lang "]" { lname = substr(${'$'}0, length(lang) + 8) }
+                ${'$'}1 == "Icon" { icon = substr(${'$'}0, 6) }
+                (${'$'}1 == "NoDisplay" || ${'$'}1 == "Hidden") && ${'$'}2 == "true" { hidden = 1 }
+                ${'$'}1 == "OnlyShowIn" && ${'$'}2 !~ /(^|;)XFCE(;|${'$'})/ { hidden = 1 }
+                ${'$'}1 == "NotShowIn" && ${'$'}2 ~ /(^|;)XFCE(;|${'$'})/ { hidden = 1 }
+                ${'$'}1 == "Categories" { cats = ${'$'}2 }
+                END { if (type == "Application" && !hidden && name != "") print (lname != "" ? lname : name) "\t" icon "\t" cats }
+            ' "${'$'}f" | while IFS="${'$'}tab" read -r name icon cats; do
+                png=${'$'}CACHE/${'$'}id.png
+                if [ ! -s "${'$'}png" ] || [ "${'$'}f" -nt "${'$'}png" ]; then render "${'$'}icon" "${'$'}png"; fi
+                printf '%s\t%s\t%s\n' "${'$'}id" "${'$'}name" "${'$'}cats"
+            done
+        done
+    """.trimIndent() + "\n"
 
     private val UI_SCALE = """
         #!/bin/sh
@@ -229,6 +343,17 @@ object DesktopEnvironment {
         fi
         # The interface size, once xfsettingsd and the panel are up.
         if [ -n "${'$'}DROIDNUX_DPI" ]; then (sleep 4; $UI_SCALE_SCRIPT "${'$'}DROIDNUX_DPI") & fi
+        # Apps the app starts (its app list, Android shortcuts), by desktop id: they
+        # must run in this proot, which a separate one would kill when it exits.
+        rm -f $LAUNCH_FIFO && mkfifo -m 600 $LAUNCH_FIFO
+        (while :; do
+            while read -r id; do
+                case "${'$'}id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+                for d in /usr/local/share/applications /usr/share/applications; do
+                    [ -f "${'$'}d/${'$'}id.desktop" ] && { gio launch "${'$'}d/${'$'}id.desktop" & break; }
+                done
+            done < $LAUNCH_FIFO
+        done) &
         startxfce4
         echo $SESSION_END_MARKER
     """.trimIndent() + "\n"

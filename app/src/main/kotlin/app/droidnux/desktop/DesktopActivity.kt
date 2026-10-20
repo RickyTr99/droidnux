@@ -66,7 +66,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private val touchpad = CapturedTouchpad()
     /** The touchscreen in trackpad mode: the finger moves the pointer instead of clicking where it lands. */
     private val screenTouchpad = CapturedTouchpad()
-    private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
     private var trackpadMode = false
     /** Interface size the user chose, 1 = the default; independent of the resolution ([desktopScale]). */
     private var uiScale = 1f
@@ -81,8 +80,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 clipboard.setPrimaryClip(ClipData.newPlainText("DroidNux", text))
             }
         }
-        desktopScale = prefs.getFloat(PREF_DESKTOP_SCALE, DEFAULT_SCALE)
+        val settings = DesktopSettings.load(this)
+        desktopScale = settings.scale
         desktopScale = scaleOf(intent)
+        trackpadMode = settings.trackpad
+        uiScale = settings.uiScale
+        intent.getStringExtra(EXTRA_LAUNCH)?.let { launchApp(it) }
         window.attributes = window.attributes.apply {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
@@ -124,8 +127,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
             ))
         }
-        trackpadMode = prefs.getBoolean(PREF_TRACKPAD, false)
-        uiScale = prefs.getFloat(PREF_UI_SCALE, 1f)
         menu = SessionMenu(this, menuListener)
         root.addView(menu.view, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
@@ -149,6 +150,34 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             desktopScale = requested
             if (surfaceWidth > 0) resizeDesktop()
         }
+        intent.getStringExtra(EXTRA_LAUNCH)?.let { launchApp(it) }
+    }
+
+    /** Starts the Linux app [id] in the session, as soon as the session listens (it may be starting). */
+    private fun launchApp(id: String) {
+        val rootfs = Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)
+        Thread {
+            repeat(LAUNCH_ATTEMPTS) {
+                if (DesktopEnvironment.requestLaunch(rootfs, id)) return@Thread
+                Thread.sleep(LAUNCH_RETRY_MS)
+            }
+            Log.w(TAG, "the session never listened for $id")
+        }.start()
+    }
+
+    /** Settings changed in the app while the desktop was in the background apply on return. */
+    private fun reloadSettings() {
+        val settings = DesktopSettings.load(this)
+        trackpadMode = settings.trackpad
+        if (settings.scale != desktopScale) {
+            desktopScale = settings.scale.coerceIn(MIN_SCALE, MAX_SCALE)
+            if (surfaceWidth > 0) resizeDesktop()
+            uiScale = settings.uiScale
+            applyUiScale()
+        } else if (settings.uiScale != uiScale) {
+            uiScale = settings.uiScale
+            applyUiScale()
+        }
     }
 
     /** The scale [intent] asks for; intents without one (the notification) keep the current size. */
@@ -157,6 +186,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onResume() {
         super.onResume()
+        reloadSettings()
         surfaceView.requestFocus()
         clipboard.addPrimaryClipChangedListener(clipboardListener)
         overlay?.let { handler.post(overlayUpdater) }
@@ -243,7 +273,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             val rootfs = Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)
             val started = X11Server.start(rootfs, desktopWidth, desktopHeight, DPI)
             Log.i(TAG, "X server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
-            DesktopSessionService.start(this, keyboardLayout(), dpi())
+            DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout(), dpi())
             clipboardToX()
         } else {
             X11Server.resize(desktopWidth, desktopHeight)
@@ -461,7 +491,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
         override fun onTrackpadChanged(trackpad: Boolean) {
             trackpadMode = trackpad
-            prefs.edit().putBoolean(PREF_TRACKPAD, trackpad).apply()
+            DesktopSettings.update(this@DesktopActivity) { it.copy(trackpad = trackpad) }
         }
 
         override fun resolutionFor(scale: Float) =
@@ -469,14 +499,14 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
         override fun onScaleChanged(scale: Float) {
             desktopScale = scale.coerceIn(MIN_SCALE, MAX_SCALE)
-            prefs.edit().putFloat(PREF_DESKTOP_SCALE, desktopScale).apply()
+            DesktopSettings.update(this@DesktopActivity) { it.copy(scale = desktopScale) }
             if (surfaceWidth > 0) resizeDesktop()
             applyUiScale() // same physical size at the new resolution
         }
 
         override fun onUiScaleChanged(scale: Float) {
             uiScale = scale
-            prefs.edit().putFloat(PREF_UI_SCALE, scale).apply()
+            DesktopSettings.update(this@DesktopActivity) { it.copy(uiScale = scale) }
             applyUiScale()
         }
 
@@ -533,12 +563,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
-    private fun keyboardLayout(): String = when (Locale.getDefault().language) {
-        "it", "de", "fr", "es", "pt" -> Locale.getDefault().language
-        "en" -> if (Locale.getDefault().country == "GB") "gb" else "us"
-        else -> "us"
-    }
-
     companion object {
         private const val TAG = "DroidNux.Desktop"
 
@@ -558,10 +582,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         const val MAX_SCALE = 1f
 
         private const val GESTURE_EXCLUSION_DP = 200
-        private const val PREFS = "desktop"
-        private const val PREF_TRACKPAD = "trackpad"
-        private const val PREF_UI_SCALE = "ui_scale"
-        private const val PREF_DESKTOP_SCALE = "desktop_scale"
+        /** String extra: desktop id of a Linux app to start in the session. */
+        const val EXTRA_LAUNCH = "app.droidnux.desktop.LAUNCH"
+        private const val LAUNCH_ATTEMPTS = 120
+        private const val LAUNCH_RETRY_MS = 500L
         private const val BASE_DPI = 96
         private const val MIN_DPI = 48
         private const val MAX_DPI = 384

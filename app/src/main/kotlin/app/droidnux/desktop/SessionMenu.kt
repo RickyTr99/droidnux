@@ -189,7 +189,7 @@ class SessionMenu(
         }
         panelView.addView(resolution)
         // Interface size: how big text and elements are, at any resolution.
-        addSlider(R.string.menu_ui_scale, uiScale, MIN_UI_SCALE, MAX_UI_SCALE, STEP, applyUiScale) { uiScale = it }
+        addSlider(R.string.menu_ui_scale, uiScale, DesktopSettings.MIN_UI_SCALE, DesktopSettings.MAX_UI_SCALE, STEP, applyUiScale) { uiScale = it }
             .apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(16) }
     }
 
@@ -372,8 +372,6 @@ class SessionMenu(
         const val MEDIUM_MS = 250L
         const val RESIZE_DELAY_MS = 300L
         const val STEP = 0.05f
-        const val MIN_UI_SCALE = 0.75f
-        const val MAX_UI_SCALE = 2f
         val DECELERATE = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         val ACCELERATE = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
     }
