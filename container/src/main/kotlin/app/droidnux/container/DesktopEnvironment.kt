@@ -84,6 +84,8 @@ object DesktopEnvironment {
             overwrite = false,
         )
         writeFile(rootfs, FIREFOX_PREFS_PATH, FIREFOX_PREFS.toByteArray())
+        writeFile(rootfs, FIREFOX_AUTOCONFIG_PATH, FIREFOX_AUTOCONFIG.toByteArray())
+        writeFile(rootfs, FIREFOX_CFG_PATH, FIREFOX_CFG.toByteArray())
     }
 
     /** Printed by the session script when the desktop logs out. */
@@ -217,6 +219,30 @@ object DesktopEnvironment {
         // Written by DroidNux.
         pref("security.sandbox.content.level", 0);
         pref("media.hardware-video-decoding.enabled", false);
+    """.trimIndent() + "\n"
+
+    /** Autoconfig prefs: they must sit in the app's defaults/pref to load [FIREFOX_CFG]. */
+    private const val FIREFOX_AUTOCONFIG_PATH = "/usr/lib/firefox-esr/defaults/pref/droidnux-autoconfig.js"
+    private const val FIREFOX_CFG_PATH = "/usr/lib/firefox-esr/droidnux.cfg"
+
+    private val FIREFOX_AUTOCONFIG = """
+        // Written by DroidNux.
+        pref("general.config.filename", "droidnux.cfg");
+        pref("general.config.obscure_value", 0);
+        pref("general.config.sandbox_enabled", false);
+    """.trimIndent() + "\n"
+
+    // With the content sandbox off (FIREFOX_PREFS) Firefox shows a warning bar
+    // in every window and no pref hides it, so this script turns it off at
+    // startup. Firefox skips the first line of an autoconfig file.
+    private val FIREFOX_CFG = """
+        // Written by DroidNux.
+        try {
+          ChromeUtils.importESModule("resource://gre/modules/SandboxUtils.sys.mjs")
+            .SandboxUtils.maybeWarnAboutDisabledContentSandbox = () => {};
+        } catch (e) {
+          Cu.reportError(e);
+        }
     """.trimIndent() + "\n"
 
     // Under proot PipeWire's Flatpak check fails for every client: opening
