@@ -111,6 +111,18 @@ object DesktopEnvironment {
         q -c xsettings -p /Gtk/CursorThemeSize -n -t int -s ${'$'}((24 * dpi / 96))
         q -c xfce4-panel -p /panels/panel-1/size -n -t uint -s ${'$'}((40 * dpi / 96))
         q -c xfce4-desktop -p /desktop-icons/icon-size -n -t uint -s ${'$'}((48 * dpi / 96))
+        # Whisker menu: its size is in pixels and its icons in steps (16, 24, 32, 38, 48, 64, 96).
+        icon_step() {
+            for s in 20:0 28:1 35:2 43:3 56:4 80:5; do [ "${'$'}1" -lt "${'$'}{s%:*}" ] && { echo "${'$'}{s#*:}"; return; }; done
+            echo 6
+        }
+        for w in ${'$'}(q -c xfce4-panel -l | grep -E '^/plugins/plugin-[0-9]+${'$'}'); do
+            [ "${'$'}(q -c xfce4-panel -p "${'$'}w")" = whiskermenu ] || continue
+            q -c xfce4-panel -p "${'$'}w/menu-width" -n -t int -s ${'$'}((450 * dpi / 96))
+            q -c xfce4-panel -p "${'$'}w/menu-height" -n -t int -s ${'$'}((500 * dpi / 96))
+            q -c xfce4-panel -p "${'$'}w/launcher-icon-size" -n -t int -s "${'$'}(icon_step ${'$'}((24 * dpi / 96)))"
+            q -c xfce4-panel -p "${'$'}w/category-icon-size" -n -t int -s "${'$'}(icon_step ${'$'}((24 * dpi / 96)))"
+        done
     """.trimIndent() + "\n"
 
     private val SESSION = """
