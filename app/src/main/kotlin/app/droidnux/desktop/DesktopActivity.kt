@@ -44,7 +44,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private var desktopScale = DEFAULT_SCALE
     private var surfaceWidth = 0
     private var surfaceHeight = 0
-    private var touchDown = false
+    private val touch = TouchGestures(handler)
+    private val touchSlop by lazy { android.view.ViewConfiguration.get(this).scaledTouchSlop.toFloat() }
     private val touchpad = CapturedTouchpad()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -277,19 +278,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             if (event.actionMasked == MotionEvent.ACTION_MOVE) X11Server.pointer(event.x * scale, event.y * scale)
             return true
         }
-        // Touchscreen, first version: one finger acts as the left button.
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                X11Server.pointer(event.x * scale, event.y * scale)
-                X11Server.button(1, true)
-                touchDown = true
-            }
-            MotionEvent.ACTION_MOVE -> if (touchDown) X11Server.pointer(event.x * scale, event.y * scale)
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (touchDown) {
-                X11Server.button(1, false)
-                touchDown = false
-            }
-        }
+        touch.onEvent(event, scale, touchSlop)
         return true
     }
 
