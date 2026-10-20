@@ -46,10 +46,11 @@
     <string name="menu_keyboard">Keyboard</string>
     <string name="menu_mode_touch">Direct touch</string>
     <string name="menu_mode_trackpad">Trackpad</string>
-    <string name="menu_desktop_size">Desktop size</string>
     <string name="menu_to_android">Back to Android</string>
     <string name="menu_exit">Exit the session</string>
     <string name="menu_exit_title">Exit the session?</string>
     <string name="menu_exit_text">Apps open in the desktop will close.</string>
     <string name="menu_exit_confirm">Exit</string>
+    <string name="menu_resolution">Resolution</string>
+    <string name="menu_ui_scale">Interface size</string>
 </resources>

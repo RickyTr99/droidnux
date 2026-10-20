@@ -41,7 +41,9 @@ class DesktopSessionService : Service() {
             return START_NOT_STICKY
         }
         startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        if (session == null) startSession(intent?.getStringExtra(EXTRA_LAYOUT) ?: "us")
+        if (session == null) {
+            startSession(intent?.getStringExtra(EXTRA_LAYOUT) ?: "us", intent?.getIntExtra(EXTRA_DPI, 96) ?: 96)
+        }
         return START_NOT_STICKY
     }
 
@@ -51,12 +53,12 @@ class DesktopSessionService : Service() {
         super.onDestroy()
     }
 
-    private fun startSession(layout: String) {
+    private fun startSession(layout: String, dpi: Int) {
         val distro = Distro.DEBIAN_TRIXIE
         val container = Container(this)
         val rootfs = container.installer.rootfsDir(distro)
         DesktopEnvironment.prepare(rootfs, java.io.File(applicationInfo.nativeLibraryDir))
-        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout))
+        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, dpi))
         session = process
         Log.i(TAG, "session started (layout $layout)")
         scope.launch {
@@ -117,6 +119,7 @@ class DesktopSessionService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "app.droidnux.action.STOP_SESSION"
         private const val EXTRA_LAYOUT = "layout"
+        private const val EXTRA_DPI = "dpi"
         private const val EXIT_DELAY_MS = 500L
 
         /** Ends the session, as the notification's Stop action does. */
@@ -124,9 +127,9 @@ class DesktopSessionService : Service() {
             context.startService(Intent(context, DesktopSessionService::class.java).setAction(ACTION_STOP))
         }
 
-        fun start(context: Context, layout: String) {
+        fun start(context: Context, layout: String, dpi: Int) {
             context.startForegroundService(
-                Intent(context, DesktopSessionService::class.java).putExtra(EXTRA_LAYOUT, layout),
+                Intent(context, DesktopSessionService::class.java).putExtra(EXTRA_LAYOUT, layout).putExtra(EXTRA_DPI, dpi),
             )
         }
     }

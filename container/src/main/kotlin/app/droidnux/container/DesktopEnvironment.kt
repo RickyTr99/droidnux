@@ -11,6 +11,7 @@ import java.io.IOException
 object DesktopEnvironment {
 
     const val SESSION_SCRIPT = "/usr/local/bin/droidnux-session"
+    private const val UI_SCALE_SCRIPT = "/usr/local/bin/droidnux-ui-scale"
     const val DISPLAY = 0
 
     /** MIT-SHM segments the app's X server can attach (display/src/main/cpp/shm). */
@@ -68,6 +69,7 @@ object DesktopEnvironment {
      */
     fun prepare(rootfs: File, nativeLibraryDir: File) {
         writeFile(rootfs, SESSION_SCRIPT, SESSION.toByteArray(), mode = 0x1ED /* 0755 */)
+        writeFile(rootfs, UI_SCALE_SCRIPT, UI_SCALE.toByteArray(), mode = 0x1ED)
         writeFile(
             rootfs, "$GUEST_LIB_DIR/$SHM_LIBRARY", File(nativeLibraryDir, SHM_LIBRARY).readBytes(),
             mode = 0x1A4,
@@ -88,7 +90,28 @@ object DesktopEnvironment {
     const val SESSION_END_MARKER = "DROIDNUX_SESSION_END"
 
     /** Command starting the session, with the X keyboard [layout] (e.g. "it"). */
-    fun sessionCommand(layout: String): String = "DROIDNUX_XKB_LAYOUT=$layout exec $SESSION_SCRIPT"
+    fun sessionCommand(layout: String, dpi: Int): String =
+        "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_DPI=$dpi exec $SESSION_SCRIPT"
+
+    /** Command applying the interface size ([dpi], 96 = 1x) to the running session. */
+    fun uiScaleCommand(dpi: Int): String = "$UI_SCALE_SCRIPT $dpi"
+
+    private val UI_SCALE = """
+        #!/bin/sh
+        # Written by DroidNux: sizes the desktop's interface for a DPI (96 = 1x):
+        # text, cursor, panel and desktop icons. Run by the app, inside or outside the session.
+        if [ -z "${'$'}DBUS_SESSION_BUS_ADDRESS" ]; then
+            p=${'$'}(pgrep -x xfce4-session | head -1)
+            [ -n "${'$'}p" ] || exit 0
+            eval "${'$'}(tr '\0' '\n' < /proc/${'$'}p/environ | grep -E '^(DISPLAY|DBUS_SESSION_BUS_ADDRESS|XDG_RUNTIME_DIR)=' | sed 's/^\([^=]*\)=\(.*\)${'$'}/export \1="\2"/')"
+        fi
+        dpi=${'$'}1
+        q() { xfconf-query "${'$'}@" 2> /dev/null; }
+        q -c xsettings -p /Xft/DPI -n -t int -s "${'$'}dpi"
+        q -c xsettings -p /Gtk/CursorThemeSize -n -t int -s ${'$'}((24 * dpi / 96))
+        q -c xfce4-panel -p /panels/panel-1/size -n -t uint -s ${'$'}((40 * dpi / 96))
+        q -c xfce4-desktop -p /desktop-icons/icon-size -n -t uint -s ${'$'}((48 * dpi / 96))
+    """.trimIndent() + "\n"
 
     private val SESSION = """
         #!/bin/sh
@@ -165,6 +188,8 @@ object DesktopEnvironment {
             wireplumber &
             pipewire-pulse &
         fi
+        # The interface size, once xfsettingsd and the panel are up.
+        if [ -n "${'$'}DROIDNUX_DPI" ]; then (sleep 4; $UI_SCALE_SCRIPT "${'$'}DROIDNUX_DPI") & fi
         startxfce4
         echo $SESSION_END_MARKER
     """.trimIndent() + "\n"

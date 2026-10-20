@@ -39,10 +39,11 @@
     <string name="menu_keyboard">Tastiera</string>
     <string name="menu_mode_touch">Tocco diretto</string>
     <string name="menu_mode_trackpad">Trackpad</string>
-    <string name="menu_desktop_size">Dimensione del desktop</string>
     <string name="menu_to_android">Torna ad Android</string>
     <string name="menu_exit">Esci dalla sessione</string>
     <string name="menu_exit_title">Uscire dalla sessione?</string>
     <string name="menu_exit_text">Le app aperte nel desktop verranno chiuse.</string>
     <string name="menu_exit_confirm">Esci</string>
+    <string name="menu_resolution">Risoluzione</string>
+    <string name="menu_ui_scale">Dimensione degli elementi</string>
 </resources>

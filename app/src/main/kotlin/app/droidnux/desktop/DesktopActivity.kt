@@ -32,10 +32,12 @@ import android.window.OnBackInvokedDispatcher
 import android.widget.FrameLayout
 import android.widget.TextView
 import app.droidnux.container.Container
+import app.droidnux.container.DesktopEnvironment
 import app.droidnux.container.Distro
 import app.droidnux.display.Presenter
 import app.droidnux.display.X11Server
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * The Linux desktop, full screen. Runs in the :desktop process together with
@@ -66,6 +68,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private val screenTouchpad = CapturedTouchpad()
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
     private var trackpadMode = false
+    /** Interface size the user chose, 1 = the default; independent of the resolution ([desktopScale]). */
+    private var uiScale = 1f
     private lateinit var menu: SessionMenu
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -118,6 +122,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             ))
         }
         trackpadMode = prefs.getBoolean(PREF_TRACKPAD, false)
+        uiScale = prefs.getFloat(PREF_UI_SCALE, 1f)
         menu = SessionMenu(this, menuListener)
         root.addView(menu.view, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
@@ -233,7 +238,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             val rootfs = Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)
             val started = X11Server.start(rootfs, desktopWidth, desktopHeight, DPI)
             Log.i(TAG, "X server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
-            DesktopSessionService.start(this, keyboardLayout())
+            DesktopSessionService.start(this, keyboardLayout(), dpi())
             clipboardToX()
         } else {
             X11Server.resize(desktopWidth, desktopHeight)
@@ -421,7 +426,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         } else {
             // The pointer must reach the menu: Android draws it again until the menu closes.
             surfaceView.releasePointerCapture()
-            menu.open(trackpadMode, desktopScale)
+            menu.open(trackpadMode, desktopScale, uiScale)
         }
     }
 
@@ -449,6 +454,13 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         override fun onScaleChanged(scale: Float) {
             desktopScale = scale.coerceIn(MIN_SCALE, MAX_SCALE)
             if (surfaceWidth > 0) resizeDesktop()
+            applyUiScale() // same physical size at the new resolution
+        }
+
+        override fun onUiScaleChanged(scale: Float) {
+            uiScale = scale
+            prefs.edit().putFloat(PREF_UI_SCALE, scale).apply()
+            applyUiScale()
         }
 
         override fun onBackToAndroid() {
@@ -461,6 +473,24 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             surfaceView.requestFocus()
             capturePointer()
         }
+    }
+
+    /**
+     * DPI for the session: 96 at the default resolution, then scaled with it,
+     * so a sharper desktop keeps its elements the same size on screen.
+     */
+    private fun dpi() = (BASE_DPI * uiScale * desktopScale / DEFAULT_SCALE).roundToInt().coerceIn(MIN_DPI, MAX_DPI)
+
+    private fun applyUiScale() {
+        if (!X11Server.running) return
+        val command = DesktopEnvironment.uiScaleCommand(dpi())
+        Thread {
+            runCatching {
+                val process = Container(this).spawnShell(Distro.DEBIAN_TRIXIE, command)
+                process.inputStream.readBytes()
+                process.waitFor()
+            }.onFailure { Log.w(TAG, "cannot apply the interface size", it) }
+        }.start()
     }
 
     // -- Debug overlay -----------------------------------------------------
@@ -513,6 +543,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val GESTURE_EXCLUSION_DP = 200
         private const val PREFS = "desktop"
         private const val PREF_TRACKPAD = "trackpad"
+        private const val PREF_UI_SCALE = "ui_scale"
+        private const val BASE_DPI = 96
+        private const val MIN_DPI = 48
+        private const val MAX_DPI = 384
 
         private const val KEY_BACKSPACE = 14
         private const val KEY_ENTER = 28

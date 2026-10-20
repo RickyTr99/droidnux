@@ -40,6 +40,7 @@ class SessionMenu(
         /** While the slider moves, so the label can show the resolution. */
         fun resolutionFor(scale: Float): String
         fun onScaleChanged(scale: Float)
+        fun onUiScaleChanged(scale: Float)
         fun onBackToAndroid()
         fun onExit()
         fun onClosed()
@@ -51,8 +52,10 @@ class SessionMenu(
     private var panel = Panel.NONE
     private var trackpad = false
     private var scale = 1f
+    private var uiScale = 1f
     private var opened = false
     private val applyScale = Runnable { listener.onScaleChanged(scale) }
+    private val applyUiScale = Runnable { listener.onUiScaleChanged(uiScale) }
 
     /** Full-screen layer: a touch outside the pill closes the menu. */
     val view: FrameLayout = FrameLayout(context).apply {
@@ -124,9 +127,10 @@ class SessionMenu(
         ).apply { topMargin = dp(24) })
     }
 
-    fun open(trackpad: Boolean, scale: Float) {
+    fun open(trackpad: Boolean, scale: Float, uiScale: Float) {
         this.trackpad = trackpad
         this.scale = scale
+        this.uiScale = uiScale
         updateLabels()
         show(Panel.NONE, animate = false)
         opened = true
@@ -138,9 +142,11 @@ class SessionMenu(
         if (!opened) return
         opened = false
         // A size still waiting for the slider to rest applies now.
-        if (handler.hasCallbacks(applyScale)) {
-            handler.removeCallbacks(applyScale)
-            applyScale.run()
+        for (pending in listOf(applyScale, applyUiScale)) {
+            if (handler.hasCallbacks(pending)) {
+                handler.removeCallbacks(pending)
+                pending.run()
+            }
         }
         fade(view, false)
         listener.onClosed()
@@ -170,17 +176,35 @@ class SessionMenu(
     }
 
     private fun buildSizePanel() {
-        val value = label(percent(scale), PRIMARY, medium = true)
+        // Resolution: sharpness, and the cost of every frame.
         val resolution = label(listener.resolutionFor(scale), ON_SURFACE_VARIANT, sp = 13f)
-        panelView.addView(LinearLayout(context).apply {
+        addSlider(
+            R.string.menu_resolution, scale, DesktopActivity.MIN_SCALE, DesktopActivity.MAX_SCALE, STEP, applyScale,
+        ) {
+            scale = it
+            sizeLabel.text = percent(it)
+            resolution.text = listener.resolutionFor(it)
+        }
+        panelView.addView(resolution)
+        // Interface size: how big text and elements are, at any resolution.
+        addSlider(R.string.menu_ui_scale, uiScale, MIN_UI_SCALE, MAX_UI_SCALE, STEP, applyUiScale) { uiScale = it }
+            .apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(16) }
+    }
+
+    /** A titled slider from [min] to [max] in [step]s; [apply] runs once it rests. Returns its title row. */
+    private fun addSlider(
+        title: Int, value: Float, min: Float, max: Float, step: Float, apply: Runnable, onChange: (Float) -> Unit,
+    ): View {
+        val valueLabel = label(percent(value), PRIMARY, medium = true)
+        val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            addView(label(context.getString(R.string.menu_desktop_size)), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(value)
-        })
-        val steps = ((DesktopActivity.MAX_SCALE - DesktopActivity.MIN_SCALE) * 20).roundToInt() // 5% steps
+            addView(label(context.getString(title)), LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            addView(valueLabel)
+        }
+        panelView.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         panelView.addView(SeekBar(context).apply {
-            max = steps
-            progress = ((scale - DesktopActivity.MIN_SCALE) * 20).roundToInt()
+            this.max = ((max - min) / step).roundToInt()
+            progress = ((value - min) / step).roundToInt()
             // A thin track and a round thumb, as Material 3 (the window's old theme draws thick bars).
             progressDrawable = LayerDrawable(arrayOf(
                 rounded(SURFACE_HIGHEST, dp(2f)),
@@ -201,19 +225,18 @@ class SessionMenu(
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(bar: SeekBar, progress: Int, fromUser: Boolean) {
                     if (!fromUser) return
-                    scale = DesktopActivity.MIN_SCALE + progress / 20f
-                    value.text = percent(scale)
-                    sizeLabel.text = percent(scale)
-                    resolution.text = listener.resolutionFor(scale)
-                    // Resizing the desktop costs a full redraw: only once the slider rests.
-                    handler.removeCallbacks(applyScale)
-                    handler.postDelayed(applyScale, RESIZE_DELAY_MS)
+                    val newValue = min + progress * step
+                    valueLabel.text = percent(newValue)
+                    onChange(newValue)
+                    // Applying costs a redraw (or a guest command): only once the slider rests.
+                    handler.removeCallbacks(apply)
+                    handler.postDelayed(apply, RESIZE_DELAY_MS)
                 }
                 override fun onStartTrackingTouch(bar: SeekBar) = Unit
                 override fun onStopTrackingTouch(bar: SeekBar) = Unit
             })
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)))
-        panelView.addView(resolution)
+        return row
     }
 
     private fun buildExitPanel() {
@@ -346,6 +369,9 @@ class SessionMenu(
         const val SHORT_MS = 150L
         const val MEDIUM_MS = 250L
         const val RESIZE_DELAY_MS = 300L
+        const val STEP = 0.05f
+        const val MIN_UI_SCALE = 0.75f
+        const val MAX_UI_SCALE = 2f
         val DECELERATE = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         val ACCELERATE = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
     }
