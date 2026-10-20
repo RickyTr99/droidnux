@@ -84,6 +84,9 @@ object DesktopEnvironment {
         writeFile(rootfs, FIREFOX_PREFS_PATH, FIREFOX_PREFS.toByteArray())
     }
 
+    /** Printed by the session script when the desktop logs out. */
+    const val SESSION_END_MARKER = "DROIDNUX_SESSION_END"
+
     /** Command starting the session, with the X keyboard [layout] (e.g. "it"). */
     fun sessionCommand(layout: String): String = "DROIDNUX_XKB_LAYOUT=$layout exec $SESSION_SCRIPT"
 
@@ -157,7 +160,8 @@ object DesktopEnvironment {
             wireplumber &
             pipewire-pulse &
         fi
-        exec startxfce4
+        startxfce4
+        echo $SESSION_END_MARKER
     """.trimIndent() + "\n"
 
     /** Default prefs of Debian's Firefox ESR (browser/defaults/preferences, next to Debian's own). */

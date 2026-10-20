@@ -8,7 +8,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.util.Log
 import app.droidnux.R
 import app.droidnux.container.Container
@@ -28,14 +30,14 @@ import kotlinx.coroutines.launch
 class DesktopSessionService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val handler = Handler(Looper.getMainLooper())
     private var session: Process? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stopSession()
-            stopSelf()
+            endDesktop()
             return START_NOT_STICKY
         }
         startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
@@ -58,14 +60,28 @@ class DesktopSessionService : Service() {
         session = process
         Log.i(TAG, "session started (layout $layout)")
         scope.launch {
-            process.inputStream.bufferedReader().forEachLine { Log.i(TAG_GUEST, it) }
+            process.inputStream.bufferedReader().forEachLine {
+                Log.i(TAG_GUEST, it)
+                // The desktop logged out; its services (PipeWire, D-Bus) would keep proot alive.
+                if (it == DesktopEnvironment.SESSION_END_MARKER) process.destroy()
+            }
             val code = process.waitFor()
             Log.i(TAG, "session ended with $code")
-            if (session === process) {
-                session = null
-                stopSelf()
-            }
+            if (session === process) handler.post { endDesktop() }
         }
+    }
+
+    /**
+     * Ends everything: the guest (proot kills all its processes when it
+     * exits), the desktop activity, and this process with the X server.
+     */
+    private fun endDesktop() {
+        stopSession()
+        DesktopActivity.finishCurrent()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+        // Let the activity close first; a restart then starts a new X server.
+        handler.postDelayed({ android.os.Process.killProcess(android.os.Process.myPid()) }, EXIT_DELAY_MS)
     }
 
     private fun stopSession() {
@@ -101,6 +117,7 @@ class DesktopSessionService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "app.droidnux.action.STOP_SESSION"
         private const val EXTRA_LAYOUT = "layout"
+        private const val EXIT_DELAY_MS = 500L
 
         fun start(context: Context, layout: String) {
             context.startForegroundService(

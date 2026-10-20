@@ -198,6 +198,7 @@ public:
         hideWindow_ = false;
         geometryDirty_ = true;
         cursorDirty_ = true;
+        cursorImageDirty_ = true;  // the new cursor layer has no buffer yet
         pending_ = true;  // repaint everything on the new surface
         LOGI("attached %dx%d", windowWidth_, windowHeight_);
     }

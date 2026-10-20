@@ -11,6 +11,7 @@ import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.PointerIcon
@@ -44,9 +45,11 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private var surfaceWidth = 0
     private var surfaceHeight = 0
     private var touchDown = false
+    private val touchpad = CapturedTouchpad()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        current = this
         desktopScale = scaleOf(intent)
         window.attributes = window.attributes.apply {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
@@ -60,6 +63,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             // The X cursor is drawn by the presenter; hide Android's.
             pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_NULL)
             setOnGenericMotionListener { _, event -> onPointerEvent(event) }
+            setOnCapturedPointerListener { _, event -> onCapturedPointer(event) }
             setOnTouchListener { _, event -> onTouch(event) }
         }
         val root = FrameLayout(this).apply {
@@ -108,6 +112,28 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     override fun onPause() {
         handler.removeCallbacks(overlayUpdater)
         super.onPause()
+    }
+
+    override fun onDestroy() {
+        if (current === this) current = null
+        super.onDestroy()
+    }
+
+    /**
+     * Captures the mouse while the desktop has focus: Android then stops
+     * tracking the pointer, so the screen edges no longer pull in its bars or
+     * taskbar. Android releases it when the window loses focus.
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) capturePointer()
+    }
+
+    private fun capturePointer() {
+        if (!surfaceView.hasPointerCapture()) {
+            surfaceView.requestFocus()
+            surfaceView.requestPointerCapture()
+        }
     }
 
     // -- Surface -----------------------------------------------------------
@@ -183,6 +209,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     private fun onPointerEvent(event: MotionEvent): Boolean {
         if (!X11Server.running) return false
+        // Capture lost without a focus change.
+        if (event.actionMasked == MotionEvent.ACTION_HOVER_MOVE) capturePointer()
         when (event.actionMasked) {
             MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_HOVER_ENTER ->
                 X11Server.pointer(event.x * scale, event.y * scale)
@@ -198,6 +226,39 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             else -> return false
         }
         return true // also stops the right button from acting as Back
+    }
+
+    /** Captured mouse: relative motion, accelerated by X. */
+    private fun onCapturedPointer(event: MotionEvent): Boolean {
+        if (!X11Server.running) return false
+        if (event.isFromSource(InputDevice.SOURCE_TOUCHPAD)) {
+            val range = event.device?.getMotionRange(MotionEvent.AXIS_X, InputDevice.SOURCE_TOUCHPAD)?.range ?: 0f
+            // The whole touchpad width crosses half the desktop before X's acceleration.
+            val unit = if (range > 0f && surfaceWidth > 0) range / (surfaceWidth * scale * 0.5f) else 1f
+            return touchpad.onEvent(event, unit)
+        }
+        when (event.actionMasked) {
+            // Button events repeat the motion of the event they come with.
+            MotionEvent.ACTION_MOVE, MotionEvent.ACTION_HOVER_MOVE, MotionEvent.ACTION_DOWN, MotionEvent.ACTION_UP -> {
+                var dx = event.x
+                var dy = event.y
+                for (i in 0 until event.historySize) {
+                    dx += event.getHistoricalX(i)
+                    dy += event.getHistoricalY(i)
+                }
+                if (dx != 0f || dy != 0f) X11Server.pointerRelative(dx, dy)
+            }
+            MotionEvent.ACTION_SCROLL -> X11Server.scroll(
+                event.getAxisValue(MotionEvent.AXIS_HSCROLL),
+                -event.getAxisValue(MotionEvent.AXIS_VSCROLL),
+            )
+            MotionEvent.ACTION_BUTTON_PRESS, MotionEvent.ACTION_BUTTON_RELEASE -> {
+                val button = xButton(event.actionButton) ?: return true
+                X11Server.button(button, event.actionMasked == MotionEvent.ACTION_BUTTON_PRESS)
+            }
+            else -> return false
+        }
+        return true
     }
 
     private fun xButton(androidButton: Int) = when (androidButton) {
@@ -263,6 +324,14 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     companion object {
         private const val TAG = "DroidNux.Desktop"
+
+        /** The desktop on screen, if any (main thread only). */
+        private var current: DesktopActivity? = null
+
+        /** Closes the desktop activity, when the session ends. Main thread. */
+        fun finishCurrent() {
+            current?.finishAndRemoveTask()
+        }
         private const val DPI = 96
 
         /** Float extra: desktop size as a fraction of the screen, [MIN_SCALE] to [MAX_SCALE]. */
