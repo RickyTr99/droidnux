@@ -90,6 +90,8 @@ void dnx_presenter_hide_window(void);
 void dnx_presenter_set_cursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot);
 void dnx_presenter_move_cursor(int32_t x, int32_t y);
 void dnx_presenter_set_cursor_visible(bool visible);
+/* Where the cursor's hotspot is, in framebuffer pixels (the app keeps it above the soft keyboard). */
+int32_t dnx_presenter_cursor_y(void);
 
 /* Vsync clock: the callback runs once per dnx_presenter_request_vsync(). */
 void dnx_presenter_set_vsync_callback(dnx_vsync_callback callback, void* data);

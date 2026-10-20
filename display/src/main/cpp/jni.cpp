@@ -64,6 +64,11 @@ Java_app_droidnux_display_Presenter_nativeSetCursorVisible(JNIEnv*, jclass, jboo
     dnx_presenter_set_cursor_visible(visible);
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_app_droidnux_display_Presenter_nativeCursorY(JNIEnv*, jclass) {
+    return dnx_presenter_cursor_y();
+}
+
 extern "C" JNIEXPORT jlong JNICALL
 Java_app_droidnux_display_Presenter_nativeFrameCount(JNIEnv*, jclass) {
     return static_cast<jlong>(dnx_presenter_frame_count());

@@ -402,6 +402,11 @@ public:
         flushCursorLocked();
     }
 
+    int32_t cursorY() {
+        std::lock_guard lock(mutex_);
+        return cursorY_;
+    }
+
     void setCursorVisible(bool visible) {
         std::lock_guard lock(mutex_);
         if (visible == cursorVisible_) return;
@@ -761,6 +766,7 @@ void dnx_presenter_set_cursor(const uint32_t* rgba, uint32_t width, uint32_t hei
 }
 void dnx_presenter_move_cursor(int32_t x, int32_t y) { presenter().moveCursor(x, y); }
 void dnx_presenter_set_cursor_visible(bool visible) { presenter().setCursorVisible(visible); }
+int32_t dnx_presenter_cursor_y(void) { return presenter().cursorY(); }
 
 void dnx_presenter_set_vsync_callback(dnx_vsync_callback callback, void* data) {
     vsyncClock().setCallback(callback, data);

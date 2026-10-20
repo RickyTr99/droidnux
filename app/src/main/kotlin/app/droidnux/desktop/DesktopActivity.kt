@@ -132,6 +132,15 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
         ))
         setContentView(root)
+        // The soft keyboard covers the bottom of the desktop: slide it up to keep the pointer in sight.
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            val ime = insets.getInsets(WindowInsets.Type.ime()).bottom
+            if (ime != keyboardHeight) {
+                keyboardHeight = ime
+                panForKeyboard()
+            }
+            insets
+        }
         // Back opens the menu instead of leaving: it has "Back to Android".
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { toggleMenu() }
@@ -163,6 +172,17 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             }
             Log.w(TAG, "the session never listened for $id")
         }.start()
+    }
+
+    private var keyboardHeight = 0
+
+    /** Moves the desktop up just enough for the pointer to stay above the soft keyboard. */
+    private fun panForKeyboard() {
+        val pointer = Presenter.cursorY / scale // desktop pixels to surface pixels
+        val margin = KEYBOARD_MARGIN_DP * resources.displayMetrics.density
+        val visibleBottom = surfaceView.height - keyboardHeight
+        val shift = if (keyboardHeight == 0) 0f else (pointer + margin - visibleBottom).coerceIn(0f, keyboardHeight.toFloat())
+        surfaceView.animate().translationY(-shift).setDuration(KEYBOARD_PAN_MS).start()
     }
 
     /** Settings changed in the app while the desktop was in the background apply on return. */
@@ -584,6 +604,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val GESTURE_EXCLUSION_DP = 200
         /** String extra: desktop id of a Linux app to start in the session. */
         const val EXTRA_LAUNCH = "app.droidnux.desktop.LAUNCH"
+        private const val KEYBOARD_MARGIN_DP = 48
+        private const val KEYBOARD_PAN_MS = 250L
         private const val LAUNCH_ATTEMPTS = 120
         private const val LAUNCH_RETRY_MS = 500L
         private const val BASE_DPI = 96

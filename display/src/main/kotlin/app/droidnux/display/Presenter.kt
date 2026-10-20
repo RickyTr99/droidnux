@@ -25,6 +25,9 @@ object Presenter {
     /** Shows or hides the X cursor layer (hidden while the touchscreen drives the pointer). */
     fun setCursorVisible(visible: Boolean) = nativeSetCursorVisible(visible)
 
+    /** The X cursor's height on the desktop, in desktop pixels. */
+    val cursorY: Int get() = nativeCursorY()
+
     /** Frames presented since the process started (debug overlay). */
     val frameCount: Long get() = nativeFrameCount()
 
@@ -37,6 +40,7 @@ object Presenter {
     @JvmStatic private external fun nativeAttach(surface: Surface, maxRefreshRate: Float)
     @JvmStatic private external fun nativeDetach()
     @JvmStatic private external fun nativeSetCursorVisible(visible: Boolean)
+    @JvmStatic private external fun nativeCursorY(): Int
     @JvmStatic private external fun nativeFrameCount(): Long
     @JvmStatic private external fun nativeFrameTimeTotal(): Long
     @JvmStatic private external fun nativeTakeFrameTimeMax(): Long
