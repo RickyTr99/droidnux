@@ -6,6 +6,7 @@ import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
@@ -81,6 +82,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
         window.setDecorFitsSystemWindows(false)
+        // The surface is a text editor for the soft keyboard: only the menu's button may show it.
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
 
         surfaceView = DesktopSurfaceView().apply {
             holder.addCallback(this@DesktopActivity)
@@ -91,6 +94,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             setOnGenericMotionListener { _, event -> onPointerEvent(event) }
             setOnCapturedPointerListener { _, event -> onCapturedPointer(event) }
             setOnTouchListener { _, event -> onTouch(event) }
+            // The panel's corners (menu, tray) sit in the edge-swipe Back zones: keep the bottom of
+            // both edges for the desktop. Android honours at most 200 dp per edge.
+            addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+                val height = (GESTURE_EXCLUSION_DP * resources.displayMetrics.density).toInt()
+                view.systemGestureExclusionRects = listOf(Rect(0, view.height - height, view.width, view.height))
+            }
         }
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
@@ -501,6 +510,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         const val MIN_SCALE = 0.4f
         const val MAX_SCALE = 1f
 
+        private const val GESTURE_EXCLUSION_DP = 200
         private const val PREFS = "desktop"
         private const val PREF_TRACKPAD = "trackpad"
 
