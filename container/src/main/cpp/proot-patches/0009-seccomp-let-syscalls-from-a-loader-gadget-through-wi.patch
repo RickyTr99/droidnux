@@ -1,0 +1,99 @@
+From 53079f82d0b7a3f866238637fb8a3de858180cc8 Mon Sep 17 00:00:00 2001
+From: RickyTr99 <rickytorre99@gmail.com>
+Date: Wed, 21 Oct 2026 22:18:47 +0200
+Subject: [PATCH] seccomp: let syscalls from a loader gadget through without a
+ stop
+
+---
+ src/loader/assembly.S | 12 ++++++++++++
+ src/syscall/seccomp.c | 39 +++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 51 insertions(+)
+
+diff --git a/src/loader/assembly.S b/src/loader/assembly.S
+index ebe9a8d..54573d6 100644
+--- a/src/loader/assembly.S
++++ b/src/loader/assembly.S
+@@ -66,4 +66,16 @@ pokedata_workaround:
+ str x1, [x2]
+ // https://stackoverflow.com/a/16087057
+ .word 0xf7f0a000
++
++// DroidNux: a syscall that PRoot's seccomp filter lets through without
++// a stop (add_allow_gadget() in seccomp.c), for a guest library that
++// passes paths it has translated itself.  The magic right before it
++// lets that library find it in the loader's mapping.
++.balign 16
++.quad 0x6467746e78646e64 // magic
++.quad 0x7465676461676e78
++.globl droidnux_syscall_gadget
++droidnux_syscall_gadget:
++svc #0
++ret
+ #endif /* defined(__aarch64__) */
+diff --git a/src/syscall/seccomp.c b/src/syscall/seccomp.c
+index 49de2e0..b059767 100644
+--- a/src/syscall/seccomp.c
++++ b/src/syscall/seccomp.c
+@@ -50,6 +50,9 @@
+ #include "cli/note.h"
+ 
+ #include "compat.h"
++
++/* Generated with the loader (loader-info.c), 0 if it has no gadget.  */
++extern const uint64_t droidnux_syscall_gadget_address;
+ #include "attribute.h"
+ 
+ #define DEBUG_FILTER(...) /* fprintf(stderr, __VA_ARGS__) */
+@@ -350,6 +353,38 @@ static void free_program_filter(struct sock_fprog *program)
+ 	program->len = 0;
+ }
+ 
++/**
++ * Append to @program->filter the statements that let syscalls made by
++ * the loader's droidnux_syscall_gadget run without a stop.  DroidNux's
++ * guest preload library resolves some paths itself, already translated,
++ * and calls the kernel through that gadget (see assembly.S).  This
++ * function returns -errno if an error occurred, otherwise 0.
++ */
++static int add_allow_gadget(struct sock_fprog *program)
++{
++	/* Little-endian archs: the low half of the address first.  */
++	const size_t ip_offset = offsetof(struct seccomp_data, instruction_pointer);
++	const uint64_t gadget = droidnux_syscall_gadget_address;
++
++	#define LENGTH_ALLOW_GADGET 6
++	struct sock_filter statements[LENGTH_ALLOW_GADGET] = {
++		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, ip_offset + 4),
++		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, gadget >> 32, 0, 4),
++		BPF_STMT(BPF_LD + BPF_W + BPF_ABS, ip_offset),
++		/* The address after "svc", or of "svc" itself.  */
++		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, (uint32_t) gadget + 4, 1, 0),
++		BPF_JUMP(BPF_JMP + BPF_JEQ + BPF_K, (uint32_t) gadget, 0, 1),
++		BPF_STMT(BPF_RET + BPF_K, SECCOMP_RET_ALLOW),
++	};
++
++	if (gadget == 0)
++		return 0;
++
++	DEBUG_FILTER("FILTER: allow if instruction pointer == %#lx\n", gadget);
++
++	return add_statements(program, LENGTH_ALLOW_GADGET, statements);
++}
++
+ /**
+  * Convert the given @sysnums into BPF filters according to the
+  * following pseudo-code, then enabled them for the given @tracee and
+@@ -432,6 +467,10 @@ static int set_seccomp_filters(const FilteredSysnum *sysnums)
+ 	if (status < 0)
+ 		goto end;
+ 
++	status = add_allow_gadget(&program);
++	if (status < 0)
++		goto end;
++
+ 	/* For each handled architectures */
+ 	for (i = 0; i < nb_archs; i++) {
+ 		word_t syscall;
+-- 
+2.56.0.windows.1
+
