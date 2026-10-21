@@ -35,7 +35,7 @@ set_target_properties(burrow PROPERTIES OUTPUT_NAME "libburrow.so")
 target_compile_options(burrow PRIVATE
     -O2 -Wall -Wextra
     -ffreestanding -fno-stack-protector -U_FORTIFY_SOURCE
-    -fno-pic -fno-pie -fno-asynchronous-unwind-tables)
+    -fno-pic -fno-pie -fno-asynchronous-unwind-tables -mno-outline-atomics)
 target_link_options(burrow PRIVATE
     -static -nostdlib -no-pie
     -Wl,--image-base=0x5600000000
