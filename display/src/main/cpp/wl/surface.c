@@ -523,15 +523,23 @@ static void surface_attach(struct wl_client* client, struct wl_resource* resourc
     s->pending_attach = true;
 }
 
-/* No transform. KWin at a fractional scale sets the buffer scale rounded up: damage
- * scaled by it covers at least the real area. */
+/* No transform. Converted to buffer pixels on commit, once the buffer is known. */
 static void surface_damage(struct wl_client* client, struct wl_resource* resource, int32_t x, int32_t y, int32_t w,
                            int32_t h) {
     (void) client;
     struct dnx_wl_surface* s = wl_resource_get_user_data(resource);
-    int64_t k = s->pending_scale;
-    dnx_wl_damage_add(&s->pending_damage, clamp_coord(x * k), clamp_coord(y * k), clamp_coord(w * k),
-                      clamp_coord(h * k));
+    dnx_wl_damage_add(&s->pending_surface_damage, x, y, w, h);
+}
+
+/* Buffer pixels per surface unit. A toplevel configured here is the desktop in
+ * surface coordinates: KWin at a fractional scale renders it at that scale while
+ * its buffer scale says the scale rounded up, so the buffer size tells. */
+static void surface_factor(struct dnx_wl_surface* s, double* fx, double* fy) {
+    *fx = *fy = s->scale;
+    if (s->xdg && s->xdg->configured && s->width > 0 && s->height > 0) {
+        *fx = (double) s->width / logical_size(dnx_wl_width);
+        *fy = (double) s->height / logical_size(dnx_wl_height);
+    }
 }
 
 static void surface_damage_buffer(struct wl_client* client, struct wl_resource* resource, int32_t x, int32_t y,
@@ -599,12 +607,21 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
         s->width = width;
         s->height = height;
     }
+    s->scale = s->pending_scale;
     for (int i = 0; i < s->pending_damage.count; i++) {
         dnx_box* r = &s->pending_damage.rects[i];
         dnx_wl_damage_add(&s->damage, r->x1, r->y1, r->x2 - r->x1, r->y2 - r->y1);
     }
     s->pending_damage.count = 0;
-    s->scale = s->pending_scale;
+    double fx, fy;
+    surface_factor(s, &fx, &fy);
+    for (int i = 0; i < s->pending_surface_damage.count; i++) {
+        dnx_box* r = &s->pending_surface_damage.rects[i];
+        int32_t x1 = (int32_t) floor(r->x1 * fx), y1 = (int32_t) floor(r->y1 * fy);
+        dnx_wl_damage_add(&s->damage, x1, y1, clamp_coord((int64_t) ceil(r->x2 * fx)) - x1,
+                          clamp_coord((int64_t) ceil(r->y2 * fy)) - y1);
+    }
+    s->pending_surface_damage.count = 0;
     if (!wl_list_empty(&s->pending_frames)) {
         wl_list_insert_list(frame_callbacks.prev, &s->pending_frames);
         wl_list_init(&s->pending_frames);

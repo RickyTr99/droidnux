@@ -30,7 +30,8 @@ struct dnx_wl_surface {
     struct wl_resource* pending_buffer;
     struct wl_listener pending_buffer_destroy;
     bool pending_attach;
-    struct dnx_wl_damage pending_damage;
+    struct dnx_wl_damage pending_damage;         /* buffer pixels */
+    struct dnx_wl_damage pending_surface_damage; /* surface coordinates, converted on commit */
     struct wl_list pending_frames;    /* wl_callback resources */
     struct wl_list pending_feedbacks; /* wp_presentation_feedback resources */
 
