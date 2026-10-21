@@ -183,6 +183,9 @@ static void send_feedback(struct wl_resource* feedback, bool presented) {
 /* The held frame went to the presenter (or never will, for another surface). */
 static void flush_held_feedbacks(bool presented) {
     if (wl_list_empty(&held_feedbacks)) return; /* predict_presentation() counts its calls */
+    /* Nothing of the shown surface left to show: its held frame is on screen
+     * (a nested compositor waits for this feedback before its next frame). */
+    if (!presented && shown && shown->damage.count == 0) presented = true;
     int64_t when = presented ? predict_presentation() : 0;
     struct wl_resource *feedback, *next;
     wl_resource_for_each_safe(feedback, next, &held_feedbacks) {
@@ -610,6 +613,8 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
             dnx_wl_request_frame();
         }
     }
+    /* Held feedback is answered on a vsync, presented or not. */
+    if (!wl_list_empty(&held_feedbacks)) dnx_wl_request_frame();
 }
 
 static const struct wl_surface_interface surface_impl = {
