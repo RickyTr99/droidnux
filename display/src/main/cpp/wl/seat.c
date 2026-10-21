@@ -236,20 +236,15 @@ void dnx_wl_seat_cursor_committed(struct dnx_wl_surface* s) {
         dnx_presenter_set_cursor(NULL, 0, 0, 0, 0);
         return;
     }
-    /* Desktop pixels: the image is width / buffer scale in surface coordinates. */
-    double factor = dnx_wl_scale / s->scale;
-    int32_t out_width = (int32_t) lround(width * factor), out_height = (int32_t) lround(height * factor);
-    if (out_width < 1) out_width = 1;
-    if (out_height < 1) out_height = 1;
-    uint32_t* rgba = malloc(sizeof(uint32_t) * (size_t) out_width * (size_t) out_height);
-    /* Premultiplied 0xAARRGGBB to the layer's premultiplied RGBA bytes, as in
-     * x11/output.c, resampled to the nearest pixel. */
-    for (int32_t y = 0; rgba && y < out_height; y++) {
-        int32_t sy = (int32_t) (y * height / out_height);
-        const uint32_t* row = (const uint32_t*) (data + (size_t) sy * stride);
-        for (int32_t x = 0; x < out_width; x++) {
-            uint32_t p = row[x * width / out_width];
-            rgba[y * out_width + x] = (p & 0xFF00FF00) | ((p & 0x00FF0000) >> 16) | ((p & 0x000000FF) << 16);
+    /* KWin draws the cursor at its own scale with buffer scale 1 and the hotspot
+     * in buffer pixels: the buffer is already in desktop pixels. */
+    uint32_t* rgba = malloc(sizeof(uint32_t) * (size_t) width * (size_t) height);
+    /* Premultiplied 0xAARRGGBB to the layer's premultiplied RGBA bytes, as in x11/output.c. */
+    for (int32_t y = 0; rgba && y < height; y++) {
+        const uint32_t* row = (const uint32_t*) (data + (size_t) y * stride);
+        for (int32_t x = 0; x < width; x++) {
+            uint32_t p = row[x];
+            rgba[y * width + x] = (p & 0xFF00FF00) | ((p & 0x00FF0000) >> 16) | ((p & 0x000000FF) << 16);
         }
     }
     if (shm)
@@ -257,8 +252,7 @@ void dnx_wl_seat_cursor_committed(struct dnx_wl_surface* s) {
     else
         dnx_wl_dmabuf_end_read(dmabuf);
     if (!rgba) return;
-    dnx_presenter_set_cursor(rgba, (uint32_t) out_width, (uint32_t) out_height,
-                             (int32_t) lround(s->hotspot_x * dnx_wl_scale), (int32_t) lround(s->hotspot_y * dnx_wl_scale));
+    dnx_presenter_set_cursor(rgba, (uint32_t) width, (uint32_t) height, s->hotspot_x, s->hotspot_y);
     free(rgba);
 }
 
