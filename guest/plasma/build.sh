@@ -1,7 +1,8 @@
 #!/bin/sh
-# Builds the DroidNux Plasma component: Debian's KSvg with DroidNux's patches
-# (guest/plasma/patches), which save Plasma's interface file lookups that
-# proot makes slow. Runs on a Debian of the release the app installs: in CI
+# Builds the DroidNux Plasma component: Debian's KSvg and KIconThemes with
+# DroidNux's patches (guest/plasma/patches/<library>), which save the file
+# lookups of Plasma's interface and of KDE's icons that proot makes slow.
+# Runs on a Debian of the release the app installs: in CI
 # (.github/workflows/plasma.yml) or inside the container itself.
 #
 #   guest/plasma/build.sh <work dir> <output dir>
@@ -9,7 +10,8 @@
 # Output: droidnux-plasma-<version>-arm64.tar.xz, the contents of $PREFIX,
 # and its .sha256. The tree goes to /opt/droidnux/plasma; the Plasma session
 # puts its lib directory first in LD_LIBRARY_PATH while the distro's
-# libkf6svg6 is the version it was built from.
+# libraries are the versions they were built from (droidnux-plasma.version:
+# the component's version, then a "<package> <version>" line for each).
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -27,26 +29,32 @@ if [ "${DROIDNUX_PLASMA_DEPS:-}" = install ]; then
     apt-get update -q
     apt-get install -y -q --no-install-recommends dpkg-dev xz-utils cmake g++ extra-cmake-modules \
         qt6-base-dev qt6-declarative-dev qt6-svg-dev libkf6archive-dev libkf6config-dev \
-        libkf6colorscheme-dev libkf6coreaddons-dev libkf6guiaddons-dev libkirigami-dev
+        libkf6colorscheme-dev libkf6coreaddons-dev libkf6guiaddons-dev libkirigami-dev \
+        qt6-base-private-dev qt6-declarative-private-dev qt6-tools-dev libkf6breezeicons-dev \
+        libkf6configwidgets-dev libkf6i18n-dev libkf6widgetsaddons-dev libxkbcommon-dev
 fi
 
 cd "$WORK"
 rm -rf src build stage
 mkdir src
-(cd src && apt-get source -q --download-only "kf6-ksvg=$KSVG_DEB" && dpkg-source -x kf6-ksvg_*.dsc ksvg)
-for p in "$HERE"/patches/*.patch; do patch -d src/ksvg -p1 < "$p"; done
-
-# Only the library: the QML module stays Debian's.
-cmake -S src/ksvg -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr \
-    -DBUILD_TESTING=OFF -DBUILD_QCH=OFF
-cmake --build build --target KF6Svg -j"$(nproc)"
-
 STAGE=$WORK/stage$PREFIX
 mkdir -p "$STAGE/$LIBDIR"
-SONAME=libKF6Svg.so.6
-cp -L "build/bin/$SONAME" "$STAGE/$LIBDIR/$SONAME"
-strip --strip-unneeded "$STAGE/$LIBDIR/$SONAME"
-printf '%s\nlibkf6svg6 %s\n' "$VERSION" "$KSVG_DEB" > "$STAGE/droidnux-plasma.version"
+printf '%s\n' "$VERSION" > "$STAGE/droidnux-plasma.version"
+
+# build <source package> <version> <directory> <CMake target> <library> <binary package>
+# Only the library: QML modules and the rest stay Debian's.
+build() {
+    (cd src && apt-get source -q --download-only "$1=$2" && dpkg-source -x "$1"_*.dsc "$3")
+    for p in "$HERE/patches/$3"/*.patch; do patch -d "src/$3" -p1 < "$p"; done
+    cmake -S "src/$3" -B "build/$3" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/usr \
+        -DBUILD_TESTING=OFF -DBUILD_QCH=OFF
+    cmake --build "build/$3" --target "$4" -j"$(nproc)"
+    cp -L "build/$3/bin/$5" "$STAGE/$LIBDIR/$5"
+    strip --strip-unneeded "$STAGE/$LIBDIR/$5"
+    printf '%s %s\n' "$6" "$2" >> "$STAGE/droidnux-plasma.version"
+}
+build kf6-ksvg "$KSVG_DEB" ksvg KF6Svg libKF6Svg.so.6 libkf6svg6
+build kf6-kiconthemes "$KICONTHEMES_DEB" kiconthemes KF6IconThemes libKF6IconThemes.so.6 libkf6iconthemes6
 
 NAME=droidnux-plasma-$VERSION-arm64.tar.xz
 tar -C "$STAGE" --owner=0 --group=0 --numeric-owner --sort=name -cJf "$OUT/$NAME" .

@@ -1,0 +1,99 @@
+KIconThemeDir: read each directory once instead of a stat per lookup
+
+An icon missing from the current theme is searched for in every
+directory of every inherited theme, one QFileInfo::exists() per
+directory and extension: opening Plasma's launcher the first time costs
+about 1,700 of them for the icons of a few applications and categories
+(org.kde.dolphin alone 550). Where every file system call is slow
+(under proot, which translates each one), that is most of the half
+second before the launcher shows.
+
+Each directory now keeps the hashes of its file names, read with one
+opendir()/readdir() and again once they are older than ten seconds, so
+icons installed later still show up. A name that is listed is still
+checked with QFileInfo::exists(); themes in Qt resources are looked up
+as before.
+
+--- a/src/kicontheme.cpp
++++ b/src/kicontheme.cpp
+@@ -22,8 +22,10 @@
+ #include <QCoreApplication>
+ #include <QDebug>
+ #include <QDir>
++#include <QElapsedTimer>
+ #include <QFileInfo>
+ #include <QMap>
++#include <QMutex>
+ #include <QResource>
+ #include <QSet>
+ #include <QTimer>
+@@ -35,6 +37,7 @@
+ 
+ #include <array>
+ #include <cmath>
++#include <dirent.h>
+ 
+ #include "config.h"
+ 
+@@ -199,6 +202,7 @@
+     }
+     QString iconPath(const QString &name) const;
+     QStringList iconList() const;
++    bool mayContain(const QString &name) const;
+     QString constructFileName(const QString &file) const
+     {
+         return mBaseDir + mThemeDir + QLatin1Char('/') + file;
+@@ -245,6 +249,15 @@
+ 
+     const QString mBaseDir;
+     const QString mThemeDir;
++
++    // Hashes of the file names in the directory, read again when older than
++    // a few seconds: one directory read instead of a stat() for every name
++    // looked up, most of them missing (an icon is searched for in every
++    // directory of every inherited theme). File system calls are slow where
++    // a tracer translates them (proot).
++    mutable QMutex mEntriesMutex;
++    mutable QSet<size_t> mEntries;
++    mutable QElapsedTimer mEntriesAge;
+ };
+ 
+ QString KIconThemePrivate::iconPath(const QList<KIconThemeDir *> &dirs, const QString &name, int size, qreal scale, KIconLoader::MatchType match) const
+@@ -832,6 +845,10 @@
+         return QString();
+     }
+ 
++    if (!mayContain(name)) {
++        return QString();
++    }
++
+     const QString file = constructFileName(name);
+     if (QFileInfo::exists(file)) {
+         return KLocalizedString::localizedFilePath(file);
+@@ -840,6 +857,26 @@
+     return QString();
+ }
+ 
++bool KIconThemeDir::mayContain(const QString &name) const
++{
++    if (mBaseDir.startsWith(QLatin1Char(':'))) {
++        return true; // a theme in resources: no directory to read
++    }
++
++    QMutexLocker locker(&mEntriesMutex);
++    if (!mEntriesAge.isValid() || mEntriesAge.hasExpired(10000)) {
++        mEntries.clear();
++        if (DIR *dir = opendir(QFile::encodeName(constructFileName(QString())).constData())) {
++            while (const dirent *entry = readdir(dir)) {
++                mEntries.insert(qHash(QByteArrayView(entry->d_name)));
++            }
++            closedir(dir);
++        }
++        mEntriesAge.start();
++    }
++    return mEntries.contains(qHash(QByteArrayView(QFile::encodeName(name))));
++}
++
+ QStringList KIconThemeDir::iconList() const
+ {
+     const QDir icondir = constructFileName(QString());

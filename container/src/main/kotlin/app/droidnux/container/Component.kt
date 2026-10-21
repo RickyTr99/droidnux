@@ -47,7 +47,7 @@ data class Component(
             guestPath = DesktopEnvironment.THEME_PREFIX,
         )
 
-        /** KSvg with fewer file lookups, which proot makes slow: guest/plasma. */
+        /** KSvg and KIconThemes with fewer file lookups, which proot makes slow: guest/plasma. */
         val PLASMA = Component(
             id = "plasma",
             version = "6.13.0-dn1",

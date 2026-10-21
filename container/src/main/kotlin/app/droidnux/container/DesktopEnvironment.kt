@@ -41,7 +41,7 @@ object DesktopEnvironment {
     /** Where the theme component (guest/theme: Papirus icons, scaled window borders) is unpacked. */
     const val THEME_PREFIX = "/opt/droidnux/theme"
 
-    /** Where the Plasma component (guest/plasma: patched KSvg) is unpacked. */
+    /** Where the Plasma component (guest/plasma: patched KSvg and KIconThemes) is unpacked. */
     const val PLASMA_PREFIX = "/opt/droidnux/plasma"
 
     /**
@@ -531,11 +531,13 @@ ${GPU_ENV.prependIndent("            ")}
                 # KWin renders into GBM buffers from the app (Mesa patch 0004).
                 export GBM_BACKENDS_PATH=${'$'}MESA/lib/aarch64-linux-gnu/gbm
             fi
-            # KSvg with DroidNux's patches (Plasma component), while the distro's
-            # is the version it was built from.
+            # KSvg and KIconThemes with DroidNux's patches (Plasma component),
+            # while the distro's are the versions they were built from (the
+            # "<package> <version>" lines after the component's version).
             PLASMA=$PLASMA_PREFIX
-            if [ -f "${'$'}PLASMA/droidnux-plasma.version" ] && [ "${'$'}(sed -n 2p "${'$'}PLASMA/droidnux-plasma.version")" = \
-                "libkf6svg6 ${'$'}(dpkg-query -W -f '${'$'}{Version}' libkf6svg6 2> /dev/null)" ]; then
+            if [ -f "${'$'}PLASMA/droidnux-plasma.version" ] && [ "${'$'}(sed 1d "${'$'}PLASMA/droidnux-plasma.version")" = \
+                "${'$'}(sed 1d "${'$'}PLASMA/droidnux-plasma.version" | while read -r package version; do
+                    echo "${'$'}package ${'$'}(dpkg-query -W -f '${'$'}{Version}' "${'$'}package" 2> /dev/null)"; done)" ]; then
                 export LD_LIBRARY_PATH=${'$'}PLASMA/lib/aarch64-linux-gnu${'$'}{LD_LIBRARY_PATH:+:${'$'}LD_LIBRARY_PATH}
             fi
             # Turnip on KGSL has no calibrated timestamps: Zink answers
