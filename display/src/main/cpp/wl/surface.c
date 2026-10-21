@@ -78,6 +78,8 @@ static void damage_all(struct dnx_wl_surface* s) {
  * second one before the vsync would replace the first before Android latches
  * it. What waits, or what the presenter cannot take yet, goes on the next
  * vsync. True if a frame went to the presenter. */
+static void flush_held_feedbacks(bool presented);
+
 static bool present_shown(void) {
     struct dnx_wl_surface* s = shown;
     if (!s || !s->buffer || s->damage.count == 0) return false;
@@ -122,6 +124,8 @@ static bool present_shown(void) {
     if (ok) {
         s->damage.count = 0;
         frame_sent = true;
+        /* Also after a redraw: a frame held while the app was away waits for this. */
+        flush_held_feedbacks(true);
     }
     dnx_wl_request_frame(); /* to retry, or to let the next frame through */
     return ok;
@@ -178,6 +182,7 @@ static void send_feedback(struct wl_resource* feedback, bool presented) {
 
 /* The held frame went to the presenter (or never will, for another surface). */
 static void flush_held_feedbacks(bool presented) {
+    if (wl_list_empty(&held_feedbacks)) return; /* predict_presentation() counts its calls */
     int64_t when = presented ? predict_presentation() : 0;
     struct wl_resource *feedback, *next;
     wl_resource_for_each_safe(feedback, next, &held_feedbacks) {
@@ -203,7 +208,7 @@ void dnx_wl_surface_on_frame(void) {
         send_feedback(callback, wl_resource_get_user_data(callback) == shown);
         wl_resource_destroy(callback);
     }
-    flush_held_feedbacks(present_shown());
+    if (!present_shown()) flush_held_feedbacks(false);
 }
 
 void dnx_wl_surface_redraw(void) {
