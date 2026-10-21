@@ -54,6 +54,7 @@ android {
             applicationIdSuffix = ".wl"
             matchingFallbacks += "debug"
             resValue("bool", "wayland_frontend", "true")
+            resValue("bool", "burrow_runtime", "true")
         }
         release {
             if (!signingProps.isEmpty) signingConfig = signingConfigs.getByName("release")

@@ -10,13 +10,16 @@ import java.io.File
 internal const val GUEST_SDCARD = "/sdcard"
 
 /**
- * Builds proot command lines.
+ * Builds the command lines of the guest runtime: Burrow (our own, see
+ * burrow/burrow.h) where the build enables it, proot otherwise.
  *
- * proot and its loader ship as lib*.so in the APK and are extracted by the
- * installer into the native library directory, the only place an app with
- * targetSdk >= 29 may execute files from.
+ * Both ship as lib*.so in the APK and are extracted by the installer into the
+ * native library directory, the only place an app with targetSdk >= 29 may
+ * execute files from.
  */
 class Proot(context: Context) {
+
+    private val useBurrow = context.resources.getBoolean(R.bool.burrow_runtime)
 
     private val nativeDir = File(context.applicationInfo.nativeLibraryDir)
     private val tmpDir = File(context.cacheDir, "proot-tmp")
@@ -24,6 +27,7 @@ class Proot(context: Context) {
 
     val binary = File(nativeDir, "libproot.so")
     val loader = File(nativeDir, "libproot-loader.so")
+    private val burrow = File(nativeDir, "libburrow.so")
 
     /** Environment proot itself needs (not the guest's). */
     fun hostEnvironment(): Map<String, String> {
@@ -43,13 +47,18 @@ class Proot(context: Context) {
      */
     fun guestCommand(rootfs: File, command: List<String>, workDir: String = "/root"): List<String> =
         buildList {
-            add(binary.absolutePath)
-            add("--kill-on-exit")
-            add("--link2symlink")
-            add("--sysvipc")
-            add("-L")
-            add("-0")
-            add("-r"); add(rootfs.absolutePath)
+            if (useBurrow) {
+                add(burrow.absolutePath)
+                add("-r"); add(rootfs.absolutePath)
+            } else {
+                add(binary.absolutePath)
+                add("--kill-on-exit")
+                add("--link2symlink")
+                add("--sysvipc")
+                add("-L")
+                add("-0")
+                add("-r"); add(rootfs.absolutePath)
+            }
             for (bind in DEFAULT_BINDS) {
                 add("-b"); add(bind)
             }
@@ -61,6 +70,7 @@ class Proot(context: Context) {
             }
             addAll(gpuNodeBinds())
             add("-w"); add(workDir)
+            if (useBurrow) add("--")
             add("/usr/bin/env"); add("-i")
             addAll(GUEST_ENVIRONMENT.map { (k, v) -> "$k=$v" })
             // Android's time zone (the guest's /etc/localtime says UTC).

@@ -16,6 +16,32 @@ set(PROOT_UPSTREAM_SRC ${THIRD_PARTY}/proot/src)
 set(TALLOC_SRC ${THIRD_PARTY}/talloc)
 set(PROOT_VERSION "5.1.107.97")
 
+# ---------------------------------------------------------------------------
+# Burrow, our runtime (see burrow/burrow.h): a freestanding static binary
+# linked at a fixed address, since its SIGSYS handler and syscall gadget stay
+# mapped in every guest process. Defined before the third-party options below:
+# its warnings are ours.
+
+add_executable(burrow
+    burrow/start.S
+    burrow/config.c
+    burrow/elf.c
+    burrow/l2s.c
+    burrow/main.c
+    burrow/path.c
+    burrow/trap.c
+    burrow/util.c)
+set_target_properties(burrow PROPERTIES OUTPUT_NAME "libburrow.so")
+target_compile_options(burrow PRIVATE
+    -O2 -Wall -Wextra
+    -ffreestanding -fno-stack-protector -U_FORTIFY_SOURCE
+    -fno-pic -fno-pie -fno-asynchronous-unwind-tables)
+target_link_options(burrow PRIVATE
+    -static -nostdlib -no-pie
+    -Wl,--image-base=0x5600000000
+    -Wl,--build-id=none
+    -Wl,-z,noexecstack)
+
 if(NOT EXISTS ${PROOT_UPSTREAM_SRC}/cli/proot.c)
     message(FATAL_ERROR "third_party/proot is empty: run 'git submodule update --init'")
 endif()
