@@ -29,6 +29,7 @@ add_executable(burrow
     burrow/l2s.c
     burrow/main.c
     burrow/path.c
+    burrow/sysv.c
     burrow/trap.c
     burrow/util.c)
 set_target_properties(burrow PROPERTIES OUTPUT_NAME "libburrow.so")
