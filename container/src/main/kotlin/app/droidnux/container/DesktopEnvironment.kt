@@ -27,6 +27,9 @@ object DesktopEnvironment {
 
     /** MIT-SHM segments the app's X server can attach (display/src/main/cpp/shm). */
     private const val SHM_LIBRARY = "libdroidnux-guest-shm.so"
+
+    /** Path syscalls without a proot stop (guest/paths), preloaded into Plasma. */
+    private const val PATHS_LIBRARY = "libdroidnux-guest-paths.so"
     private const val GUEST_LIB_DIR = "/usr/local/lib/droidnux"
 
     /** Sound: DroidNux's PipeWire sink (guest/pipewire), in PipeWire's module directory. */
@@ -161,6 +164,10 @@ object DesktopEnvironment {
         writeFile(rootfs, APPS_SCRIPT, APPS.toByteArray(), mode = 0x1ED)
         writeFile(
             rootfs, "$GUEST_LIB_DIR/$SHM_LIBRARY", File(nativeLibraryDir, SHM_LIBRARY).readBytes(),
+            mode = 0x1A4,
+        )
+        writeFile(
+            rootfs, "$GUEST_LIB_DIR/$PATHS_LIBRARY", File(nativeLibraryDir, PATHS_LIBRARY).readBytes(),
             mode = 0x1A4,
         )
         writeFile(rootfs, "$PIPEWIRE_MODULE_DIR/$PIPEWIRE_MODULE", File(nativeLibraryDir, PIPEWIRE_MODULE).readBytes())
@@ -543,6 +550,8 @@ ${GPU_ENV.prependIndent("            ")}
             # Turnip on KGSL has no calibrated timestamps: Zink answers
             # GL_TIMESTAMP with a GPU round trip, which KWin asks every frame.
             export KWIN_NO_TIMER_QUERY=1
+            # Opening apps: most of their path syscalls skip proot (proot patch 0009).
+            export LD_PRELOAD=$GUEST_LIB_DIR/$PATHS_LIBRARY${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}
             mkdir -p "${'$'}XDG_RUNTIME_DIR" && chmod 700 "${'$'}XDG_RUNTIME_DIR"
             # Xwayland's sockets, made by KWin.
             mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix

@@ -33,6 +33,15 @@ target_compile_options(droidnux-guest-shm PRIVATE
 target_link_options(droidnux-guest-shm PRIVATE
     -nostdlib -Wl,--as-needed -Wl,-z,undefs -Wl,--pack-dyn-relocs=none -Wl,--hash-style=both)
 
+# Preload library for the Plasma session: path syscalls served without a
+# proot stop (guest/paths). Loaded by glibc like the library above.
+add_library(droidnux-guest-paths SHARED ${GUEST_DIR}/paths/droidnux-paths.c)
+target_compile_options(droidnux-guest-paths PRIVATE
+    -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics
+    -U_FORTIFY_SOURCE -fno-asynchronous-unwind-tables -fvisibility=hidden)
+target_link_options(droidnux-guest-paths PRIVATE
+    -nostdlib -Wl,--as-needed -Wl,-z,undefs -Wl,--pack-dyn-relocs=none -Wl,--hash-style=both)
+
 # PipeWire module for the container's audio (guest/pipewire): an Audio/Sink
 # playing through core/audio_output.cpp. Like the library above it is loaded by
 # glibc, so it links to nothing; the PipeWire headers are only for its types and
