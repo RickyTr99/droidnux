@@ -50,10 +50,10 @@ data class Component(
         /** KSvg and KIconThemes with fewer file lookups, which proot makes slow: guest/plasma. */
         val PLASMA = Component(
             id = "plasma",
-            version = "6.13.0-dn1",
-            url = "$RELEASES/plasma-6.13.0-dn1/droidnux-plasma-6.13.0-dn1-arm64.tar.xz",
-            sha256 = "f7bbef8e3f4589c9f7a335ffa9bfe893c11f7e3cbfd09ae74cc2d55ba80d01de",
-            sizeBytes = 90_640,
+            version = "6.13.0-dn2",
+            url = "$RELEASES/plasma-6.13.0-dn2/droidnux-plasma-6.13.0-dn2-arm64.tar.xz",
+            sha256 = "85c6ab53b36441fbed60b9dfeebf7ea65fb51e673c7b2f9829fee7cfa238be68",
+            sizeBytes = 150_708,
             guestPath = DesktopEnvironment.PLASMA_PREFIX,
             waylandOnly = true,
         )
