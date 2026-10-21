@@ -73,6 +73,8 @@ class Proot(context: Context) {
             if (useBurrow) add("--")
             add("/usr/bin/env"); add("-i")
             addAll(GUEST_ENVIRONMENT.map { (k, v) -> "$k=$v" })
+            // Lets the session skip what only proot needs.
+            if (useBurrow) add("DROIDNUX_RUNTIME=burrow")
             // Android's time zone (the guest's /etc/localtime says UTC).
             add("TZ=${java.util.TimeZone.getDefault().id}")
             addAll(command)

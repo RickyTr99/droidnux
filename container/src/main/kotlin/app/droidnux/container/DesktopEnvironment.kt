@@ -553,7 +553,10 @@ ${GPU_ENV.prependIndent("            ")}
             # GL_TIMESTAMP with a GPU round trip, which KWin asks every frame.
             export KWIN_NO_TIMER_QUERY=1
             # Opening apps: most of their path syscalls skip proot (proot patch 0009).
-            export LD_PRELOAD=$GUEST_LIB_DIR/$PATHS_LIBRARY${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}
+            # Burrow has no stops to skip.
+            if [ "${'$'}DROIDNUX_RUNTIME" != burrow ]; then
+                export LD_PRELOAD=$GUEST_LIB_DIR/$PATHS_LIBRARY${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}
+            fi
             mkdir -p "${'$'}XDG_RUNTIME_DIR" && chmod 700 "${'$'}XDG_RUNTIME_DIR"
             # Xwayland's sockets, made by KWin.
             mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
