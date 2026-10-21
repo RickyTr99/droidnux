@@ -94,6 +94,8 @@ object DesktopEnvironment {
         // The browser pinned in the dock (PANEL_DEFAULTS).
         "firefox-esr",
         "fonts-dejavu-core", "tzdata",
+        // Chinese, Japanese, Korean and emoji: without them web pages show empty boxes.
+        "fonts-noto-cjk", "fonts-noto-color-emoji",
         // Android's language in the desktop's apps (SESSION generates the locale).
         "locales",
         // The app's list of Linux apps: gio starts them, rsvg-convert draws their icons (APPS_SCRIPT).
