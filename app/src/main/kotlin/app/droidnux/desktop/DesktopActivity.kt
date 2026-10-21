@@ -322,7 +322,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             Log.i(TAG, "display server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
             DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout(), dpi())
             clipboardToX()
-            if (wayland) applyUiScale() // kept by the compositor until KWin connects
         } else {
             DisplayServer.resize(desktopWidth, desktopHeight)
         }
@@ -669,7 +668,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private fun applyUiScale() {
         if (!DisplayServer.running) return
         if (wayland) {
-            // KWin's output scale, in the 5% steps of Plasma's display settings.
+            // KWin's output scale, in the 5% steps of Plasma's display settings. Only on a change:
+            // KWin keeps it across sessions, and the display settings may set it too.
             DisplayServer.setScale((dpi() * 20f / BASE_DPI).roundToInt() / 20f)
             return
         }

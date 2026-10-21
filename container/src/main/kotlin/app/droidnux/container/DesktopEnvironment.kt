@@ -76,6 +76,8 @@ object DesktopEnvironment {
         // xkbcomp builds the keymap the compositor sends (PLASMA_SESSION).
         "x11-xkb-utils",
         "systemsettings", "kinfocenter", "plasma-systemmonitor", "plasma-pa", "xdg-desktop-portal-kde",
+        // Display settings: the scale, which the app's compositor follows.
+        "kscreen",
         "konsole", "dolphin", "kwrite", "ark", "gwenview", "okular", "kde-spectacle",
         // GTK apps (Firefox) in Breeze, set from System Settings.
         "breeze-gtk-theme", "kde-config-gtk-style",
