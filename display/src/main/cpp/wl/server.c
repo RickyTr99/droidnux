@@ -86,6 +86,10 @@ int64_t dnx_wl_vsync_ns(void) {
 }
 
 void dnx_wl_request_frame(void) {
+    /* Without a window (the app in the background) no frame reaches the screen:
+     * no vsync, so KWin and its clients wait instead of drawing for nothing.
+     * The redraw when the window is back starts the frames again. */
+    if (!dnx_presenter_attached()) return;
     if (!atomic_exchange(&vsync_requested, true)) dnx_presenter_request_vsync();
 }
 
