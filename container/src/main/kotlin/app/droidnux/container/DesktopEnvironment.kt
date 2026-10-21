@@ -399,12 +399,21 @@ object DesktopEnvironment {
         # must run in this proot, which a separate one would kill when it exits.
         rm -f $LAUNCH_FIFO && mkfifo -m 600 $LAUNCH_FIFO
         # Apps started before the desktop shares its theme keep default icons.
+        # They get LAUNCH_AFTER's environment, as the desktop's launchers do: under
+        # Plasma, ours names the app's compositor instead of KWin.
         (until pgrep -x ${'$'}LAUNCH_AFTER > /dev/null; do sleep 0.2; done; sleep 1
         while :; do
             while read -r id; do
                 case "${'$'}id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+                p=${'$'}(pgrep -x ${'$'}LAUNCH_AFTER | head -1)
                 for d in /usr/local/share/applications /usr/share/applications; do
-                    [ -f "${'$'}d/${'$'}id.desktop" ] && { gio launch "${'$'}d/${'$'}id.desktop" & break; }
+                    [ -f "${'$'}d/${'$'}id.desktop" ] || continue
+                    if [ -r "/proc/${'$'}p/environ" ]; then
+                        xargs -0 -a "/proc/${'$'}p/environ" sh -c 'exec env -i "${'$'}@" gio launch "${'$'}0"' "${'$'}d/${'$'}id.desktop" &
+                    else
+                        gio launch "${'$'}d/${'$'}id.desktop" &
+                    fi
+                    break
                 done
             done < $LAUNCH_FIFO
         done) &
