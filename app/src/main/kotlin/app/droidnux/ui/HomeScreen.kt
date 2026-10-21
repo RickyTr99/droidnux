@@ -73,6 +73,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.booleanResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -541,6 +542,9 @@ private fun SystemTab(state: AppState, viewModel: AppViewModel, padding: Padding
             }
             ComponentRow(Component.MESA, stringResource(R.string.install_gpu), state, viewModel)
             ComponentRow(Component.THEME, stringResource(R.string.section_theme), state, viewModel)
+            if (booleanResource(R.bool.wayland_frontend)) {
+                ComponentRow(Component.PLASMA, stringResource(R.string.plasma_component), state, viewModel)
+            }
 
             SectionHeader(stringResource(R.string.system_checks), Modifier.padding(top = 20.dp, bottom = 4.dp))
             SystemChecks(state.gpu)

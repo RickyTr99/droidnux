@@ -111,6 +111,7 @@
     <string name="install_packages">Pacchetti %1$d di %2$d</string>
     <string name="install_gpu">Grafica accelerata</string>
     <string name="install_gpu_text">Turnip e Zink per Adreno</string>
+    <string name="plasma_component">Ottimizzazioni di Plasma</string>
     <string name="install_theme_text">Icone Papirus e bordi delle finestre</string>
     <string name="install_show_log">Mostra il registro</string>
     <string name="install_hide_log">Nascondi il registro</string>

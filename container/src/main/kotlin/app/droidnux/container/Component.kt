@@ -52,8 +52,8 @@ data class Component(
             id = "plasma",
             version = "6.13.0-dn1",
             url = "$RELEASES/plasma-6.13.0-dn1/droidnux-plasma-6.13.0-dn1-arm64.tar.xz",
-            sha256 = "",
-            sizeBytes = 0,
+            sha256 = "f7bbef8e3f4589c9f7a335ffa9bfe893c11f7e3cbfd09ae74cc2d55ba80d01de",
+            sizeBytes = 90_640,
             guestPath = DesktopEnvironment.PLASMA_PREFIX,
             waylandOnly = true,
         )

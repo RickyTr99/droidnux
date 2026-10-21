@@ -118,6 +118,7 @@
     <string name="install_packages">Packages %1$d of %2$d</string>
     <string name="install_gpu">Accelerated graphics</string>
     <string name="install_gpu_text">Turnip and Zink for Adreno</string>
+    <string name="plasma_component">Plasma speed-ups</string>
     <string name="install_theme_text">Papirus icons and window borders</string>
     <string name="install_show_log">Show the log</string>
     <string name="install_hide_log">Hide the log</string>
