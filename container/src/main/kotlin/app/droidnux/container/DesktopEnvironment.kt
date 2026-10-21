@@ -486,6 +486,33 @@ ${LAUNCH_LOOP.prependIndent("        ")}
         echo $SESSION_END_MARKER
     """.trimIndent() + "\n"
 
+    /**
+     * Plasma session part: plasmashell back when it exits during the session. KWin
+     * drops a client on a protocol error and Qt then exits instead of crashing, so
+     * KCrash does not restart it and the desktop stays black. Waits with tail --pid
+     * (one syscall a second) rather than polling pgrep, which costs proot hundreds.
+     */
+    private val PLASMASHELL_WATCH = """
+        (until p=${'$'}(pgrep -x plasmashell | head -1) && [ -n "${'$'}p" ]; do sleep 1; done
+        sleep 2
+        env=${'$'}XDG_RUNTIME_DIR/.droidnux-plasmashell-environ
+        cp /proc/${'$'}p/environ "${'$'}env" || exit
+        n=0
+        while [ ${'$'}n -lt 20 ]; do
+            tail --pid="${'$'}p" -f /dev/null
+            # At logout ksmserver goes too: leave plasmashell gone.
+            sleep 2
+            pgrep -x ksmserver > /dev/null || exit
+            p=${'$'}(pgrep -x plasmashell | head -1)
+            if [ -z "${'$'}p" ]; then
+                echo "plasmashell exited, restarting it"
+                xargs -0 -a "${'$'}env" sh -c 'exec env -i "${'$'}@" plasmashell' sh > /dev/null 2>&1 &
+                p=${'$'}!
+                n=${'$'}((n + 1))
+            fi
+        done) &
+    """.trimIndent()
+
     private val PLASMA_SESSION = """
         #!/bin/sh
         # Written by DroidNux: starts Plasma, its KWin nested on the app's
@@ -544,6 +571,7 @@ ${SDCARD_LINK.prependIndent("            ")}
 ${SESSION_SERVICES.prependIndent("        ")}
         LAUNCH_AFTER=plasmashell
 ${LAUNCH_LOOP.prependIndent("        ")}
+${PLASMASHELL_WATCH.prependIndent("        ")}
         startplasma-wayland
         echo $SESSION_END_MARKER
     """.trimIndent() + "\n"
