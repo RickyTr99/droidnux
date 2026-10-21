@@ -434,10 +434,12 @@ object DesktopEnvironment {
                 p=${'$'}(pgrep -x ${'$'}LAUNCH_AFTER | head -1)
                 for d in /usr/local/share/applications /usr/share/applications; do
                     [ -f "${'$'}d/${'$'}id.desktop" ] || continue
+                    # In a subshell that exits at once: the app is orphaned and reaped
+                    # by the runtime, not left a zombie of this loop.
                     if [ -r "/proc/${'$'}p/environ" ]; then
-                        xargs -0 -a "/proc/${'$'}p/environ" sh -c 'exec env -i "${'$'}@" gio launch "${'$'}0"' "${'$'}d/${'$'}id.desktop" &
+                        (xargs -0 -a "/proc/${'$'}p/environ" sh -c 'exec env -i "${'$'}@" gio launch "${'$'}0"' "${'$'}d/${'$'}id.desktop" &)
                     else
-                        gio launch "${'$'}d/${'$'}id.desktop" &
+                        (gio launch "${'$'}d/${'$'}id.desktop" &)
                     fi
                     break
                 done
