@@ -21,6 +21,8 @@ data class Component(
     val sizeBytes: Long,
     /** Absolute guest path the archive's contents go to. */
     val guestPath: String,
+    /** Only for the Plasma (Wayland) desktop. */
+    val waylandOnly: Boolean = false,
 ) {
     companion object {
         private const val RELEASES = "https://github.com/RickyTr99/droidnux/releases/download"
@@ -45,7 +47,21 @@ data class Component(
             guestPath = DesktopEnvironment.THEME_PREFIX,
         )
 
-        val ALL = listOf(MESA, THEME)
+        /** KSvg with fewer file lookups, which proot makes slow: guest/plasma. */
+        val PLASMA = Component(
+            id = "plasma",
+            version = "6.13.0-dn1",
+            url = "$RELEASES/plasma-6.13.0-dn1/droidnux-plasma-6.13.0-dn1-arm64.tar.xz",
+            sha256 = "",
+            sizeBytes = 0,
+            guestPath = DesktopEnvironment.PLASMA_PREFIX,
+            waylandOnly = true,
+        )
+
+        val ALL = listOf(MESA, THEME, PLASMA)
+
+        /** The components a desktop uses. */
+        fun all(wayland: Boolean) = ALL.filter { wayland || !it.waylandOnly }
     }
 }
 

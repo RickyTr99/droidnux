@@ -1,0 +1,51 @@
+name: Plasma component
+
+# Debian's KSvg with DroidNux's patches for the Plasma session (guest/plasma).
+# Built inside the Debian release the app installs. Tags named
+# plasma-<ksvg version>-dn<revision> publish the archive as a GitHub release
+# the app downloads from.
+
+on:
+  push:
+    branches: [main, phase*, wayland]
+    paths: [guest/plasma/**, .github/workflows/plasma.yml]
+    tags: [plasma-*]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        env:
+          DROIDNUX_PLASMA_DEPS: install
+        run: sh guest/plasma/build.sh "$RUNNER_TEMP/plasma" out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: droidnux-plasma
+          path: out/*
+          if-no-files-found: error
+
+      - name: Check the tag matches the version
+        if: startsWith(github.ref, 'refs/tags/plasma-')
+        run: |
+          . guest/plasma/version.sh
+          test "$GITHUB_REF_NAME" = "plasma-${KSVG_DEB%-*}-dn$DROIDNUX_REVISION"
+
+      - name: Release
+        if: startsWith(github.ref, 'refs/tags/plasma-')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          name: Plasma ${{ github.ref_name }}
+          body: KSvg with DroidNux's patches (fewer file lookups under proot) for the Plasma session, built from guest/plasma.

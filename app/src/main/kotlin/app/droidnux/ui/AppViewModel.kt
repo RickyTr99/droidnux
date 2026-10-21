@@ -102,7 +102,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val (desktop, upToDate) = withContext(Dispatchers.IO) {
                 DesktopEnvironment.isInstalled(rootfs, wayland) to DesktopEnvironment.isUpToDate(rootfs, wayland)
             }
-            Component.ALL.forEach { refreshComponent(it) }
+            Component.all(wayland).forEach { refreshComponent(it) }
             _state.update {
                 it.copy(
                     proot = proot,
@@ -155,7 +155,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     if (!installDesktopPackages()) throw IllegalStateException(_state.value.desktopLog.lines().lastOrNull().orEmpty())
                 }
                 _state.update { it.copy(setup = SetupState(SetupStep.COMPONENTS)) }
-                for (component in Component.ALL) {
+                for (component in Component.all(wayland)) {
                     if (component.sha256.isEmpty() || _state.value.components[component.id] == InstallState.Installed) continue
                     installComponentNow(component)
                 }
@@ -237,7 +237,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 DesktopEnvironment.isInstalled(rootfs, wayland) to DesktopEnvironment.isUpToDate(rootfs, wayland)
             }
             _state.update { it.copy(desktopInstalled = desktop, desktopUpToDate = upToDate) }
-            Component.ALL.forEach { refreshComponent(it) } // a fresh rootfs has no components
+            Component.all(wayland).forEach { refreshComponent(it) } // a fresh rootfs has no components
         } catch (e: CancellationException) {
             _state.update { it.copy(rootfs = InstallState.NotInstalled) }
             throw e
