@@ -6,6 +6,7 @@
 #include <jni.h>
 
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "buffer_spike.h"
@@ -166,10 +167,35 @@ struct JniString {
 };
 }  // namespace
 
+namespace {
+// Text fields of the nested KWin gaining or losing the focus go to
+// DisplayServer.textInputFromWayland, on the compositor thread.
+JavaVM* textInputVm;
+jclass textInputClass;
+jmethodID textInputMethod;
+
+void onTextInput(bool active) {
+    JNIEnv* env = nullptr;
+    // The compositor thread lives as long as the process: attach it once.
+    if (textInputVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK &&
+        textInputVm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+        return;
+    }
+    env->CallStaticVoidMethod(textInputClass, textInputMethod, active ? JNI_TRUE : JNI_FALSE);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
+}  // namespace
+
 extern "C" JNIEXPORT jboolean JNICALL
-Java_app_droidnux_display_DisplayServer_nativeStartWayland(JNIEnv* env, jclass, jstring tmpDir, jint display, jint width,
-                                                           jint height) {
+Java_app_droidnux_display_DisplayServer_nativeStartWayland(JNIEnv* env, jclass clazz, jstring tmpDir, jint display,
+                                                           jint width, jint height) {
     JniString tmp(env, tmpDir);
+    if (textInputVm == nullptr) {
+        env->GetJavaVM(&textInputVm);
+        textInputClass = static_cast<jclass>(env->NewGlobalRef(clazz));
+        textInputMethod = env->GetStaticMethodID(clazz, "textInputFromWayland", "(Z)V");
+        dnx_wl_set_text_input_callback(onTextInput);
+    }
     dnx_wl_config config{tmp.chars, display, width, height};
     if (!dnx_wl_start(&config)) return JNI_FALSE;
     wayland = true;
@@ -203,7 +229,7 @@ Java_app_droidnux_display_DisplayServer_nativeKey(JNIEnv*, jclass, jint keycode,
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeText(JNIEnv*, jclass, jint codepoint) {
-    DNX_DISPLAY_CALL(text, static_cast<uint32_t>(codepoint));
+    if (!wayland) DNX_X11_CALL(text, static_cast<uint32_t>(codepoint));
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -224,6 +250,46 @@ Java_app_droidnux_display_DisplayServer_nativeButton(JNIEnv*, jclass, jint butto
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeScroll(JNIEnv*, jclass, jfloat dx, jfloat dy) {
     DNX_DISPLAY_CALL(scroll, dx, dy);
+}
+
+// Wayland only: soft keyboard text through KWin's input method, touch, scale.
+
+namespace {
+// The UTF-8 bytes (Java strings in JNI are modified UTF-8) as a C string.
+std::string utf8String(JNIEnv* env, jbyteArray bytes) {
+    std::string s(static_cast<size_t>(env->GetArrayLength(bytes)), '\0');
+    env->GetByteArrayRegion(bytes, 0, static_cast<jsize>(s.size()), reinterpret_cast<jbyte*>(s.data()));
+    return s;
+}
+}  // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeCommitText(JNIEnv* env, jclass, jbyteArray utf8) {
+    if (wayland) dnx_wl_commit_text(utf8String(env, utf8).c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativePreeditText(JNIEnv* env, jclass, jbyteArray utf8) {
+    if (wayland) dnx_wl_preedit_text(utf8String(env, utf8).c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeTouch(JNIEnv*, jclass, jint type, jint id, jfloat x, jfloat y) {
+    if (!wayland) return;
+    // DisplayServer.TOUCH_*
+    switch (type) {
+    case 0: dnx_wl_touch_down(id, x, y); break;
+    case 1: dnx_wl_touch_motion(id, x, y); break;
+    case 2: dnx_wl_touch_up(id); break;
+    case 3: dnx_wl_touch_frame(); break;
+    case 4: dnx_wl_touch_cancel(); break;
+    default: break;
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeSetScale(JNIEnv*, jclass, jfloat scale) {
+    if (wayland) dnx_wl_set_scale(scale);
 }
 
 // Snapshot and clipboard: X11 only so far.

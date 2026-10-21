@@ -35,8 +35,18 @@ void dnx_wl_redraw(void);
 
 /* Keyboard: evdev keycode (Android scan code). */
 void dnx_wl_key(int evdev_keycode, bool down);
-/* Text without a physical key (IME): a Unicode code point. */
-void dnx_wl_text(uint32_t codepoint);
+/* Soft keyboard text for the focused text field of the nested KWin (its input
+ * method, see wl/nested.c): committed, or still being composed (preedit, "" to
+ * clear it). UTF-8, copied. */
+void dnx_wl_commit_text(const char* utf8);
+void dnx_wl_preedit_text(const char* utf8);
+
+/* Called on the compositor thread when a text field gets (true) or loses the
+ * focus: the soft keyboard may show. Set before dnx_wl_start. */
+void dnx_wl_set_text_input_callback(void (*callback)(bool active));
+
+/* The interface scale the nested KWin should use (1.0 = 100%). */
+void dnx_wl_set_scale(double scale);
 
 /* Pointer, in desktop pixels. */
 void dnx_wl_pointer_move(float x, float y);
@@ -45,6 +55,13 @@ void dnx_wl_pointer_move_relative(float dx, float dy);
 void dnx_wl_button(int button, bool down);
 /* Scroll, in notches (1.0 = one wheel click); fractional values for touchpads. */
 void dnx_wl_scroll(float dx, float dy);
+
+/* Touchscreen, in desktop pixels; a frame ends each group of changes. */
+void dnx_wl_touch_down(int id, float x, float y);
+void dnx_wl_touch_motion(int id, float x, float y);
+void dnx_wl_touch_up(int id);
+void dnx_wl_touch_frame(void);
+void dnx_wl_touch_cancel(void);
 
 #ifdef __cplusplus
 }

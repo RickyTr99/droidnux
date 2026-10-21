@@ -42,8 +42,8 @@ add_library(dnx-ffi STATIC
 target_include_directories(dnx-ffi PUBLIC ${WL_GENERATED_DIR} ${FFI_DIR}/include ${FFI_DIR}/src/aarch64)
 target_compile_options(dnx-ffi PRIVATE -fvisibility=hidden -w)
 
-# libwayland-server. Its sources include "../config.h": the empty directory
-# makes that resolve to ${WL_GENERATED_DIR}/config.h.
+# libwayland-server, and libwayland-client for nested.c. Their sources include
+# "../config.h": the empty directory makes that resolve to ${WL_GENERATED_DIR}/config.h.
 set(WAYLAND_DIR ${WL_THIRD_PARTY}/wayland)
 set(WAYLAND_VERSION_MAJOR 1)
 set(WAYLAND_VERSION_MINOR 26)
@@ -66,32 +66,38 @@ file(WRITE ${WL_GENERATED_DIR}/config.h [=[
 #define HAVE_XUCRED_CR_PID 0
 #define HAVE_BROKEN_MSG_CMSG_CLOEXEC 0
 ]=])
-add_library(dnx-wayland-server STATIC
+add_library(dnx-wayland STATIC
     ${WAYLAND_DIR}/src/connection.c
     ${WAYLAND_DIR}/src/wayland-os.c
     ${WAYLAND_DIR}/src/wayland-util.c
     ${WAYLAND_DIR}/src/wayland-server.c
+    ${WAYLAND_DIR}/src/wayland-client.c
     ${WAYLAND_DIR}/src/wayland-shm.c
     ${WAYLAND_DIR}/src/event-loop.c
     ${CMAKE_CURRENT_LIST_DIR}/protocols/wayland-protocol.c)
-target_include_directories(dnx-wayland-server
+target_include_directories(dnx-wayland
     PUBLIC ${WL_GENERATED_DIR} ${WAYLAND_DIR}/src ${CMAKE_CURRENT_LIST_DIR}/protocols
     PRIVATE ${WL_GENERATED_DIR}/src)
-target_compile_options(dnx-wayland-server PRIVATE -fvisibility=hidden -Wno-unused-parameter)
-target_link_libraries(dnx-wayland-server PUBLIC dnx-ffi)
+target_compile_options(dnx-wayland PRIVATE -fvisibility=hidden -Wno-unused-parameter)
+target_link_libraries(dnx-wayland PUBLIC dnx-ffi)
 
 # Our compositor.
 target_sources(droidnux-display PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/dmabuf.c
+    ${CMAKE_CURRENT_LIST_DIR}/nested.c
     ${CMAKE_CURRENT_LIST_DIR}/seat.c
     ${CMAKE_CURRENT_LIST_DIR}/server.c
     ${CMAKE_CURRENT_LIST_DIR}/surface.c
+    ${CMAKE_CURRENT_LIST_DIR}/protocols/input-method-unstable-v1-protocol.c
+    ${CMAKE_CURRENT_LIST_DIR}/protocols/kde-output-device-v2-protocol.c
+    ${CMAKE_CURRENT_LIST_DIR}/protocols/kde-output-management-v2-protocol.c
     ${CMAKE_CURRENT_LIST_DIR}/protocols/linux-dmabuf-v1-protocol.c
     ${CMAKE_CURRENT_LIST_DIR}/protocols/presentation-time-protocol.c
     ${CMAKE_CURRENT_LIST_DIR}/protocols/xdg-shell-protocol.c)
 set_source_files_properties(
-    ${CMAKE_CURRENT_LIST_DIR}/dmabuf.c ${CMAKE_CURRENT_LIST_DIR}/seat.c ${CMAKE_CURRENT_LIST_DIR}/server.c
+    ${CMAKE_CURRENT_LIST_DIR}/dmabuf.c ${CMAKE_CURRENT_LIST_DIR}/nested.c ${CMAKE_CURRENT_LIST_DIR}/seat.c
+    ${CMAKE_CURRENT_LIST_DIR}/server.c
     ${CMAKE_CURRENT_LIST_DIR}/surface.c
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-Wno-unused-parameter")
 target_include_directories(droidnux-display PRIVATE ${CMAKE_CURRENT_LIST_DIR})
-target_link_libraries(droidnux-display PRIVATE dnx-wayland-server)
+target_link_libraries(droidnux-display PRIVATE dnx-wayland)

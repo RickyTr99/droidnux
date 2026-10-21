@@ -21,7 +21,7 @@ android {
                 }
                 cppFlags += listOf("-std=c++20")
                 // Only our libraries: Termux:X11's own Xlorie target is not used.
-                targets += listOf("droidnux-display", "droidnux-guest-shm", "droidnux-guest-pipewire")
+                targets += listOf("droidnux-display", "droidnux-guest-shm", "droidnux-guest-pipewire", "droidnux-guest-im")
             }
         }
     }

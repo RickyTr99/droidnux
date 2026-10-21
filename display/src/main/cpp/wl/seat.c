@@ -1,6 +1,6 @@
 /*
- * Seat of the DroidNux Wayland front-end: one pointer and one keyboard,
- * focused on the shown surface. The pointer image comes from the client
+ * Seat of the DroidNux Wayland front-end: one pointer, one keyboard and a
+ * touchscreen, focused on the shown surface. The pointer image comes from the client
  * (wl_pointer.set_cursor) and goes to the presenter's cursor layer.
  */
 #include <android/log.h>
@@ -29,8 +29,12 @@
 
 static struct wl_list pointers;  /* wl_pointer resources */
 static struct wl_list keyboards; /* wl_keyboard resources */
+static struct wl_list touches;   /* wl_touch resources */
 static struct dnx_wl_surface* focus;
 static bool pointer_entered, keyboard_entered;
+/* A touch sequence stays with the surface it started on. */
+static struct dnx_wl_surface* touch_focus;
+static int touch_points; /* down on touch_focus */
 static float pointer_x, pointer_y; /* desktop pixels */
 static char* keymap_path;
 static char* keymap_text; /* xkb keymap of the guest's layout, or NULL */
@@ -127,14 +131,16 @@ static bool same_client(struct wl_resource* resource, struct dnx_wl_surface* sur
 }
 
 /* Desktop pixels to surface coordinates: the shown surface fills the desktop. */
+static wl_fixed_t to_surface(float pixels) {
+    return wl_fixed_from_double(pixels / dnx_wl_scale);
+}
+
 static wl_fixed_t surface_x(void) {
-    float scale = focus && focus->width > 0 ? (float) focus->width / (float) dnx_wl_width : 1.0f;
-    return wl_fixed_from_double(pointer_x * scale);
+    return to_surface(pointer_x);
 }
 
 static wl_fixed_t surface_y(void) {
-    float scale = focus && focus->height > 0 ? (float) focus->height / (float) dnx_wl_height : 1.0f;
-    return wl_fixed_from_double(pointer_y * scale);
+    return to_surface(pointer_y);
 }
 
 static void pointer_enter(void) {
@@ -195,6 +201,10 @@ void dnx_wl_seat_surface_destroyed(struct dnx_wl_surface* surface) {
         focus = NULL; /* the client knows: no leave for a destroyed surface */
         pointer_entered = keyboard_entered = false;
     }
+    if (surface == touch_focus) {
+        touch_focus = NULL;
+        touch_points = 0;
+    }
 }
 
 /* -- Cursor ----------------------------------------------------------------- */
@@ -226,13 +236,20 @@ void dnx_wl_seat_cursor_committed(struct dnx_wl_surface* s) {
         dnx_presenter_set_cursor(NULL, 0, 0, 0, 0);
         return;
     }
-    uint32_t* rgba = malloc(sizeof(uint32_t) * (size_t) width * (size_t) height);
-    /* Premultiplied 0xAARRGGBB to the layer's premultiplied RGBA bytes, as in x11/output.c. */
-    for (int32_t y = 0; rgba && y < height; y++) {
-        const uint32_t* row = (const uint32_t*) (data + (size_t) y * stride);
-        for (int32_t x = 0; x < width; x++) {
-            uint32_t p = row[x];
-            rgba[y * width + x] = (p & 0xFF00FF00) | ((p & 0x00FF0000) >> 16) | ((p & 0x000000FF) << 16);
+    /* Desktop pixels: the image is width / buffer scale in surface coordinates. */
+    double factor = dnx_wl_scale / s->scale;
+    int32_t out_width = (int32_t) lround(width * factor), out_height = (int32_t) lround(height * factor);
+    if (out_width < 1) out_width = 1;
+    if (out_height < 1) out_height = 1;
+    uint32_t* rgba = malloc(sizeof(uint32_t) * (size_t) out_width * (size_t) out_height);
+    /* Premultiplied 0xAARRGGBB to the layer's premultiplied RGBA bytes, as in
+     * x11/output.c, resampled to the nearest pixel. */
+    for (int32_t y = 0; rgba && y < out_height; y++) {
+        int32_t sy = (int32_t) (y * height / out_height);
+        const uint32_t* row = (const uint32_t*) (data + (size_t) sy * stride);
+        for (int32_t x = 0; x < out_width; x++) {
+            uint32_t p = row[x * width / out_width];
+            rgba[y * out_width + x] = (p & 0xFF00FF00) | ((p & 0x00FF0000) >> 16) | ((p & 0x000000FF) << 16);
         }
     }
     if (shm)
@@ -240,7 +257,8 @@ void dnx_wl_seat_cursor_committed(struct dnx_wl_surface* s) {
     else
         dnx_wl_dmabuf_end_read(dmabuf);
     if (!rgba) return;
-    dnx_presenter_set_cursor(rgba, (uint32_t) width, (uint32_t) height, s->hotspot_x, s->hotspot_y);
+    dnx_presenter_set_cursor(rgba, (uint32_t) out_width, (uint32_t) out_height,
+                             (int32_t) lround(s->hotspot_x * dnx_wl_scale), (int32_t) lround(s->hotspot_y * dnx_wl_scale));
     free(rgba);
 }
 
@@ -380,6 +398,68 @@ void dnx_wl_seat_key(int key, bool down) {
     }
 }
 
+/* -- Touch ------------------------------------------------------------------- */
+
+static const struct wl_touch_interface touch_impl = {
+    .release = release_resource,
+};
+
+static void touch_cancel(void) {
+    struct wl_resource* touch;
+    if (touch_focus && touch_points > 0) {
+        wl_resource_for_each(touch, &touches) {
+            if (same_client(touch, touch_focus)) wl_touch_send_cancel(touch);
+        }
+    }
+    touch_points = 0;
+}
+
+void dnx_wl_seat_touch_down(int32_t id, float x, float y) {
+    if (!focus) return;
+    if (touch_focus != focus) {
+        touch_cancel();
+        touch_focus = focus;
+    }
+    touch_points++;
+    uint32_t serial = wl_display_next_serial(dnx_wl_display), time = dnx_wl_now_ms();
+    struct wl_resource* touch;
+    wl_resource_for_each(touch, &touches) {
+        if (same_client(touch, focus))
+            wl_touch_send_down(touch, serial, time, focus->resource, id, to_surface(x), to_surface(y));
+    }
+}
+
+void dnx_wl_seat_touch_motion(int32_t id, float x, float y) {
+    if (!touch_focus || touch_points == 0) return;
+    uint32_t time = dnx_wl_now_ms();
+    struct wl_resource* touch;
+    wl_resource_for_each(touch, &touches) {
+        if (same_client(touch, touch_focus)) wl_touch_send_motion(touch, time, id, to_surface(x), to_surface(y));
+    }
+}
+
+void dnx_wl_seat_touch_up(int32_t id) {
+    if (!touch_focus || touch_points == 0) return;
+    touch_points--;
+    uint32_t serial = wl_display_next_serial(dnx_wl_display), time = dnx_wl_now_ms();
+    struct wl_resource* touch;
+    wl_resource_for_each(touch, &touches) {
+        if (same_client(touch, touch_focus)) wl_touch_send_up(touch, serial, time, id);
+    }
+}
+
+void dnx_wl_seat_touch_frame(void) {
+    if (!touch_focus) return;
+    struct wl_resource* touch;
+    wl_resource_for_each(touch, &touches) {
+        if (same_client(touch, touch_focus)) wl_touch_send_frame(touch);
+    }
+}
+
+void dnx_wl_seat_touch_cancel(void) {
+    touch_cancel();
+}
+
 /* -- wl_seat ----------------------------------------------------------------- */
 
 static void seat_get_pointer(struct wl_client* client, struct wl_resource* resource, uint32_t id) {
@@ -421,8 +501,13 @@ static void seat_get_keyboard(struct wl_client* client, struct wl_resource* reso
 }
 
 static void seat_get_touch(struct wl_client* client, struct wl_resource* resource, uint32_t id) {
-    /* No touch capability is advertised: touch arrives as pointer events. */
-    wl_resource_post_error(resource, WL_SEAT_ERROR_MISSING_CAPABILITY, "no touch");
+    struct wl_resource* touch = wl_resource_create(client, &wl_touch_interface, wl_resource_get_version(resource), id);
+    if (!touch) {
+        wl_client_post_no_memory(client);
+        return;
+    }
+    wl_resource_set_implementation(touch, &touch_impl, NULL, unlink_resource);
+    wl_list_insert(&touches, wl_resource_get_link(touch));
 }
 
 static const struct wl_seat_interface seat_impl = {
@@ -440,13 +525,15 @@ static void seat_bind(struct wl_client* client, void* data, uint32_t version, ui
         return;
     }
     wl_resource_set_implementation(resource, &seat_impl, NULL, NULL);
-    wl_seat_send_capabilities(resource, WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD);
+    wl_seat_send_capabilities(resource,
+                              WL_SEAT_CAPABILITY_POINTER | WL_SEAT_CAPABILITY_KEYBOARD | WL_SEAT_CAPABILITY_TOUCH);
     if (version >= WL_SEAT_NAME_SINCE_VERSION) wl_seat_send_name(resource, "seat0");
 }
 
 void dnx_wl_seat_init(struct wl_display* display, const char* path) {
     wl_list_init(&pointers);
     wl_list_init(&keyboards);
+    wl_list_init(&touches);
     keymap_path = strdup(path);
     wl_global_create(display, &wl_seat_interface, 8, NULL, seat_bind);
 }

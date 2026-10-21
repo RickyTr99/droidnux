@@ -19,9 +19,14 @@ EXT="$WP/stable/xdg-shell/xdg-shell.xml
 $WP/stable/linux-dmabuf/linux-dmabuf-v1.xml
 $WP/stable/presentation-time/presentation-time.xml
 $WP/stable/viewporter/viewporter.xml"
+# Protocols the compositor speaks as a client of the nested KWin (wl/nested.c).
+PWP=third_party/plasma-wayland-protocols/src/protocols
+CLIENT="$WP/unstable/input-method/input-method-unstable-v1.xml
+$PWP/kde-output-device-v2.xml
+$PWP/kde-output-management-v2.xml"
 
 "$ADB" shell "rm -rf $XFER && mkdir -p $XFER"
-for x in $EXT; do "$ADB" push -q "$x" "$XFER/"; done
+for x in $EXT $CLIENT; do "$ADB" push -q "$x" "$XFER/"; done
 # Debian's scanner (1.23) rejects the newer frozen="true" attribute, which only
 # drives validation: strip it.
 mkdir -p display/build && TMP=display/build/wayland.xml && sed 's/ frozen="true"//' "$CORE" > "$TMP"
@@ -29,10 +34,16 @@ mkdir -p display/build && TMP=display/build/wayland.xml && sed 's/ frozen="true"
 
 SCRIPT="cd $XFER && wayland-scanner -s server-header wayland.xml wayland-server-protocol.h && \
 wayland-scanner -s server-header -c wayland.xml wayland-server-protocol-core.h && \
-wayland-scanner -s public-code wayland.xml wayland-protocol.c"
+wayland-scanner -s public-code wayland.xml wayland-protocol.c && \
+wayland-scanner -s client-header wayland.xml wayland-client-protocol.h"
 for x in $EXT; do
     n=$(basename "$x" .xml)
     SCRIPT="$SCRIPT && wayland-scanner -s server-header $n.xml $n-protocol.h && \
+wayland-scanner -s private-code $n.xml $n-protocol.c"
+done
+for x in $CLIENT; do
+    n=$(basename "$x" .xml)
+    SCRIPT="$SCRIPT && wayland-scanner -s client-header $n.xml $n-client-protocol.h && \
 wayland-scanner -s private-code $n.xml $n-protocol.c"
 done
 tools/dn-guest.sh "$SCRIPT && rm *.xml"

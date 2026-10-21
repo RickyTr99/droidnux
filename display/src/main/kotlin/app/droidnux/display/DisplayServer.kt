@@ -45,10 +45,38 @@ object DisplayServer {
     /** Physical key by evdev keycode (Android KeyEvent.scanCode). */
     fun key(evdevKeycode: Int, down: Boolean) = nativeKey(evdevKeycode, down)
 
-    /** Text typed without a physical key (soft keyboard, IME). */
+    /** Text typed without a physical key (soft keyboard, IME), X11 only. */
     fun text(text: CharSequence) {
         text.codePoints().forEach { nativeText(it) }
     }
+
+    /**
+     * Wayland: soft keyboard text for the focused text field, through the
+     * nested KWin's input method. Dropped while no text field has the focus.
+     */
+    fun commitText(text: String) = nativeCommitText(text.toByteArray())
+
+    /** Wayland: the text the soft keyboard is still composing, shown in the field; "" clears it. */
+    fun preeditText(text: String) = nativePreeditText(text.toByteArray())
+
+    /** Wayland: called on the compositor thread when a text field gains (true) or loses the focus. */
+    @Volatile var onTextInput: ((Boolean) -> Unit)? = null
+
+    @JvmStatic private fun textInputFromWayland(active: Boolean) {
+        onTextInput?.invoke(active)
+    }
+
+    /** Wayland: the nested desktop's interface scale (1 = 100%). */
+    fun setScale(scale: Float) = nativeSetScale(scale)
+
+    /** Wayland touchscreen, in desktop pixels: [TOUCH_DOWN] and the others, then [TOUCH_FRAME]. */
+    fun touch(type: Int, id: Int = 0, x: Float = 0f, y: Float = 0f) = nativeTouch(type, id, x, y)
+
+    const val TOUCH_DOWN = 0
+    const val TOUCH_MOTION = 1
+    const val TOUCH_UP = 2
+    const val TOUCH_FRAME = 3
+    const val TOUCH_CANCEL = 4
 
     fun pointer(x: Float, y: Float) = nativePointer(x, y)
     fun pointerRelative(dx: Float, dy: Float) = nativePointerRelative(dx, dy)
@@ -93,4 +121,8 @@ object DisplayServer {
     @JvmStatic private external fun nativeButton(button: Int, down: Boolean)
     @JvmStatic private external fun nativeScroll(dx: Float, dy: Float)
     @JvmStatic private external fun nativeSetClipboard(utf8: ByteArray)
+    @JvmStatic private external fun nativeCommitText(utf8: ByteArray)
+    @JvmStatic private external fun nativePreeditText(utf8: ByteArray)
+    @JvmStatic private external fun nativeSetScale(scale: Float)
+    @JvmStatic private external fun nativeTouch(type: Int, id: Int, x: Float, y: Float)
 }

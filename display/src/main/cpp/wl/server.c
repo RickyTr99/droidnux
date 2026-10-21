@@ -34,7 +34,8 @@ int dnx_wl_width = 1280, dnx_wl_height = 800;
 
 enum event_type {
     EVENT_KEY = 1,
-    EVENT_TEXT,
+    EVENT_COMMIT_TEXT,
+    EVENT_PREEDIT_TEXT,
     EVENT_POINTER,
     EVENT_POINTER_RELATIVE,
     EVENT_BUTTON,
@@ -42,13 +43,19 @@ enum event_type {
     EVENT_RESIZE,
     EVENT_REDRAW,
     EVENT_BUFFER,
+    EVENT_TOUCH_DOWN,
+    EVENT_TOUCH_MOTION,
+    EVENT_TOUCH_UP,
+    EVENT_TOUCH_FRAME,
+    EVENT_TOUCH_CANCEL,
+    EVENT_SCALE,
 };
 
 struct event {
     uint32_t type;
-    int32_t a, b; /* keycode/down, codepoint, button/down, width/height, released */
-    float x, y;   /* pointer position or delta, scroll amount */
-    void* data;   /* the buffer of EVENT_BUFFER */
+    int32_t a, b; /* keycode/down, button/down, width/height, released, touch id */
+    float x, y;   /* pointer or touch position, delta, scroll amount, scale */
+    void* data;   /* the buffer of EVENT_BUFFER, the text (malloc) of EVENT_*_TEXT */
 };
 
 static int event_pipe[2] = {-1, -1};
@@ -152,8 +159,49 @@ void dnx_wl_key(int evdev_keycode, bool down) {
     send_event((struct event) {.type = EVENT_KEY, .a = evdev_keycode, .b = down});
 }
 
-void dnx_wl_text(uint32_t codepoint) {
-    send_event((struct event) {.type = EVENT_TEXT, .a = (int32_t) codepoint});
+static void send_text(uint32_t type, const char* utf8) {
+    struct event e = {.type = type, .data = strdup(utf8)};
+    if (event_pipe[1] < 0 || !e.data) return;
+    if (write(event_pipe[1], &e, sizeof(e)) != sizeof(e)) {
+        log(WARN, "text dropped");
+        free(e.data);
+    }
+}
+
+void dnx_wl_commit_text(const char* utf8) {
+    send_text(EVENT_COMMIT_TEXT, utf8);
+}
+
+void dnx_wl_preedit_text(const char* utf8) {
+    send_text(EVENT_PREEDIT_TEXT, utf8);
+}
+
+void dnx_wl_set_text_input_callback(void (*callback)(bool active)) {
+    dnx_wl_nested_set_text_input_callback(callback);
+}
+
+void dnx_wl_set_scale(double scale) {
+    send_event((struct event) {.type = EVENT_SCALE, .x = (float) scale});
+}
+
+void dnx_wl_touch_down(int id, float x, float y) {
+    send_event((struct event) {.type = EVENT_TOUCH_DOWN, .a = id, .x = x, .y = y});
+}
+
+void dnx_wl_touch_motion(int id, float x, float y) {
+    send_event((struct event) {.type = EVENT_TOUCH_MOTION, .a = id, .x = x, .y = y});
+}
+
+void dnx_wl_touch_up(int id) {
+    send_event((struct event) {.type = EVENT_TOUCH_UP, .a = id});
+}
+
+void dnx_wl_touch_frame(void) {
+    send_event((struct event) {.type = EVENT_TOUCH_FRAME});
+}
+
+void dnx_wl_touch_cancel(void) {
+    send_event((struct event) {.type = EVENT_TOUCH_CANCEL});
 }
 
 void dnx_wl_pointer_move(float x, float y) {
@@ -199,8 +247,13 @@ static void handle_event(const struct event* e) {
     case EVENT_KEY:
         dnx_wl_seat_key(e->a, e->b);
         break;
-    case EVENT_TEXT:
-        /* shortcut: no text-input-v3 yet, soft keyboard text is dropped; Fase 4b step 4. */
+    case EVENT_COMMIT_TEXT:
+        dnx_wl_nested_commit(e->data);
+        free(e->data);
+        break;
+    case EVENT_PREEDIT_TEXT:
+        dnx_wl_nested_preedit(e->data);
+        free(e->data);
         break;
     case EVENT_POINTER:
         dnx_wl_seat_pointer(e->x, e->y, false);
@@ -228,6 +281,24 @@ static void handle_event(const struct event* e) {
         break;
     case EVENT_BUFFER:
         dnx_wl_dmabuf_on_presenter_event(e->data, e->a);
+        break;
+    case EVENT_TOUCH_DOWN:
+        dnx_wl_seat_touch_down(e->a, e->x, e->y);
+        break;
+    case EVENT_TOUCH_MOTION:
+        dnx_wl_seat_touch_motion(e->a, e->x, e->y);
+        break;
+    case EVENT_TOUCH_UP:
+        dnx_wl_seat_touch_up(e->a);
+        break;
+    case EVENT_TOUCH_FRAME:
+        dnx_wl_seat_touch_frame();
+        break;
+    case EVENT_TOUCH_CANCEL:
+        dnx_wl_seat_touch_cancel();
+        break;
+    case EVENT_SCALE:
+        dnx_wl_nested_set_scale(e->x);
         break;
     }
 }
@@ -348,6 +419,10 @@ bool dnx_wl_start(const dnx_wl_config* config) {
     asprintf(&keymap, "%s/.droidnux-keymap.xkb", config->tmp_dir);
     dnx_wl_seat_init(dnx_wl_display, keymap);
     free(keymap);
+    char* im_socket = NULL;
+    asprintf(&im_socket, "%s/.droidnux-im", config->tmp_dir);
+    dnx_wl_nested_init(dnx_wl_display, im_socket);
+    free(im_socket);
 
     log(INFO, "starting compositor on %s, %dx%d", path, config->width, config->height);
     free(path);

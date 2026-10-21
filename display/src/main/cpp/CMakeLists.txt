@@ -49,6 +49,16 @@ target_compile_options(droidnux-guest-pipewire PRIVATE
 target_link_options(droidnux-guest-pipewire PRIVATE
     -nostdlib -Wl,--as-needed -Wl,-z,undefs -Wl,--pack-dyn-relocs=none -Wl,--hash-style=both)
 
+# Input method KWin starts (guest/kwin-im): hands its connection to the Wayland
+# front-end. A freestanding static executable, named .so so that it ships with
+# the native libraries.
+add_executable(droidnux-guest-im ${GUEST_DIR}/kwin-im/droidnux-im.c)
+set_target_properties(droidnux-guest-im PROPERTIES OUTPUT_NAME "libdroidnux-guest-im.so")
+target_compile_options(droidnux-guest-im PRIVATE
+    -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -U_FORTIFY_SOURCE
+    -fno-asynchronous-unwind-tables)
+target_link_options(droidnux-guest-im PRIVATE -static -nostdlib -no-pie -Wl,--build-id=none -Wl,-z,noexecstack)
+
 # X11 front-end (X server from Termux:X11 with our own DDX), see x11/x11.cmake.
 include(x11/x11.cmake)
 

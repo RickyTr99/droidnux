@@ -52,6 +52,14 @@ object DesktopEnvironment {
     private const val PLASMA_DEFAULTS = "/etc/xdg/droidnux-plasma"
     private const val PLASMA_LOOK_AND_FEEL = "/usr/share/plasma/look-and-feel/org.droidnux.desktop"
 
+    /**
+     * The input method KWin starts (guest/kwin-im): it hands KWin's input method
+     * connection to the app's compositor, which types Android's keyboard into text fields.
+     */
+    private const val IM_LIBRARY = "libdroidnux-guest-im.so"
+    private const val IM_PROGRAM = "$GUEST_LIB_DIR/droidnux-im"
+    private const val IM_DESKTOP_FILE = "$PLASMA_DEFAULTS/droidnux-im.desktop"
+
     /** XFCE on the app's X server. */
     private val XFCE_PACKAGES = listOf(
         "xfce4", "xfce4-terminal", "dbus-x11", "x11-xserver-utils", "xkb-data",
@@ -158,6 +166,10 @@ object DesktopEnvironment {
         writeFile(rootfs, "$XFCONF_DEFAULTS/xfce4-panel.xml", PANEL_DEFAULTS.toByteArray())
         writeFile(rootfs, "$XDG_DEFAULTS/xfce4/panel/docklike.rc", DOCK_DEFAULTS.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/kdeglobals", "[KDE]\nLookAndFeelPackage=org.droidnux.desktop\n".toByteArray())
+        writeFile(rootfs, "$PLASMA_DEFAULTS/kwinrc", PLASMA_KWINRC.toByteArray())
+        writeFile(rootfs, "$PLASMA_DEFAULTS/kscreenlockerrc", PLASMA_SCREENLOCKER.toByteArray())
+        writeFile(rootfs, IM_DESKTOP_FILE, IM_DESKTOP.toByteArray())
+        writeFile(rootfs, IM_PROGRAM, File(nativeLibraryDir, IM_LIBRARY).readBytes(), mode = 0x1ED)
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/metadata.json", PLASMA_LNF_METADATA.toByteArray())
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/contents/defaults", PLASMA_LNF_DEFAULTS.toByteArray())
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/contents/layouts/org.kde.plasma.desktop-layout.js", PLASMA_LAYOUT.toByteArray())
@@ -469,7 +481,6 @@ ${LAUNCH_LOOP.prependIndent("        ")}
         echo $SESSION_END_MARKER
     """.trimIndent() + "\n"
 
-    // shortcut: no interface size yet (KWin's scale). Fase 4b, step 3.
     private val PLASMA_SESSION = """
         #!/bin/sh
         # Written by DroidNux: starts Plasma, its KWin nested on the app's
@@ -523,6 +534,30 @@ ${SESSION_SERVICES.prependIndent("        ")}
 ${LAUNCH_LOOP.prependIndent("        ")}
         startplasma-wayland
         echo $SESSION_END_MARKER
+    """.trimIndent() + "\n"
+
+    /** KWin: Android's keyboard as the input method (IM_DESKTOP). */
+    private val PLASMA_KWINRC = """
+        [Wayland]
+        InputMethod=$IM_DESKTOP_FILE
+        VirtualKeyboardEnabled=true
+    """.trimIndent() + "\n"
+
+    /** No lock screen: Android locks the device, and root has no password to unlock Plasma's. */
+    private val PLASMA_SCREENLOCKER = """
+        [Daemon]
+        Autolock=false
+        LockOnResume=false
+    """.trimIndent() + "\n"
+
+    private val IM_DESKTOP = """
+        [Desktop Entry]
+        Type=Application
+        Name=Android keyboard
+        Name[it]=Tastiera di Android
+        Exec=$IM_PROGRAM
+        NoDisplay=true
+        X-KDE-Wayland-VirtualKeyboard=true
     """.trimIndent() + "\n"
 
     /** DroidNux's look-and-feel for Plasma: Breeze Dark, the default panel with only installed apps pinned. */

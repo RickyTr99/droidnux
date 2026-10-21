@@ -1,6 +1,7 @@
 /* Internal interface of the Wayland front-end: server.c (thread, socket,
  * output, frame clock), surface.c (surfaces, xdg-shell, presentation) and
- * seat.c (pointer, keyboard). Everything runs on the compositor thread. */
+ * seat.c (pointer, keyboard, touch) and nested.c (the compositor as a client
+ * of the nested KWin). Everything runs on the compositor thread. */
 #ifndef DROIDNUX_WL_PRIVATE_H
 #define DROIDNUX_WL_PRIVATE_H
 
@@ -40,6 +41,9 @@ struct dnx_wl_surface {
     /* What the presenter has not shown yet (shown surface only). */
     struct dnx_wl_damage damage;
 
+    /* wl_surface.set_buffer_scale. */
+    int32_t pending_scale, scale;
+
     /* Cursor role: hotspot set by wl_pointer.set_cursor. */
     int32_t hotspot_x, hotspot_y;
 };
@@ -73,6 +77,18 @@ bool dnx_wl_dmabuf_present(struct dnx_wl_dmabuf* buffer, const dnx_box* rects, i
 /* A presenter event for it, on the compositor thread. */
 void dnx_wl_dmabuf_on_presenter_event(struct dnx_wl_dmabuf* buffer, bool released);
 
+/* -- nested.c -- */
+/* KWin's output scale: its output is the desktop size divided by it, in surface
+ * coordinates (input and configures use those). 1 until KWin tells. */
+extern double dnx_wl_scale;
+void dnx_wl_nested_init(struct wl_display* display, const char* socket_path);
+/* The scale the app wants KWin to use. */
+void dnx_wl_nested_set_scale(double scale);
+void dnx_wl_nested_set_text_input_callback(void (*callback)(bool active));
+/* Text for the focused text field, committed or composing; dropped without one. */
+void dnx_wl_nested_commit(const char* utf8);
+void dnx_wl_nested_preedit(const char* utf8);
+
 /* -- surface.c -- */
 void dnx_wl_surface_init(struct wl_display* display);
 /* The surface shown as the desktop, or NULL. */
@@ -96,5 +112,10 @@ void dnx_wl_seat_pointer(float x, float y, bool relative);
 void dnx_wl_seat_button(int button, bool down);
 void dnx_wl_seat_scroll(float dx, float dy);
 void dnx_wl_seat_key(int evdev_keycode, bool down);
+void dnx_wl_seat_touch_down(int32_t id, float x, float y);
+void dnx_wl_seat_touch_motion(int32_t id, float x, float y);
+void dnx_wl_seat_touch_up(int32_t id);
+void dnx_wl_seat_touch_frame(void);
+void dnx_wl_seat_touch_cancel(void);
 
 #endif

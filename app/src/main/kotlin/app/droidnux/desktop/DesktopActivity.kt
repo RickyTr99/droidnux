@@ -84,6 +84,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 clipboard.setPrimaryClip(ClipData.newPlainText("DroidNux", text))
             }
         }
+        DisplayServer.onTextInput = { active -> handler.post { onTextField(active) } }
         val settings = DesktopSettings.load(this)
         desktopScale = settings.scale
         desktopScale = scaleOf(intent)
@@ -249,6 +250,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         if (current === this) {
             current = null
             DisplayServer.onClipboard = null
+            DisplayServer.onTextInput = null
         }
         super.onDestroy()
     }
@@ -320,6 +322,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             Log.i(TAG, "display server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
             DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout(), dpi())
             clipboardToX()
+            if (wayland) applyUiScale() // kept by the compositor until KWin connects
         } else {
             DisplayServer.resize(desktopWidth, desktopHeight)
         }
@@ -342,7 +345,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
         override fun onCheckIsTextEditor() = true
 
-        /** The soft keyboard: committed text goes to X as characters, its keys as key presses. */
+        /**
+         * The soft keyboard: committed text goes to X as characters (Wayland: to the focused
+         * text field through KWin's input method), its keys as key presses.
+         */
         override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
             // Visible-password text: keyboards commit each character instead of composing words.
             outAttrs.inputType = android.text.InputType.TYPE_CLASS_TEXT or
@@ -357,6 +363,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 private var composing = ""
 
                 private fun replaceComposing(text: String) {
+                    if (wayland) {
+                        // KWin's input method shows it as preedit, committed at the end.
+                        DisplayServer.preeditText(text)
+                        composing = text
+                        return
+                    }
                     val common = composing.commonPrefixWith(text)
                     repeat(composing.codePointCount(common.length, composing.length)) { tapKey(KEY_BACKSPACE) }
                     if (text.length > common.length) DisplayServer.text(text.substring(common.length))
@@ -369,12 +381,17 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 }
 
                 override fun finishComposingText(): Boolean {
+                    if (wayland && composing.isNotEmpty()) DisplayServer.commitText(composing)
                     composing = ""
                     return true
                 }
 
                 override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
                     when {
+                        wayland && (composing.isNotEmpty() || text.toString() != "\n") -> {
+                            DisplayServer.commitText(text.toString()) // replaces the preedit
+                            composing = ""
+                        }
                         composing.isNotEmpty() -> {
                             replaceComposing(text.toString())
                             composing = ""
@@ -422,6 +439,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         // The soft keyboard's keys have no scan code: map the ones it sends as key events.
         val scanCode = event.scanCode.takeIf { it > 0 } ?: SOFT_KEYS[event.keyCode] ?: 0
         if (scanCode <= 0 || !DisplayServer.running || isSystemKey(event.keyCode)) return false
+        if (event.scanCode > 0) lastInputTouch = false
         when (event.action) {
             KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0 && keysDown.add(scanCode)) DisplayServer.key(scanCode, true)
             KeyEvent.ACTION_UP -> if (keysDown.remove(scanCode)) DisplayServer.key(scanCode, false)
@@ -451,6 +469,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private fun onPointerEvent(event: MotionEvent): Boolean {
         if (!DisplayServer.running) return false
         showCursor(true)
+        lastInputTouch = false
         // Capture lost without a focus change.
         if (event.actionMasked == MotionEvent.ACTION_HOVER_MOVE) capturePointer()
         when (event.actionMasked) {
@@ -474,6 +493,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private fun onCapturedPointer(event: MotionEvent): Boolean {
         if (!DisplayServer.running) return false
         showCursor(true)
+        lastInputTouch = false
         if (event.isFromSource(InputDevice.SOURCE_TOUCHPAD)) {
             val range = event.device?.getMotionRange(MotionEvent.AXIS_X, InputDevice.SOURCE_TOUCHPAD)?.range ?: 0f
             // The whole touchpad width crosses half the desktop before X's acceleration.
@@ -530,11 +550,54 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             showCursor(true)
             // A finger crossing the screen moves the pointer across the desktop, before X's acceleration.
             screenTouchpad.onEvent(event, 1f / scale)
+        } else if (wayland) {
+            showCursor(false)
+            lastInputTouch = true
+            sendTouch(event)
         } else {
             showCursor(false) // a finger needs no pointer; the next mouse motion brings it back
             touch.onEvent(event, scale, touchSlop)
         }
         return true
+    }
+
+    /** Wayland: the fingers as touch points, for KWin and its apps to handle (taps, gestures, scrolling). */
+    private fun sendTouch(event: MotionEvent) {
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                val i = event.actionIndex
+                DisplayServer.touch(DisplayServer.TOUCH_DOWN, event.getPointerId(i), event.getX(i) * scale, event.getY(i) * scale)
+            }
+            MotionEvent.ACTION_MOVE -> for (i in 0 until event.pointerCount) {
+                DisplayServer.touch(DisplayServer.TOUCH_MOTION, event.getPointerId(i), event.getX(i) * scale, event.getY(i) * scale)
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP ->
+                DisplayServer.touch(DisplayServer.TOUCH_UP, event.getPointerId(event.actionIndex))
+            MotionEvent.ACTION_CANCEL -> {
+                DisplayServer.touch(DisplayServer.TOUCH_CANCEL)
+                return
+            }
+            else -> return
+        }
+        DisplayServer.touch(DisplayServer.TOUCH_FRAME)
+    }
+
+    /** The last input came from a finger on the screen: a text field getting the focus then shows the soft keyboard. */
+    private var lastInputTouch = false
+    /** The soft keyboard was shown for a text field, so it hides when the field loses the focus. */
+    private var keyboardForTextField = false
+
+    /** Wayland: a text field of the desktop gained or lost the focus (KWin's input method). */
+    private fun onTextField(active: Boolean) {
+        val imm = getSystemService(InputMethodManager::class.java)
+        if (active && lastInputTouch && !menu.isOpen) {
+            surfaceView.requestFocus()
+            imm.showSoftInput(surfaceView, 0)
+            keyboardForTextField = true
+        } else if (!active && keyboardForTextField) {
+            imm.hideSoftInputFromWindow(surfaceView.windowToken, 0)
+            keyboardForTextField = false
+        }
     }
 
     // -- Session menu ------------------------------------------------------
@@ -605,6 +668,11 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     private fun applyUiScale() {
         if (!DisplayServer.running) return
+        if (wayland) {
+            // KWin's output scale, in the 5% steps of Plasma's display settings.
+            DisplayServer.setScale((dpi() * 20f / BASE_DPI).roundToInt() / 20f)
+            return
+        }
         val command = DesktopEnvironment.uiScaleCommand(dpi())
         Thread {
             runCatching {

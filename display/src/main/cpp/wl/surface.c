@@ -1,10 +1,12 @@
 /*
  * Surfaces of the DroidNux Wayland front-end: wl_compositor, wl_surface and
  * xdg-shell. The most recently mapped toplevel is the desktop: it is
- * configured full screen at the desktop size and shown through the
- * presenter. Popups are dismissed at once (the nested compositor has none).
+ * configured full screen at the desktop size (in surface coordinates, see
+ * dnx_wl_scale) and shown through the presenter. Popups are dismissed at once
+ * (the nested compositor has none).
  */
 #include <android/log.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -222,11 +224,17 @@ void dnx_wl_surface_redraw(void) {
 
 /* -- xdg-shell: configure, map, unmap ------------------------------------- */
 
+/* The desktop in surface coordinates: KWin renders its output at this size times its scale. */
+static int32_t logical_size(int pixels) {
+    return (int32_t) lround(pixels / dnx_wl_scale);
+}
+
 static void configure_toplevel(struct dnx_wl_xdg_surface* x) {
     if (!x->toplevel) return;
+    int32_t width = logical_size(dnx_wl_width), height = logical_size(dnx_wl_height);
     int version = wl_resource_get_version(x->toplevel);
     if (version >= XDG_TOPLEVEL_CONFIGURE_BOUNDS_SINCE_VERSION)
-        xdg_toplevel_send_configure_bounds(x->toplevel, dnx_wl_width, dnx_wl_height);
+        xdg_toplevel_send_configure_bounds(x->toplevel, width, height);
     if (version >= XDG_TOPLEVEL_WM_CAPABILITIES_SINCE_VERSION) {
         struct wl_array capabilities; /* none: no menus, no minimizing */
         wl_array_init(&capabilities);
@@ -240,7 +248,7 @@ static void configure_toplevel(struct dnx_wl_xdg_surface* x) {
         state[0] = XDG_TOPLEVEL_STATE_ACTIVATED;
         state[1] = XDG_TOPLEVEL_STATE_FULLSCREEN;
     }
-    xdg_toplevel_send_configure(x->toplevel, dnx_wl_width, dnx_wl_height, &states);
+    xdg_toplevel_send_configure(x->toplevel, width, height, &states);
     wl_array_release(&states);
     xdg_surface_send_configure(x->resource, wl_display_next_serial(dnx_wl_display));
     x->configured = true;
@@ -515,9 +523,19 @@ static void surface_attach(struct wl_client* client, struct wl_resource* resourc
     s->pending_attach = true;
 }
 
-/* Surface and buffer coordinates are the same: scale 1, no transform. */
+/* No transform. KWin at a fractional scale sets the buffer scale rounded up: damage
+ * scaled by it covers at least the real area. */
 static void surface_damage(struct wl_client* client, struct wl_resource* resource, int32_t x, int32_t y, int32_t w,
                            int32_t h) {
+    (void) client;
+    struct dnx_wl_surface* s = wl_resource_get_user_data(resource);
+    int64_t k = s->pending_scale;
+    dnx_wl_damage_add(&s->pending_damage, clamp_coord(x * k), clamp_coord(y * k), clamp_coord(w * k),
+                      clamp_coord(h * k));
+}
+
+static void surface_damage_buffer(struct wl_client* client, struct wl_resource* resource, int32_t x, int32_t y,
+                                  int32_t w, int32_t h) {
     (void) client;
     struct dnx_wl_surface* s = wl_resource_get_user_data(resource);
     dnx_wl_damage_add(&s->pending_damage, x, y, w, h);
@@ -540,6 +558,16 @@ static void surface_frame(struct wl_client* client, struct wl_resource* resource
 
 static void surface_set_region(struct wl_client* c, struct wl_resource* r, struct wl_resource* region) {}
 static void surface_set_int(struct wl_client* c, struct wl_resource* r, int32_t v) {}
+
+static void surface_set_buffer_scale(struct wl_client* client, struct wl_resource* resource, int32_t scale) {
+    (void) client;
+    struct dnx_wl_surface* s = wl_resource_get_user_data(resource);
+    if (scale < 1) {
+        wl_resource_post_error(resource, WL_SURFACE_ERROR_INVALID_SCALE, "scale %d", scale);
+        return;
+    }
+    s->pending_scale = scale;
+}
 static void surface_offset(struct wl_client* c, struct wl_resource* r, int32_t x, int32_t y) {}
 
 static void surface_commit(struct wl_client* client, struct wl_resource* resource) {
@@ -576,6 +604,7 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
         dnx_wl_damage_add(&s->damage, r->x1, r->y1, r->x2 - r->x1, r->y2 - r->y1);
     }
     s->pending_damage.count = 0;
+    s->scale = s->pending_scale;
     if (!wl_list_empty(&s->pending_frames)) {
         wl_list_insert_list(frame_callbacks.prev, &s->pending_frames);
         wl_list_init(&s->pending_frames);
@@ -626,8 +655,8 @@ static const struct wl_surface_interface surface_impl = {
     .set_input_region = surface_set_region,
     .commit = surface_commit,
     .set_buffer_transform = surface_set_int,
-    .set_buffer_scale = surface_set_int,
-    .damage_buffer = surface_damage,
+    .set_buffer_scale = surface_set_buffer_scale,
+    .damage_buffer = surface_damage_buffer,
     .offset = surface_offset,
 };
 
@@ -708,6 +737,7 @@ static void compositor_create_surface(struct wl_client* client, struct wl_resour
     }
     s->pending_buffer_destroy.notify = on_pending_buffer_destroy;
     s->buffer_destroy.notify = on_buffer_destroy;
+    s->pending_scale = s->scale = 1;
     wl_list_init(&s->pending_frames);
     wl_list_init(&s->pending_feedbacks);
     wl_resource_set_implementation(s->resource, &surface_impl, s, surface_destroyed);
