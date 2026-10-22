@@ -222,6 +222,34 @@ void dnx_wl_surface_redraw(void) {
     present_shown();
 }
 
+bool dnx_wl_surface_snapshot(uint32_t* pixels, int width, int height) {
+    struct dnx_wl_surface* s = shown;
+    if (!s || !s->buffer || s->width <= 0 || s->height <= 0) return false;
+    struct wl_shm_buffer* shm = wl_shm_buffer_get(s->buffer);
+    struct dnx_wl_dmabuf* dmabuf = shm ? NULL : dnx_wl_dmabuf_get(s->buffer);
+    const uint8_t* base;
+    uint32_t format, stride;
+    if (shm) {
+        wl_shm_buffer_begin_access(shm);
+        base = wl_shm_buffer_get_data(shm);
+        stride = (uint32_t) wl_shm_buffer_get_stride(shm);
+    } else if (dmabuf) {
+        base = dnx_wl_dmabuf_begin_read(dmabuf, &format, &stride);
+    } else {
+        return false;
+    }
+    if (base) {
+        /* Nearest pixel, as the X11 front-end: a thumbnail taken when the desktop leaves the screen. */
+        for (int y = 0; y < height; y++) {
+            const uint32_t* row = (const uint32_t*) (base + (size_t) (y * s->height / height) * stride);
+            for (int x = 0; x < width; x++) pixels[y * width + x] = row[x * s->width / width] | 0xff000000u;
+        }
+    }
+    if (shm) wl_shm_buffer_end_access(shm);
+    else if (base) dnx_wl_dmabuf_end_read(dmabuf);
+    return base != NULL;
+}
+
 /* -- xdg-shell: configure, map, unmap ------------------------------------- */
 
 /* The desktop in surface coordinates: KWin renders its output at this size times its scale. */

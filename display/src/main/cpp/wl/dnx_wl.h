@@ -33,6 +33,10 @@ void dnx_wl_resize(int width, int height);
 /* Repaints everything at the next vsync, e.g. after the surface was recreated. */
 void dnx_wl_redraw(void);
 
+/* The desktop scaled to width x height (ARGB), for the home screen's thumbnail.
+ * Waits up to half a second for the compositor thread; false without a window. */
+bool dnx_wl_snapshot(uint32_t* pixels, int width, int height);
+
 /* Keyboard: evdev keycode (Android scan code). */
 void dnx_wl_key(int evdev_keycode, bool down);
 /* Soft keyboard text for the focused text field of the nested KWin (its input

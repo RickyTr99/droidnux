@@ -292,7 +292,22 @@ Java_app_droidnux_display_DisplayServer_nativeSetScale(JNIEnv*, jclass, jfloat s
     if (wayland) dnx_wl_set_scale(scale);
 }
 
-// Snapshot and clipboard: X11 only so far.
+extern "C" JNIEXPORT jintArray JNICALL
+Java_app_droidnux_display_DisplayServer_nativeSnapshot(JNIEnv* env, jclass, jint width, jint height) {
+    if (width <= 0 || height <= 0 || width > 4096 || height > 4096) return nullptr;
+    std::vector<uint32_t> pixels(static_cast<size_t>(width) * height);
+#if DROIDNUX_HAVE_X11
+    bool ok = wayland ? dnx_wl_snapshot(pixels.data(), width, height) : dnx_x11_snapshot(pixels.data(), width, height);
+#else
+    bool ok = dnx_wl_snapshot(pixels.data(), width, height);
+#endif
+    if (!ok) return nullptr;
+    jintArray result = env->NewIntArray(width * height);
+    if (result != nullptr) env->SetIntArrayRegion(result, 0, width * height, reinterpret_cast<const jint*>(pixels.data()));
+    return result;
+}
+
+// Clipboard: X11 only so far.
 
 #if DROIDNUX_HAVE_X11
 
@@ -333,16 +348,6 @@ Java_app_droidnux_display_DisplayServer_nativeStart(JNIEnv* env, jclass clazz, j
     return dnx_x11_start(&config) ? JNI_TRUE : JNI_FALSE;
 }
 
-extern "C" JNIEXPORT jintArray JNICALL
-Java_app_droidnux_display_DisplayServer_nativeSnapshot(JNIEnv* env, jclass, jint width, jint height) {
-    if (wayland || width <= 0 || height <= 0 || width > 4096 || height > 4096) return nullptr;
-    std::vector<uint32_t> pixels(static_cast<size_t>(width) * height);
-    if (!dnx_x11_snapshot(pixels.data(), width, height)) return nullptr;
-    jintArray result = env->NewIntArray(width * height);
-    if (result != nullptr) env->SetIntArrayRegion(result, 0, width * height, reinterpret_cast<const jint*>(pixels.data()));
-    return result;
-}
-
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeSetClipboard(JNIEnv* env, jclass, jbyteArray utf8) {
     if (wayland) return;
@@ -358,11 +363,6 @@ Java_app_droidnux_display_DisplayServer_nativeSetClipboard(JNIEnv* env, jclass, 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_app_droidnux_display_DisplayServer_nativeStart(JNIEnv*, jclass, jstring, jstring, jstring, jint, jint, jint, jint) {
     return JNI_FALSE;
-}
-
-extern "C" JNIEXPORT jintArray JNICALL
-Java_app_droidnux_display_DisplayServer_nativeSnapshot(JNIEnv*, jclass, jint, jint) {
-    return nullptr;
 }
 
 extern "C" JNIEXPORT void JNICALL

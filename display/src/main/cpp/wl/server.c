@@ -8,6 +8,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <semaphore.h>
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -49,14 +50,32 @@ enum event_type {
     EVENT_TOUCH_FRAME,
     EVENT_TOUCH_CANCEL,
     EVENT_SCALE,
+    EVENT_SNAPSHOT,
 };
 
 struct event {
     uint32_t type;
     int32_t a, b; /* keycode/down, button/down, width/height, released, touch id */
     float x, y;   /* pointer or touch position, delta, scroll amount, scale */
-    void* data;   /* the buffer of EVENT_BUFFER, the text (malloc) of EVENT_*_TEXT */
+    void* data;   /* the buffer of EVENT_BUFFER, the text (malloc) of EVENT_*_TEXT, a snapshot */
 };
+
+/* Shared by the caller and the compositor thread; the last one to let go frees it. */
+struct snapshot {
+    uint32_t* pixels;
+    int width, height;
+    bool ok;
+    sem_t done;
+    atomic_int refs;
+};
+
+static void snapshot_unref(struct snapshot* s) {
+    if (atomic_fetch_sub(&s->refs, 1) == 1) {
+        sem_destroy(&s->done);
+        free(s->pixels);
+        free(s);
+    }
+}
 
 static int event_pipe[2] = {-1, -1};
 static int vsync_fd = -1;
@@ -232,6 +251,35 @@ void dnx_wl_redraw(void) {
     send_event((struct event) {.type = EVENT_REDRAW});
 }
 
+bool dnx_wl_snapshot(uint32_t* pixels, int width, int height) {
+    if (!running || width <= 0 || height <= 0) return false;
+    struct snapshot* s = calloc(1, sizeof(*s));
+    if (!s) return false;
+    s->pixels = calloc((size_t) width * height, sizeof(uint32_t));
+    s->width = width;
+    s->height = height;
+    sem_init(&s->done, 0, 0);
+    atomic_init(&s->refs, 2);
+    if (!s->pixels || event_pipe[1] < 0 ||
+        write(event_pipe[1], &(struct event) {.type = EVENT_SNAPSHOT, .data = s}, sizeof(struct event)) !=
+            sizeof(struct event)) {
+        atomic_store(&s->refs, 1);
+        snapshot_unref(s);
+        return false;
+    }
+    struct timespec deadline;
+    clock_gettime(CLOCK_REALTIME, &deadline);
+    deadline.tv_nsec += 500000000L;
+    if (deadline.tv_nsec >= 1000000000L) {
+        deadline.tv_sec++;
+        deadline.tv_nsec -= 1000000000L;
+    }
+    bool ok = sem_timedwait(&s->done, &deadline) == 0 && s->ok;
+    if (ok) memcpy(pixels, s->pixels, (size_t) width * height * sizeof(uint32_t));
+    snapshot_unref(s);
+    return ok;
+}
+
 void dnx_wl_post_buffer_event(struct dnx_wl_dmabuf* buffer, bool released) {
     /* Never dropped: the buffer is freed on its last RELEASED. */
     struct event e = {.type = EVENT_BUFFER, .a = released, .data = buffer};
@@ -304,6 +352,13 @@ static void handle_event(const struct event* e) {
     case EVENT_SCALE:
         dnx_wl_nested_set_scale(e->x);
         break;
+    case EVENT_SNAPSHOT: {
+        struct snapshot* s = e->data;
+        s->ok = dnx_wl_surface_snapshot(s->pixels, s->width, s->height);
+        sem_post(&s->done);
+        snapshot_unref(s);
+        break;
+    }
     }
 }
 

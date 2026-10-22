@@ -98,6 +98,8 @@ struct dnx_wl_surface* dnx_wl_shown_surface(void);
 void dnx_wl_surface_on_frame(void);
 /* Full repaint of the shown surface. */
 void dnx_wl_surface_redraw(void);
+/* The shown surface scaled to width x height (ARGB), false without one. */
+bool dnx_wl_surface_snapshot(uint32_t* pixels, int width, int height);
 /* The desktop size changed: reconfigure toplevels. */
 void dnx_wl_surface_resized(void);
 void dnx_wl_damage_add(struct dnx_wl_damage* damage, int32_t x, int32_t y, int32_t w, int32_t h);
