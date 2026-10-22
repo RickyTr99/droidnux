@@ -16,6 +16,7 @@ import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.InputDevice
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.PointerIcon
@@ -437,7 +438,17 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
         // The soft keyboard's keys have no scan code: map the ones it sends as key events.
         val scanCode = event.scanCode.takeIf { it > 0 } ?: SOFT_KEYS[event.keyCode] ?: 0
-        if (scanCode <= 0 || !DisplayServer.running || isSystemKey(event.keyCode)) return false
+        if (!DisplayServer.running || isSystemKey(event.keyCode)) return false
+        if (scanCode <= 0) {
+            // Other soft keys with a character (Gboard and Samsung Keyboard send digits so): typed as text.
+            val char = event.unicodeChar
+            if (char == 0 || char and KeyCharacterMap.COMBINING_ACCENT != 0) return false
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                val text = String(Character.toChars(char))
+                if (wayland) DisplayServer.commitText(text) else DisplayServer.text(text)
+            }
+            return true
+        }
         if (event.scanCode > 0) lastInputTouch = false
         when (event.action) {
             KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0 && keysDown.add(scanCode)) DisplayServer.key(scanCode, true)
