@@ -15,6 +15,7 @@ import android.os.Looper
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.view.InputDevice
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
@@ -212,6 +213,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private fun reloadSettings() {
         val settings = DesktopSettings.load(this)
         trackpadMode = settings.trackpad
+        overlay?.visibility = if (settings.stats) View.VISIBLE else View.GONE
         if (settings.scale != desktopScale) {
             desktopScale = settings.scale.coerceIn(MIN_SCALE, MAX_SCALE)
             if (surfaceWidth > 0) resizeDesktop()
@@ -233,7 +235,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         AudioFocus.reclaim()
         surfaceView.requestFocus()
         clipboard.addPrimaryClipChangedListener(clipboardListener)
-        overlay?.let { handler.post(overlayUpdater) }
+        if (overlay?.visibility == View.VISIBLE) handler.post(overlayUpdater)
     }
 
     override fun onPause() {

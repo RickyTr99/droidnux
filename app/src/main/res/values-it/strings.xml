@@ -131,6 +131,9 @@
     <string name="check_files_text">Foto, download e documenti nella cartella Android del desktop.</string>
     <string name="check_notifications">Notifiche</string>
     <string name="check_notifications_text">Mostrano che il desktop è aperto e permettono di chiuderlo.</string>
+    <string name="settings_debug">Debug</string>
+    <string name="settings_stats">Contatore dei fotogrammi</string>
+    <string name="settings_stats_text">Fotogrammi al secondo in alto a destra nel desktop</string>
     <string name="settings_system_keys">Tasti di sistema</string>
     <string name="settings_system_keys_on">Meta, Alt+Tab e le altre scorciatoie vanno al desktop</string>
     <string name="settings_system_keys_off">Android si tiene Meta, Alt+Tab e alcune scorciatoie. Attiva DroidNux nelle impostazioni di accessibilità per darle al desktop.</string>

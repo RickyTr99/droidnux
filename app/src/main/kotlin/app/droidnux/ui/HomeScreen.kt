@@ -3,6 +3,7 @@ package app.droidnux.ui
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.provider.Settings
@@ -10,6 +11,7 @@ import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -17,6 +19,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -24,6 +27,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -39,6 +43,7 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -54,6 +59,7 @@ import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -71,6 +77,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.booleanResource
@@ -124,7 +131,8 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
     Box(
         Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
-        AnimatedContent(tab, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "tab") { page ->
+        // Short fades: the page follows the finger at once.
+        AnimatedContent(tab, transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(90)) }, label = "tab") { page ->
             // Room for the bar floating over the bottom of every page.
             val padding = PaddingValues(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 120.dp)
             when (page) {
@@ -138,32 +146,43 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
     }
 }
 
-/** One UI style: a floating rounded bar, the current tab in a pill with its name in bold. */
+/**
+ * A floating rounded bar: each tab is its icon over its name, the current one with its icon in a pill
+ * (Material 3 navigation bar). The tab changes on touch down, without waiting for the finger to lift.
+ */
 @Composable
 private fun BottomBar(current: Tab, modifier: Modifier, onSelect: (Tab) -> Unit) {
     Row(
-        modifier.clip(RoundedCornerShape(36.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(6.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier.clip(RoundedCornerShape(32.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
     ) {
         Tab.entries.forEach { tab ->
             val selected = tab == current
-            val background by animateColorAsState(
+            val pill by animateColorAsState(
                 if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerHigh,
+                animationSpec = tween(120),
                 label = "tab",
             )
-            Row(
-                Modifier.height(60.dp).clip(RoundedCornerShape(30.dp)).background(background)
-                    .combinedClickable(onClick = { onSelect(tab) }).padding(horizontal = 24.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            Column(
+                Modifier.width(96.dp).clip(RoundedCornerShape(20.dp))
+                    .pointerInput(tab) { detectTapGestures(onPress = { onSelect(tab) }) }
+                    // Keyboard, controller and accessibility (selecting again is harmless).
+                    .selectable(selected, onClick = { onSelect(tab) })
+                    .padding(vertical = 6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 val color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant
-                Icon(tab.icon, null, tint = color, modifier = Modifier.size(22.dp))
+                Box(
+                    Modifier.size(width = 60.dp, height = 32.dp).clip(RoundedCornerShape(16.dp)).background(pill),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(tab.icon, null, tint = color, modifier = Modifier.size(22.dp)) }
                 Text(
                     stringResource(tab.label),
                     color = color,
-                    fontSize = 15.sp,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    maxLines = 1,
                 )
             }
         }
@@ -197,7 +216,8 @@ private fun DesktopTab(
             }
             val hero = @Composable { modifier: Modifier ->
                 Box(
-                    modifier.height(300.dp).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                    // The desktop's proportions, so that the whole picture shows.
+                    modifier.aspectRatio(thumbnail?.let { it.width.toFloat() / it.height } ?: 1.6f).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surfaceContainerLowest)
                         .combinedClickable(onClick = { openDesktop(context) }),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -434,6 +454,16 @@ private fun SettingsTab(padding: PaddingValues) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 4.dp, top = 4.dp),
             )
+            if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+                SectionHeader(stringResource(R.string.settings_debug), Modifier.padding(top = 20.dp, bottom = 4.dp))
+                InfoRow(
+                    stringResource(R.string.settings_stats),
+                    text = stringResource(R.string.settings_stats_text),
+                    onClick = { save { it.copy(stats = !it.stats) } },
+                ) {
+                    Switch(checked = settings.stats, onCheckedChange = { checked -> save { it.copy(stats = checked) } })
+                }
+            }
         }
     }
     if (choosingLayout) {
