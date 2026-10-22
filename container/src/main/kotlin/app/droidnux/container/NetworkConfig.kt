@@ -27,12 +27,16 @@ object NetworkConfig {
         return (servers + FALLBACK_DNS).distinct().take(MAX_NAMESERVERS)
     }
 
-    /** Rewrites the guest's /etc/resolv.conf for the current network. */
-    fun writeResolvConf(context: Context, rootfs: File) {
+    /**
+     * Rewrites the guest's /etc/resolv.conf for the current network; with [proxied], the guest
+     * asks [DnsProxy] (Burrow redirects its address).
+     */
+    fun writeResolvConf(context: Context, rootfs: File, proxied: Boolean) {
         val etc = File(rootfs, "etc").apply { mkdirs() }
         val content = buildString {
             appendLine("# Written by DroidNux from the Android network settings.")
-            dnsServers(context).forEach { appendLine("nameserver $it") }
+            if (proxied) appendLine("nameserver ${DnsProxy.GUEST_NAMESERVER}")
+            else dnsServers(context).forEach { appendLine("nameserver $it") }
         }
         val file = File(etc, "resolv.conf")
         // Never write through a symlink planted in the rootfs.

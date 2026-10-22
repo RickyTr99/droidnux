@@ -45,7 +45,7 @@ class Container(context: Context) {
     /** proot command for [distro], with the guest network settings refreshed first. */
     private fun guestCommand(distro: Distro, command: List<String>): List<String> {
         val rootfs = installer.rootfsDir(distro)
-        NetworkConfig.writeResolvConf(context, rootfs)
+        NetworkConfig.writeResolvConf(context, rootfs, proxied = proot.dnsPort > 0)
         return proot.guestCommand(rootfs, command)
     }
 

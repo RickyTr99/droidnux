@@ -29,6 +29,9 @@ class Proot(context: Context) {
     val loader = File(nativeDir, "libproot-loader.so")
     private val burrow = File(nativeDir, "libburrow.so")
 
+    /** Where Burrow sends the guest's DNS queries; 0 under proot. */
+    val dnsPort: Int get() = if (useBurrow) DnsProxy.port else 0
+
     /** Environment proot itself needs (not the guest's). */
     fun hostEnvironment(): Map<String, String> {
         tmpDir.mkdirs()
@@ -50,6 +53,7 @@ class Proot(context: Context) {
             if (useBurrow) {
                 add(burrow.absolutePath)
                 add("-r"); add(rootfs.absolutePath)
+                if (dnsPort > 0) { add("-d"); add(dnsPort.toString()) }
             } else {
                 add(binary.absolutePath)
                 add("--kill-on-exit")
