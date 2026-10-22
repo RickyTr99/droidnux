@@ -575,6 +575,9 @@ ${USER_SESSION.prependIndent("        ")}
             export SHELL=/bin/bash
             export XDG_CONFIG_DIRS=$PLASMA_DEFAULTS:/etc/xdg
             export MOZ_SHM_NO_SEALS=1 # see SESSION
+            # Electron apps (VS Code, Discord, Obsidian): Chromium's sandbox needs user
+            # namespaces or its set-user-ID helper, neither of which Android allows.
+            export ELECTRON_DISABLE_SANDBOX=1
 ${GPU_ENV.prependIndent("            ")}
             if [ -f "${'$'}MESA/droidnux-mesa.version" ]; then
                 # KWin renders into GBM buffers from the app (Mesa patch 0004).
