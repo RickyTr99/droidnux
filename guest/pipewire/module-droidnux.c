@@ -35,6 +35,7 @@
 #include <unistd.h>
 
 #include <spa/param/audio/format-utils.h>
+#include <spa/param/latency-utils.h>
 #include <spa/utils/result.h>
 
 #include <pipewire/impl.h>
@@ -67,6 +68,10 @@ PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
 /* Largest fill error the DLL sees, in frames, and its bandwidth (spa/utils/dll.h). */
 #define MAX_ERROR 256.0
 #define DLL_BW 0.016
+/* How often the sink checks its latency while it plays, and the change that is
+ * worth telling the graph (5 ms; AAudio's own swings by ~25 ms). */
+#define LATENCY_CHECK_MS 500
+#define LATENCY_STEP_FRAMES (RATE / 200u)
 
 static const struct spa_dict_item module_props[] = {
     {PW_KEY_MODULE_AUTHOR, "DroidNux"},
@@ -97,6 +102,9 @@ struct impl {
     struct pw_stream* stream;
     struct spa_hook stream_listener;
     bool running; /* main loop: START sent */
+    /* Main loop, sink only: the latency the stream's port reports (frames). */
+    struct spa_source* latency_timer;
+    uint32_t latency;
 
     int sock;
     dnx_audio_ring* ring;
@@ -350,6 +358,28 @@ static int do_stop(struct spa_loop* loop, bool async, uint32_t seq, const void* 
     return 0;
 }
 
+/* Main loop: frames from the graph to the speaker, the ring's fill plus the
+ * device's own latency, as the sink's port latency. Players (pipewire-pulse
+ * clients: Firefox, mpv) only see a port's latency, not the driver's
+ * clock.delay: without it the picture ran ~90 ms ahead of the sound. */
+static void publish_latency(struct impl* impl, uint32_t frames) {
+    uint8_t buffer[256];
+    struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    struct spa_latency_info latency = SPA_LATENCY_INFO(SPA_DIRECTION_INPUT, .min_rate = frames, .max_rate = frames);
+    const struct spa_pod* params[1] = {spa_latency_build(&b, SPA_PARAM_Latency, &latency)};
+    impl->latency = frames;
+    pw_stream_update_params(impl->stream, params, 1);
+}
+
+static void on_latency_timer(void* data, uint64_t expirations) {
+    struct impl* impl = data;
+    (void) expirations;
+    if (!impl->running || impl->stream == NULL || __atomic_load_n(&impl->ring->burst, __ATOMIC_RELAXED) == 0) return;
+    uint32_t frames = target_fill(impl) + __atomic_load_n(&impl->ring->latency, __ATOMIC_RELAXED);
+    uint32_t change = frames > impl->latency ? frames - impl->latency : impl->latency - frames;
+    if (change >= LATENCY_STEP_FRAMES) publish_latency(impl, frames);
+}
+
 static void stream_state_changed(void* data, enum pw_stream_state old, enum pw_stream_state state,
                                  const char* error) {
     struct impl* impl = data;
@@ -359,11 +389,19 @@ static void stream_state_changed(void* data, enum pw_stream_state old, enum pw_s
             impl->running = true;
             pw_loop_invoke(impl->data_loop, do_start, 0, NULL, 0, true, impl);
             send_message(impl, DNX_AUDIO_START);
+            if (impl->latency_timer) {
+                struct timespec interval = {0, LATENCY_CHECK_MS * SPA_NSEC_PER_MSEC};
+                pw_loop_update_timer(pw_context_get_main_loop(impl->context), impl->latency_timer, &interval,
+                                     &interval, false);
+            }
         }
         return;
     }
     if (impl->running) {
         impl->running = false;
+        if (impl->latency_timer) {
+            pw_loop_update_timer(pw_context_get_main_loop(impl->context), impl->latency_timer, NULL, NULL, false);
+        }
         pw_loop_invoke(impl->data_loop, do_stop, 0, NULL, 0, true, impl);
         send_message(impl, DNX_AUDIO_STOP);
     }
@@ -503,6 +541,7 @@ static void impl_destroy(struct impl* impl) {
     if (impl->core && impl->core_proxy_listener.link.next) spa_hook_remove(&impl->core_proxy_listener);
     if (impl->core && impl->do_disconnect) pw_core_disconnect(impl->core);
     if (impl->timer) pw_loop_destroy_source(impl->data_loop, impl->timer);
+    if (impl->latency_timer) pw_loop_destroy_source(pw_context_get_main_loop(impl->context), impl->latency_timer);
     if (impl->data_loop) pw_context_release_loop(impl->context, impl->data_loop);
     if (impl->ring) munmap(impl->ring, impl->ring_size);
     if (impl->sock >= 0) close(impl->sock);
@@ -554,6 +593,14 @@ static int create_node(struct pw_impl_module* module, bool capture) {
     if (impl->timer == NULL) {
         res = -errno;
         goto error;
+    }
+
+    if (!capture) {
+        impl->latency_timer = pw_loop_add_timer(pw_context_get_main_loop(context), on_latency_timer, impl);
+        if (impl->latency_timer == NULL) {
+            res = -errno;
+            goto error;
+        }
     }
 
     impl->core = pw_context_get_object(context, PW_TYPE_INTERFACE_Core);
