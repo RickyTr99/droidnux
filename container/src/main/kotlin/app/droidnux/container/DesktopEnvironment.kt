@@ -21,6 +21,9 @@ object DesktopEnvironment {
     /** PNG icons of the desktop's apps, kept by [APPS_SCRIPT] for Android. */
     private const val ICON_CACHE = "/var/cache/droidnux/icons"
 
+    /** Who Plasma runs as under Burrow (USER_SESSION). */
+    private const val DESKTOP_USER = "droidnux"
+
     /** FIFO the session reads desktop ids from, to start those apps inside it. */
     private const val LAUNCH_FIFO = "/tmp/.droidnux-launch"
     const val DISPLAY = 0
@@ -84,6 +87,8 @@ object DesktopEnvironment {
         "systemsettings", "kinfocenter", "plasma-systemmonitor", "plasma-pa", "xdg-desktop-portal-kde",
         // Display settings: the scale, which the app's compositor follows.
         "kscreen",
+        // The desktop's user administers with sudo (USER_SESSION).
+        "sudo",
         "konsole", "dolphin", "kwrite", "ark", "gwenview", "okular", "kde-spectacle",
         // GTK apps (Firefox) in Breeze, set from System Settings.
         "breeze-gtk-theme", "kde-config-gtk-style",
@@ -399,8 +404,8 @@ object DesktopEnvironment {
     /** Session script part: the device's storage in the home folder. */
     private val SDCARD_LINK = """
         # The device's storage in the home folder (when the app may access it).
-        if [ -d $GUEST_SDCARD ] && [ ! -e /root/Android ] && [ ! -L /root/Android ]; then
-            ln -s $GUEST_SDCARD /root/Android
+        if [ -d $GUEST_SDCARD ] && [ ! -e "${'$'}HOME/Android" ] && [ ! -L "${'$'}HOME/Android" ]; then
+            ln -s $GUEST_SDCARD "${'$'}HOME/Android"
         fi
     """.trimIndent()
 
@@ -524,11 +529,44 @@ ${LAUNCH_LOOP.prependIndent("        ")}
         done) &
     """.trimIndent()
 
+    /**
+     * Plasma session part, as root under Burrow: the user the desktop runs as
+     * (some apps refuse root, VLC among them), made on first use with sudo
+     * without password and the settings root had; then the script again with
+     * the user's ids (perl: setpriv needs capabilities Android refuses).
+     */
+    private val USER_SESSION = """
+        if [ "${'$'}(id -u)" = 0 ] && [ "${'$'}DROIDNUX_RUNTIME" = burrow ] && [ "${'$'}1" != --in-dbus ]; then
+            if ! id -u $DESKTOP_USER > /dev/null 2>&1; then
+                useradd -m -s /bin/bash -c DroidNux $DESKTOP_USER
+                for g in sudo audio video render input; do
+                    getent group ${'$'}g > /dev/null && usermod -a -G ${'$'}g $DESKTOP_USER
+                done
+                home=${'$'}(getent passwd $DESKTOP_USER | cut -d: -f6)
+                # The settings of the desktop that ran as root, once.
+                for f in .config .local .mozilla .thunderbird .ssh .gtkrc-2.0 .vscode; do
+                    [ -e "/root/${'$'}f" ] && cp -a "/root/${'$'}f" "${'$'}home/"
+                done
+                grep -rlI --exclude-dir=mozilla -e /root/ -e file:///root "${'$'}home/.config" "${'$'}home/.local/share/user-places.xbel" 2> /dev/null |
+                    xargs -r sed -i "s|file:///root\b|file://${'$'}home|g; s|=/root/|=${'$'}home/|g; s|\"/root/|\"${'$'}home/|g"
+            fi
+            if [ ! -f /etc/sudoers.d/droidnux ] && [ -d /etc/sudoers.d ]; then
+                echo '$DESKTOP_USER ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/droidnux && chmod 440 /etc/sudoers.d/droidnux
+            fi
+            home=${'$'}(getent passwd $DESKTOP_USER | cut -d: -f6)
+            exec perl -e '${'$'}u = shift; @g = split / /, shift; ${'$'}) = "${'$'}g[0] @g"; ${'$'}( = ${'$'}g[0]; ${'$'}< = ${'$'}> = ${'$'}u;
+                die "cannot become ${'$'}u\n" if ${'$'}> != ${'$'}u; exec @ARGV or die "exec: ${'$'}!\n"' \
+                "${'$'}(id -u $DESKTOP_USER)" "${'$'}(id -G $DESKTOP_USER)" \
+                env HOME="${'$'}home" USER=$DESKTOP_USER LOGNAME=$DESKTOP_USER "${'$'}0" "${'$'}@"
+        fi
+    """.trimIndent()
+
     private val PLASMA_SESSION = """
         #!/bin/sh
         # Written by DroidNux: starts Plasma, its KWin nested on the app's
         # Wayland compositor. Runs twice: first to set up and start D-Bus, then
         # inside it (--in-dbus).
+${USER_SESSION.prependIndent("        ")}
         if [ "${'$'}1" != --in-dbus ]; then
             export XDG_RUNTIME_DIR=/tmp/runtime-${'$'}(id -u)
             # The app's compositor; KWin puts its own socket in XDG_RUNTIME_DIR.
@@ -571,7 +609,7 @@ ${LOCALE_ENV.prependIndent("            ")}
 
             # The keyboard layout: KWin's own (kxkbrc, unless the user set one), and
             # the keymap the app's compositor sends, which it reads on first use.
-            config=${'$'}{XDG_CONFIG_HOME:-/root/.config}
+            config=${'$'}{XDG_CONFIG_HOME:-${'$'}HOME/.config}
             mkdir -p "${'$'}config"
             layout=${'$'}{DROIDNUX_XKB_LAYOUT:-us}
             [ -f "${'$'}config/kxkbrc" ] || printf '[Layout]\nLayoutList=%s\nUse=true\n' "${'$'}layout" > "${'$'}config/kxkbrc"
