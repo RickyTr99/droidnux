@@ -33,6 +33,10 @@ constexpr uint32_t kMaxChannels = 8;
 // the latency estimate.
 constexpr int kPollMs = 200;
 constexpr int64_t kStopTimeoutNs = 200'000'000;
+// The microphone opens only if its source still runs after this: PipeWire runs
+// every node for a moment when the session starts, and each opening shows
+// Android's microphone indicator.
+constexpr int64_t kInputDelayNs = 500'000'000;
 
 std::atomic<int> gPlaying{0};
 std::atomic<dnx_audio_playing_callback> gPlayingCallback{nullptr};
@@ -74,19 +78,30 @@ public:
         LOGI("sink connected: %u Hz, %u channels, ring of %u frames", rate_, channels_, frames_);
         for (;;) {
             pollfd p{fd_, POLLIN, 0};
-            int r = poll(&p, 1, playing_ ? kPollMs : -1);
+            int timeout = playing_ ? kPollMs : -1;
+            if (startAt_ != 0) timeout = static_cast<int>(std::max<int64_t>(startAt_ - nowNs(), 0) / 1'000'000 + 1);
+            int r = poll(&p, 1, timeout);
             if (r < 0 && errno != EINTR) break;
             if (r > 0) {
                 dnx_audio_header header{};
                 if (!recvAll(fd_, &header, sizeof(header)) || header.size != 0) break;
                 if (header.type == DNX_AUDIO_START) {
-                    start();
+                    if (input_) {
+                        startAt_ = nowNs() + kInputDelayNs;
+                    } else {
+                        start();
+                    }
                 } else if (header.type == DNX_AUDIO_STOP) {
+                    startAt_ = 0;
                     stop();
                 } else {
                     LOGE("unknown message %u", header.type);
                     break;
                 }
+            }
+            if (startAt_ != 0 && nowNs() >= startAt_) {
+                startAt_ = 0;
+                start();
             }
             if (!playing_) continue;
             if (lost_.exchange(false)) {
@@ -228,7 +243,8 @@ private:
         if (callback != nullptr && now == (playing ? 1 : 0)) callback(playing);
     }
 
-    // The stream stays open: restarting it is faster than opening it again.
+    // An output stays open: restarting it is faster than opening it again. The
+    // microphone closes, so that Android's indicator goes away.
     void stop() {
         playing_ = false;
         setPlaying(false);
@@ -242,6 +258,7 @@ private:
              input_ ? "input" : "output", static_cast<long long>(AAudioStream_getFramesWritten(stream_)),
              __atomic_load_n(&ring_->underruns, __ATOMIC_RELAXED) - underruns_, AAudioStream_getXRunCount(stream_),
              __atomic_load_n(&ring_->latency, __ATOMIC_RELAXED));
+        if (input_) closeStream();
     }
 
     // Frames between the ring and the speaker, for the sink's delay (A/V sync).
@@ -319,6 +336,7 @@ private:
     std::atomic<bool> playing_{false};
     std::atomic<bool> lost_{false};
     bool counted_ = false;  // in gPlaying (session thread only)
+    int64_t startAt_ = 0;   // when to open the microphone (session thread only)
     bool input_ = false;    // a source: the microphone
 };
 
