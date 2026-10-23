@@ -168,7 +168,14 @@ static int64_t predict_presentation(void) {
     return t;
 }
 
+/* Reported this much before the vsync: a nested compositor schedules its frame
+ * to end just before the presentation time, but Android latches a little
+ * before the vsync, and KWin's frames landing there missed it (one vsync in
+ * ten lost under a steady 120 fps client). */
+#define PRESENT_LEAD_NS 2500000
+
 static void send_presented(struct wl_resource* feedback, int64_t when) {
+    when -= PRESENT_LEAD_NS;
     uint64_t seconds = (uint64_t) (when / 1000000000);
     uint32_t refresh = (uint32_t) (1000000000 / dnx_presenter_refresh_rate());
     wp_presentation_feedback_send_presented(feedback, (uint32_t) (seconds >> 32), (uint32_t) seconds,
