@@ -558,9 +558,13 @@ ${LAUNCH_LOOP.prependIndent("        ")}
             old=${'$'}(getent passwd | awk -F: '${'$'}5 == "DroidNux" { print ${'$'}1; exit }')
             if ! id -u "${'$'}user" > /dev/null 2>&1 && [ -n "${'$'}old" ]; then
                 oldhome=${'$'}(getent passwd "${'$'}old" | cut -d: -f6)
+                # Lines with \x escapes are binary values (Qt streams with length
+                # prefixes, Dolphin's session among them): rewriting breaks them,
+                # the link keeps their old paths working.
                 usermod -l "${'$'}user" -d "/home/${'$'}user" -m "${'$'}old" && groupmod -n "${'$'}user" "${'$'}old" &&
+                    ln -s "/home/${'$'}user" "${'$'}oldhome" &&
                     grep -rlI --exclude-dir=mozilla -e "${'$'}oldhome/" "/home/${'$'}user/.config" 2> /dev/null |
-                        xargs -r sed -i "s|${'$'}oldhome/|/home/${'$'}user/|g"
+                        xargs -r sed -i "/[\\]x/!s|${'$'}oldhome/|/home/${'$'}user/|g"
             fi
             if ! id -u "${'$'}user" > /dev/null 2>&1; then
                 useradd -m -s /bin/bash -c DroidNux "${'$'}user"

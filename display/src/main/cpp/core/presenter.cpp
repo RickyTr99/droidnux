@@ -172,6 +172,7 @@ public:
         std::lock_guard lock(mutex_);
         maxRefreshRate_ = maxRefreshRate;
         detachLocked();
+        uncommitted_ = 0;  // commits of the old surface may never be reported
         ANativeWindow_acquire(window);
         window_ = window;
         surface_ = ASurfaceControl_createFromWindow(window, "droidnux-desktop");
@@ -459,6 +460,7 @@ public:
         (void) stats;
         auto* self = static_cast<Presenter*>(context);
         if (--self->uncommitted_ > 0) return;
+        self->uncommitted_ = 0;  // one of the old surface's, after attach() reset the count
         dnx_latch_callback callback = self->latchCallback_.load();
         if (callback) callback(self->latchData_.load());
     }
