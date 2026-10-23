@@ -154,6 +154,15 @@
     <string name="settings_debug">Debug</string>
     <string name="settings_stats">Frame counter</string>
     <string name="settings_stats_text">Frames per second in the top right corner of the desktop</string>
+    <string name="settings_account">Account</string>
+    <string name="settings_password_summary">Account %1$s: the password sudo asks for, and that opens KDE’s wallet</string>
+    <string name="settings_password_change">Change the password</string>
+    <string name="settings_password_text">It applies the next time the desktop starts, and KDE’s wallet moves to it.</string>
+    <string name="settings_password_current">Current password</string>
+    <string name="settings_password_new">New password</string>
+    <string name="settings_password_wrong">Wrong password</string>
+    <string name="action_change">Change</string>
+    <string name="action_save">Save</string>
     <string name="settings_system_keys">System keys</string>
     <string name="settings_system_keys_on">Meta, Alt+Tab and the other shortcuts go to the desktop</string>
     <string name="settings_system_keys_off">Android keeps Meta, Alt+Tab and some shortcuts. Turn on DroidNux in the accessibility settings to give them to the desktop.</string>

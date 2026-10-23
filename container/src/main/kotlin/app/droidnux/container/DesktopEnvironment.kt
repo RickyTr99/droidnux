@@ -72,6 +72,9 @@ object DesktopEnvironment {
     private const val IM_PROGRAM = "$GUEST_LIB_DIR/droidnux-im"
     private const val IM_DESKTOP_FILE = "$PLASMA_DEFAULTS/droidnux-im.desktop"
 
+    /** Opens KDE's wallet with the password before and moves it to the new one (WALLET). */
+    private const val WALLET_SCRIPT = "$GUEST_LIB_DIR/droidnux-wallet"
+
     /** XFCE on the app's X server. */
     private val XFCE_PACKAGES = listOf(
         "xfce4", "xfce4-terminal", "dbus-x11", "x11-xserver-utils", "xkb-data",
@@ -92,6 +95,8 @@ object DesktopEnvironment {
         "kscreen",
         // The desktop's user administers with sudo (USER_SESSION).
         "sudo",
+        // KDE's wallet moved to a new password over D-Bus (WALLET).
+        "python3-gi",
         "konsole", "dolphin", "kwrite", "ark", "gwenview", "okular", "kde-spectacle",
         // GTK apps (Firefox) in Breeze, set from System Settings.
         "breeze-gtk-theme", "kde-config-gtk-style",
@@ -195,6 +200,7 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PLASMA_DEFAULTS/kwinrc", PLASMA_KWINRC.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/kscreenlockerrc", PLASMA_SCREENLOCKER.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/kwalletrc", PLASMA_KWALLETRC.toByteArray())
+        writeFile(rootfs, WALLET_SCRIPT, WALLET.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, IM_DESKTOP_FILE, IM_DESKTOP.toByteArray())
         writeFile(rootfs, IM_PROGRAM, File(nativeLibraryDir, IM_LIBRARY).readBytes(), mode = 0x1ED)
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/metadata.json", PLASMA_LNF_METADATA.toByteArray())
@@ -207,11 +213,16 @@ object DesktopEnvironment {
     /** Printed by the session script when the desktop logs out. */
     const val SESSION_END_MARKER = "DROIDNUX_SESSION_END"
 
+    /** Printed by Plasma's session once KDE's wallet opens with the new password (see [sessionCommand]). */
+    const val WALLET_MOVED_MARKER = "DROIDNUX_WALLET_MOVED"
+
     /**
      * Command starting the session, with the X keyboard [layout] (e.g. "it"):
      * XFCE on the X server, or Plasma on the Wayland compositor when [wayland],
      * as [user] (a valid Linux user name; empty: the default one). Plasma's
-     * session reads the user's password from its input, one line.
+     * session reads the user's password from its input, one line, then the
+     * password before it (empty line if it did not change): KDE's wallet
+     * moves to the new one, and [WALLET_MOVED_MARKER] says so.
      */
     fun sessionCommand(layout: String, dpi: Int, wayland: Boolean = false, user: String = ""): String =
         "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_DPI=$dpi DROIDNUX_LOCALE=${glibcLocale()} " +
@@ -546,14 +557,16 @@ ${LAUNCH_LOOP.prependIndent("        ")}
      * with the settings root had (or renamed from the account made before);
      * the password the app sends on the input line becomes its password and
      * sudo's, and the key of KDE's wallet, opened in --in-dbus as pam_kwallet
-     * would at login (DROIDNUX_WALLET). Then the script again with the user's
+     * would at login (DROIDNUX_WALLET; DROIDNUX_WALLET_BEFORE when the app
+     * also sends the password before, on a second line). Then the script again with the user's
      * ids (perl: setpriv needs capabilities Android refuses).
      */
     private val USER_SESSION = """
         if [ "${'$'}(id -u)" = 0 ] && [ "${'$'}DROIDNUX_RUNTIME" = burrow ] && [ "${'$'}1" != --in-dbus ]; then
             user=${'$'}{DROIDNUX_USER:-$DESKTOP_USER}
-            pass=
+            pass= before=
             IFS= read -r pass || true
+            IFS= read -r before || true
             # Qt temporary files and directories (name.XXXXXX) of the last session, emptied
             # but never removed: the session is killed, and /tmp is not cleared at boot.
             find /tmp -mindepth 1 -maxdepth 1 -empty -name '*.??????' -delete 2> /dev/null
@@ -583,7 +596,7 @@ ${LAUNCH_LOOP.prependIndent("        ")}
                     xargs -r sed -i "s|file:///root\b|file://${'$'}home|g; s|=/root/|=${'$'}home/|g; s|\"/root/|\"${'$'}home/|g"
             fi
             home=${'$'}(getent passwd "${'$'}user" | cut -d: -f6)
-            unset DROIDNUX_WALLET
+            unset DROIDNUX_WALLET DROIDNUX_WALLET_BEFORE
             if [ -n "${'$'}pass" ]; then
                 printf '%s:%s\n' "${'$'}user" "${'$'}pass" | chpasswd || echo "chpasswd failed"
                 sudo="ALL=(ALL:ALL) ALL"
@@ -592,15 +605,22 @@ ${LAUNCH_LOOP.prependIndent("        ")}
                 mkdir -p "${'$'}wallets"
                 [ -s "${'$'}wallets/kdewallet.salt" ] || head -c 56 /dev/urandom > "${'$'}wallets/kdewallet.salt"
                 chown -R "${'$'}user:" "${'$'}home/.local"
-                DROIDNUX_WALLET=${'$'}(printf %s "${'$'}pass" | perl -MDigest::SHA=hmac_sha512 -e '
-                    local ${'$'}/; my ${'$'}key = <STDIN>; open my ${'$'}f, "<", ${'$'}ARGV[0] or die "salt: ${'$'}!\n"; binmode ${'$'}f;
-                    my ${'$'}salt = <${'$'}f>; my ${'$'}u = hmac_sha512(${'$'}salt . pack("N", 1), ${'$'}key); my ${'$'}t = ${'$'}u;
-                    for (2 .. 50000) { ${'$'}u = hmac_sha512(${'$'}u, ${'$'}key); ${'$'}t ^= ${'$'}u }
-                    print "[", join(", ", unpack("C56", ${'$'}t)), "]";' "${'$'}wallets/kdewallet.salt") && export DROIDNUX_WALLET
+                walletkey() {
+                    printf %s "${'$'}1" | perl -MDigest::SHA=hmac_sha512 -e '
+                        local ${'$'}/; my ${'$'}key = <STDIN>; open my ${'$'}f, "<", ${'$'}ARGV[0] or die "salt: ${'$'}!\n"; binmode ${'$'}f;
+                        my ${'$'}salt = <${'$'}f>; my ${'$'}u = hmac_sha512(${'$'}salt . pack("N", 1), ${'$'}key); my ${'$'}t = ${'$'}u;
+                        for (2 .. 50000) { ${'$'}u = hmac_sha512(${'$'}u, ${'$'}key); ${'$'}t ^= ${'$'}u }
+                        print "[", join(", ", unpack("C56", ${'$'}t)), "]";' "${'$'}wallets/kdewallet.salt"
+                }
+                DROIDNUX_WALLET=${'$'}(walletkey "${'$'}pass") && export DROIDNUX_WALLET
+                # The password changed in the app: the wallet still opens with the one before.
+                if [ -n "${'$'}before" ] && [ "${'$'}before" != "${'$'}pass" ]; then
+                    DROIDNUX_WALLET_BEFORE=${'$'}(walletkey "${'$'}before") && export DROIDNUX_WALLET_BEFORE
+                fi
             else
                 sudo="ALL=(ALL:ALL) NOPASSWD: ALL"
             fi
-            unset pass
+            unset pass before
             if [ -d /etc/sudoers.d ]; then
                 echo "${'$'}user ${'$'}sudo" > /etc/sudoers.d/droidnux && chmod 440 /etc/sudoers.d/droidnux
             fi
@@ -655,8 +675,8 @@ ${GPU_ENV.prependIndent("            ")}
             mkdir -p "${'$'}XDG_RUNTIME_DIR" && chmod 700 "${'$'}XDG_RUNTIME_DIR"
             # The wallet's key, from the environment (D-Bus would pass it to every service) to a private file.
             if [ -n "${'$'}DROIDNUX_WALLET" ]; then
-                (umask 077 && printf %s "${'$'}DROIDNUX_WALLET" > "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet")
-                unset DROIDNUX_WALLET
+                (umask 077 && printf '%s\n%s\n' "${'$'}DROIDNUX_WALLET" "${'$'}DROIDNUX_WALLET_BEFORE" > "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet")
+                unset DROIDNUX_WALLET DROIDNUX_WALLET_BEFORE
             fi
             # Xwayland's sockets, made by KWin.
             mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
@@ -686,11 +706,18 @@ ${SDCARD_LINK.prependIndent("            ")}
 
         # KDE's wallet, opened with the account's password (USER_SESSION) as pam_kwallet does at login.
         if [ -f "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet" ]; then
-            key=${'$'}(cat "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet")
+            key=${'$'}(sed -n 1p "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet")
+            before=${'$'}(sed -n 2p "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet")
             rm -f "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet"
-            gdbus call --session --dest org.kde.kwalletd6 --object-path /modules/kwalletd6 \
-                --method org.kde.KWallet.pamOpen kdewallet "${'$'}key" 0 > /dev/null 2>&1 &
-            unset key
+            if [ -n "${'$'}before" ]; then
+                # The keys on its input: the command line is visible to every process.
+                (printf '%s\n%s\n' "${'$'}key" "${'$'}before" | $WALLET_SCRIPT "${'$'}HOME/.local/share/kwalletd" &&
+                    echo $WALLET_MOVED_MARKER) &
+            else
+                gdbus call --session --dest org.kde.kwalletd6 --object-path /modules/kwalletd6 \
+                    --method org.kde.KWallet.pamOpen kdewallet "${'$'}key" 0 > /dev/null 2>&1 &
+            fi
+            unset key before
         fi
 ${SESSION_SERVICES.prependIndent("        ")}
         LAUNCH_AFTER=plasmashell
@@ -717,6 +744,98 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         Prompt on Open=false
         Close When Idle=false
         Leave Open=true
+    """.trimIndent() + "\n"
+
+    /**
+     * Opens KDE's wallet with the account's key when the password changed in
+     * the app: kwalletd only changes a password through its own dialog, so
+     * the wallet opens with the key of the password before, and its entries
+     * move to a wallet made with the new key (same salt), which takes its place.
+     */
+    private val WALLET = """
+        #!/usr/bin/python3
+        # Written by DroidNux: moves KDE's wallet to the account's new password.
+        #   droidnux-wallet <wallet dir>, with the new key and the key before on its
+        #   input, one line each: "[b0, b1, ...]", pam_kwallet's PBKDF2 of the password.
+        # Exits 0 once the wallet is open with the new key.
+        import os
+        import shutil
+        import sys
+        import time
+
+        from gi.repository import Gio, GLib
+
+        WALLET = "kdewallet"
+        TEMP = "droidnux-moved"
+        APP = "DroidNux"
+
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+
+
+        def call(method, signature, args, reply):
+            result = bus.call_sync("org.kde.kwalletd6", "/modules/kwalletd6", "org.kde.KWallet", method,
+                                   GLib.Variant(signature, args), GLib.VariantType(reply), 0, 30000, None)
+            return result.unpack()[0] if reply != "()" else None
+
+
+        def key(line):
+            return bytes(int(b) for b in line.strip().strip("[]").split(","))
+
+
+        def open_with(wallet, k):
+            # pamOpen does not say whether it opened the wallet, and kwalletd
+            # ignores it while it handles another request: try for a while.
+            for _ in range(15):
+                call("pamOpen", "(sayi)", (wallet, k, 0), "()")
+                if call("isOpen", "(s)", (wallet,), "(b)"):
+                    return True
+                time.sleep(0.2)
+            return False
+
+
+        def fail(message):
+            print(f"droidnux-wallet: {message}", file=sys.stderr)
+            sys.exit(1)
+
+
+        directory = sys.argv[1]
+        new, before = key(sys.stdin.readline()), key(sys.stdin.readline())
+        # kwalletd starts on the first call.
+        for _ in range(50):
+            try:
+                call("isOpen", "(s)", (WALLET,), "(b)")
+                break
+            except GLib.Error:
+                time.sleep(0.2)
+
+        if open_with(WALLET, new):
+            sys.exit(0)
+        if not open_with(WALLET, before):
+            fail("the wallet opens with neither password")
+        for suffix in (".kwl", ".salt"):
+            if os.path.exists(f"{directory}/{TEMP}{suffix}"):
+                os.remove(f"{directory}/{TEMP}{suffix}")
+        shutil.copyfile(f"{directory}/{WALLET}.salt", f"{directory}/{TEMP}.salt")
+        if not open_with(TEMP, new):
+            fail("cannot make the new wallet")
+        source = call("open", "(sxs)", (WALLET, 0, APP), "(i)")
+        target = call("open", "(sxs)", (TEMP, 0, APP), "(i)")
+        count = 0
+        for folder in call("folderList", "(is)", (source, APP), "(as)"):
+            call("createFolder", "(iss)", (target, folder, APP), "(b)")
+            for name, value in call("entriesList", "(iss)", (source, folder, APP), "(a{sv})").items():
+                kind = call("entryType", "(isss)", (source, folder, name, APP), "(i)")
+                if call("writeEntry", "(issayis)", (target, folder, name, bytes(value), kind, APP), "(i)") != 0:
+                    fail(f"cannot copy {folder}/{name}")
+                count += 1
+        call("sync", "(is)", (target, APP), "()")
+        call("close", "(sb)", (TEMP, True), "(i)")
+        call("close", "(sb)", (WALLET, True), "(i)")
+        os.replace(f"{directory}/{TEMP}.kwl", f"{directory}/{WALLET}.kwl")
+        os.remove(f"{directory}/{TEMP}.salt")
+        if not open_with(WALLET, new):
+            fail("the moved wallet does not open")
+        print(f"droidnux-wallet: {count} entries moved to the new password")
     """.trimIndent() + "\n"
 
     /** No lock screen: Android locks the device. */

@@ -353,6 +353,62 @@ fun LayoutDialog(current: String, onDismiss: () -> Unit, onChoose: (String) -> U
     )
 }
 
+/** A new password for the account ([Account.changePassword]), after the current one. */
+@Composable
+fun PasswordDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val current = remember { Account.password(context) }
+    var old by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var repeat by remember { mutableStateOf("") }
+    var wrong by remember { mutableStateOf(false) }
+    // A keystore that lost its key (Account.password) has no current password to ask for.
+    val done = (current == null || old.isNotEmpty()) && Account.isValidPassword(password) && password == repeat
+    val field = @Composable { value: String, onChange: (String) -> Unit, label: Int, error: Int?, last: Boolean ->
+        OutlinedTextField(
+            value = value,
+            onValueChange = onChange,
+            label = { Text(stringResource(label)) },
+            supportingText = error?.let { { Text(stringResource(it)) } },
+            isError = error != null,
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(
+                autoCorrectEnabled = false, keyboardType = KeyboardType.Password,
+                imeAction = if (last) ImeAction.Done else ImeAction.Next,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_password_change)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.settings_password_text), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (current != null) {
+                    field(old, { old = it; wrong = false }, R.string.settings_password_current,
+                        R.string.settings_password_wrong.takeIf { wrong }, false)
+                }
+                field(password, { password = it }, R.string.settings_password_new, null, false)
+                field(repeat, { repeat = it }, R.string.wizard_account_repeat,
+                    R.string.wizard_account_mismatch.takeIf { repeat.isNotEmpty() && repeat != password }, true)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (current != null && old != current) {
+                    wrong = true
+                } else {
+                    Account.changePassword(context, password)
+                    onDismiss()
+                }
+            }, enabled = done) { Text(stringResource(R.string.action_save)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
 @Composable
 private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
     val context = LocalContext.current

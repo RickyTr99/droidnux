@@ -19,6 +19,8 @@ import javax.crypto.spec.GCMParameterSpec
 object Account {
     private const val KEY_ALIAS = "droidnux-account"
     private const val FILE = "account-password.bin"
+    /** The password before [changePassword], until the session moves the wallet to the new one. */
+    private const val BEFORE_FILE = "account-password-before.bin"
     private const val TRANSFORMATION = "AES/GCM/NoPadding"
 
     private val NAME = Regex("[a-z_][a-z0-9_-]{0,31}")
@@ -34,11 +36,34 @@ object Account {
 
     fun hasPassword(context: Context) = File(context.filesDir, FILE).isFile
 
-    fun savePassword(context: Context, password: String) {
+    fun savePassword(context: Context, password: String) = seal(context, FILE, password)
+
+    /**
+     * A new password for an account that has one: the session makes it the
+     * account's, and moves KDE's wallet to it with [passwordBefore].
+     */
+    fun changePassword(context: Context, password: String) {
+        // Changed again before a session: the wallet still has the first one.
+        if (passwordBefore(context) == null) password(context)?.let { seal(context, BEFORE_FILE, it) }
+        seal(context, FILE, password)
+    }
+
+    /** Null when none was set, or the keystore lost its key (the app's data was restored elsewhere). */
+    fun password(context: Context): String? = unseal(context, FILE)
+
+    /** The password KDE's wallet opens with, when [changePassword] made a new one since. */
+    fun passwordBefore(context: Context): String? = unseal(context, BEFORE_FILE)
+
+    /** The session moved the wallet to [password]: the current one, unless it changed again meanwhile. */
+    fun walletMoved(context: Context, password: String) {
+        if (password(context) == password) File(context.filesDir, BEFORE_FILE).delete() else seal(context, BEFORE_FILE, password)
+    }
+
+    private fun seal(context: Context, name: String, password: String) {
         val cipher = Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key()) }
         val sealed = cipher.doFinal(password.toByteArray())
-        val file = File(context.filesDir, FILE)
-        val temp = File(context.filesDir, "$FILE.new")
+        val file = File(context.filesDir, name)
+        val temp = File(context.filesDir, "$name.new")
         temp.outputStream().use {
             it.write(cipher.iv.size)
             it.write(cipher.iv)
@@ -47,9 +72,8 @@ object Account {
         temp.renameTo(file)
     }
 
-    /** Null when none was set, or the keystore lost its key (the app's data was restored elsewhere). */
-    fun password(context: Context): String? {
-        val bytes = File(context.filesDir, FILE).takeIf { it.isFile }?.readBytes() ?: return null
+    private fun unseal(context: Context, name: String): String? {
+        val bytes = File(context.filesDir, name).takeIf { it.isFile }?.readBytes() ?: return null
         return runCatching {
             val ivSize = bytes[0].toInt()
             val cipher = Cipher.getInstance(TRANSFORMATION)

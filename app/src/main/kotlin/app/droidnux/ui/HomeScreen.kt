@@ -417,6 +417,7 @@ private fun SettingsTab(padding: PaddingValues) {
         settings = DesktopSettings.update(context, change)
     }
     var choosingLayout by remember { mutableStateOf(false) }
+    var changingPassword by remember { mutableStateOf(false) }
     val screen = remember { context.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds }
 
     Column(
@@ -462,6 +463,15 @@ private fun SettingsTab(padding: PaddingValues) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 4.dp, top = 4.dp),
             )
+            if (booleanResource(R.bool.wayland_frontend)) {
+                SectionHeader(stringResource(R.string.settings_account), Modifier.padding(top = 20.dp, bottom = 4.dp))
+                InfoRow(
+                    stringResource(R.string.wizard_account_password),
+                    text = stringResource(R.string.settings_password_summary, settings.user),
+                ) {
+                    FilledTonalButton(onClick = { changingPassword = true }) { Text(stringResource(R.string.action_change)) }
+                }
+            }
             if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
                 SectionHeader(stringResource(R.string.settings_debug), Modifier.padding(top = 20.dp, bottom = 4.dp))
                 InfoRow(
@@ -480,6 +490,7 @@ private fun SettingsTab(padding: PaddingValues) {
             choosingLayout = false
         }
     }
+    if (changingPassword) PasswordDialog(onDismiss = { changingPassword = false })
 }
 
 /** The accessibility service that hands the desktop Meta, Alt+Tab and the other keys Android keeps. */

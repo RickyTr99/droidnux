@@ -147,6 +147,15 @@
     <string name="settings_debug">Debug</string>
     <string name="settings_stats">Contatore dei fotogrammi</string>
     <string name="settings_stats_text">Fotogrammi al secondo in alto a destra nel desktop</string>
+    <string name="settings_account">Account</string>
+    <string name="settings_password_summary">Account %1$s: la password che chiede sudo e che apre il portafoglio di KDE</string>
+    <string name="settings_password_change">Cambia la password</string>
+    <string name="settings_password_text">Vale dal prossimo avvio del desktop, e il portafoglio di KDE passa alla nuova.</string>
+    <string name="settings_password_current">Password attuale</string>
+    <string name="settings_password_new">Nuova password</string>
+    <string name="settings_password_wrong">Password sbagliata</string>
+    <string name="action_change">Cambia</string>
+    <string name="action_save">Salva</string>
     <string name="settings_system_keys">Tasti di sistema</string>
     <string name="settings_system_keys_on">Meta, Alt+Tab e le altre scorciatoie vanno al desktop</string>
     <string name="settings_system_keys_off">Android si tiene Meta, Alt+Tab e alcune scorciatoie. Attiva DroidNux nelle impostazioni di accessibilità per darle al desktop.</string>

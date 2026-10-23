@@ -69,12 +69,13 @@ class DesktopSessionService : Service() {
         val wayland = resources.getBoolean(R.bool.wayland_frontend)
         val user = DesktopSettings.load(this).user
         val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, dpi, wayland, user))
+        val password = if (wayland) Account.password(this).orEmpty() else ""
         session = process
         Log.i(TAG, "session started (layout $layout)")
         // The account's password, on Plasma's session's input: it never sits in a file or the environment.
         if (wayland) scope.launch {
-            val password = Account.password(this@DesktopSessionService).orEmpty()
-            runCatching { process.outputStream.use { it.write("$password\n".toByteArray()) } }
+            val before = Account.passwordBefore(this@DesktopSessionService).orEmpty()
+            runCatching { process.outputStream.use { it.write("$password\n$before\n".toByteArray()) } }
         }
         scope.launch {
             try {
@@ -82,6 +83,7 @@ class DesktopSessionService : Service() {
                     Log.i(TAG_GUEST, it)
                     // The desktop logged out; its services (PipeWire, D-Bus) would keep proot alive.
                     if (it == DesktopEnvironment.SESSION_END_MARKER) process.destroy()
+                    if (it == DesktopEnvironment.WALLET_MOVED_MARKER) Account.walletMoved(this@DesktopSessionService, password)
                 }
             } catch (e: java.io.IOException) {
                 // destroy() from another thread closes the stream under the reader.
