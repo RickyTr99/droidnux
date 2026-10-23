@@ -33,6 +33,7 @@ static struct wl_list frame_callbacks; /* committed wl_callback resources */
 static struct wl_list feedbacks;       /* committed wp_presentation_feedback, user data: their surface */
 static struct wl_list held_feedbacks;  /* those of a frame waiting for the next vsync */
 static bool frame_sent;                /* a frame went to the presenter since the last vsync */
+static bool quick_answered;            /* an empty commit was answered at once since the last vsync */
 static struct dnx_wl_surface* shown;
 
 struct dnx_wl_surface* dnx_wl_shown_surface(void) {
@@ -85,7 +86,9 @@ static void flush_held_feedbacks(bool presented);
 static bool present_shown(void) {
     struct dnx_wl_surface* s = shown;
     if (!s || !s->buffer || s->damage.count == 0) return false;
-    if (frame_sent) {
+    /* Also while Android has not latched the last frame: sent near a vsync's
+     * deadline it goes on the next one, where this frame would replace it. */
+    if (frame_sent || dnx_presenter_frame_pending()) {
         dnx_wl_request_frame();
         return false;
     }
@@ -203,6 +206,7 @@ static void flush_held_feedbacks(bool presented) {
 
 void dnx_wl_surface_on_frame(void) {
     frame_sent = false;
+    quick_answered = false;
     uint32_t now = dnx_wl_now_ms();
     struct wl_resource *callback, *next;
     wl_resource_for_each_safe(callback, next, &frame_callbacks) {
@@ -650,11 +654,6 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
                           clamp_coord((int64_t) ceil(r->y2 * fy)) - y1);
     }
     s->pending_surface_damage.count = 0;
-    if (!wl_list_empty(&s->pending_frames)) {
-        wl_list_insert_list(frame_callbacks.prev, &s->pending_frames);
-        wl_list_init(&s->pending_frames);
-        dnx_wl_request_frame();
-    }
 
     if (s->role == DNX_WL_ROLE_XDG && s->xdg) xdg_commit(s->xdg);
     if (s->role == DNX_WL_ROLE_CURSOR) dnx_wl_seat_cursor_committed(s);
@@ -662,6 +661,27 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
     if (s == shown && s->damage.count > 0) {
         presented = present_shown();
         held = !presented && s->damage.count > 0;
+    }
+    /* A commit of the shown surface with nothing new (KWin ends a frame cycle
+     * so, when a client asked for a frame callback and drew nothing yet) is
+     * answered at once: on the next vsync, the client's frame arriving just
+     * after it would wait a whole KWin cycle more (40 fps scrolling in Firefox).
+     * Once per vsync, so a client asking again at once cannot spin. */
+    bool quick = s == shown && !presented && !held && !quick_answered;
+    if (quick) quick_answered = true;
+    if (!wl_list_empty(&s->pending_frames)) {
+        if (quick) {
+            uint32_t now = dnx_wl_now_ms();
+            struct wl_resource *callback, *next;
+            wl_resource_for_each_safe(callback, next, &s->pending_frames) {
+                wl_callback_send_done(callback, now);
+                wl_resource_destroy(callback);
+            }
+        } else {
+            wl_list_insert_list(frame_callbacks.prev, &s->pending_frames);
+            wl_list_init(&s->pending_frames);
+            dnx_wl_request_frame();
+        }
     }
     if (s != shown) s->damage.count = 0; /* shown again only with full damage */
 
@@ -681,6 +701,11 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
             }
             wl_list_insert_list(held_feedbacks.prev, &s->pending_feedbacks);
             wl_list_init(&s->pending_feedbacks);
+        } else if (quick) {
+            wl_resource_for_each_safe(feedback, next, &s->pending_feedbacks) {
+                send_feedback(feedback, true); /* the screen as of the last vsync */
+                wl_resource_destroy(feedback);
+            }
         } else {
             wl_list_insert_list(feedbacks.prev, &s->pending_feedbacks);
             wl_list_init(&s->pending_feedbacks);

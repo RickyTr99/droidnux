@@ -103,6 +103,11 @@ int dnx_presenter_refresh_rate(void);
 /* Frames presented since start, for the debug overlay. */
 uint64_t dnx_presenter_frame_count(void);
 
+/* True while the last frame (present or present_buffer) waits for
+ * SurfaceFlinger to latch it: another one now would replace it on screen
+ * (Android 12+; always false before). */
+bool dnx_presenter_frame_pending(void);
+
 /* Time spent preparing frames (copying damage, submitting), for the debug
  * overlay: the total since start, and the longest frame since the last call. */
 uint64_t dnx_presenter_frame_time_total_ns(void);

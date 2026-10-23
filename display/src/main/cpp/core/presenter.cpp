@@ -280,6 +280,7 @@ public:
         external_ = External{};
         applyHideWindowLocked(t, completion);
         if (cursorDirty_) applyCursorLocked(t, completion);
+        trackCommit(t);
         ASurfaceTransaction_setOnComplete(t, completion, onComplete);
         ASurfaceTransaction_apply(t);
         ASurfaceTransaction_delete(t);
@@ -330,6 +331,7 @@ public:
         for (FrameBuffer& b : frames_) b.fullDamage = true;
         applyHideWindowLocked(t, completion);
         if (cursorDirty_) applyCursorLocked(t, completion);
+        trackCommit(t);
         ASurfaceTransaction_setOnComplete(t, completion, onComplete);
         ASurfaceTransaction_apply(t);
         ASurfaceTransaction_delete(t);
@@ -418,8 +420,32 @@ public:
     }
 
     uint64_t frameCount() const { return frameCount_.load(); }
+
+    // A frame SurfaceFlinger has not latched yet: one more now would land on
+    // the same vsync and replace it. A commit that never comes (the surface
+    // went away) stops counting after a few vsyncs.
+    bool framePending() const {
+        if (uncommitted_.load() <= 0) return false;
+        auto age = std::chrono::steady_clock::now().time_since_epoch().count() - lastFrameApplied_.load();
+        return age < 50'000'000;
+    }
+
     uint64_t frameTimeTotalNs() const { return frameTimeTotalNs_.load(); }
     uint64_t takeFrameTimeMaxNs() { return frameTimeMaxNs_.exchange(0); }
+
+    // Counts a frame transaction until SurfaceFlinger latches it (framePending()).
+    void trackCommit(ASurfaceTransaction* t) {
+        if (__builtin_available(android 31, *)) {
+            uncommitted_++;
+            lastFrameApplied_ = std::chrono::steady_clock::now().time_since_epoch().count();
+            ASurfaceTransaction_setOnCommit(t, this, onCommit);
+        }
+    }
+
+    static void onCommit(void* context, ASurfaceTransactionStats* stats) {
+        (void) stats;
+        static_cast<Presenter*>(context)->uncommitted_--;
+    }
 
     static void onComplete(void* context, ASurfaceTransactionStats* stats) {
         auto* completion = static_cast<Completion*>(context);
@@ -718,6 +744,8 @@ private:
     bool geometryDirty_ = true;
     bool pending_ = false;
     std::atomic<uint64_t> frameCount_{0};
+    std::atomic<int> uncommitted_{0};              // frame transactions not latched yet
+    std::atomic<int64_t> lastFrameApplied_{0};     // steady_clock ns
     std::atomic<uint64_t> frameTimeTotalNs_{0};
     std::atomic<uint64_t> frameTimeMaxNs_{0};
 
@@ -786,6 +814,7 @@ void dnx_presenter_set_vsync_callback(dnx_vsync_callback callback, void* data) {
 void dnx_presenter_request_vsync(void) { vsyncClock().request(); }
 int dnx_presenter_refresh_rate(void) { return vsyncClock().refreshRate(); }
 uint64_t dnx_presenter_frame_count(void) { return presenter().frameCount(); }
+bool dnx_presenter_frame_pending(void) { return presenter().framePending(); }
 uint64_t dnx_presenter_frame_time_total_ns(void) { return presenter().frameTimeTotalNs(); }
 uint64_t dnx_presenter_take_frame_time_max_ns(void) { return presenter().takeFrameTimeMaxNs(); }
 
