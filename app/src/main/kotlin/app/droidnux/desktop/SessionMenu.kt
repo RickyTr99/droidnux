@@ -27,8 +27,8 @@ import kotlin.math.roundToInt
 
 /**
  * The menu over the desktop: a pill at the top (keyboard, input mode, desktop
- * size, back to Android, exit) with a panel below it for the size slider or
- * the exit confirmation. Over the SurfaceView, so it only fades: no sliding.
+ * size, brightness and volume, back to Android, exit) with a panel below it
+ * for the sliders or the exit confirmation. Over the SurfaceView, so it only fades: no sliding.
  */
 class SessionMenu(
     private val context: Context,
@@ -41,12 +41,19 @@ class SessionMenu(
         fun resolutionFor(scale: Float): String
         fun onScaleChanged(scale: Float)
         fun onUiScaleChanged(scale: Float)
+        /** The screen's brightness (0 to 1) and Android's media volume, now. */
+        fun brightness(): Float
+        fun onBrightnessChanged(brightness: Float)
+        fun volume(): Float
+        /** Media volume steps: the volume slider moves by one. */
+        fun volumeSteps(): Int
+        fun onVolumeChanged(volume: Float)
         fun onBackToAndroid()
         fun onExit()
         fun onClosed()
     }
 
-    private enum class Panel { NONE, SIZE, EXIT }
+    private enum class Panel { NONE, SIZE, LIGHT, EXIT }
 
     private val handler = Handler(Looper.getMainLooper())
     private var panel = Panel.NONE
@@ -74,6 +81,7 @@ class SessionMenu(
     private val modeLabel = label("")
     private val sizeLabel = label("")
     private val sizeButton: LinearLayout
+    private val lightButton: LinearLayout
     private val panelView = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         background = rounded(SURFACE, dp(16f))
@@ -103,6 +111,10 @@ class SessionMenu(
             show(if (panel == Panel.SIZE) Panel.NONE else Panel.SIZE)
         }
         pill.addView(sizeButton)
+        lightButton = iconButton(R.drawable.ic_menu_brightness, R.string.menu_light, ON_SURFACE) {
+            show(if (panel == Panel.LIGHT) Panel.NONE else Panel.LIGHT)
+        }
+        pill.addView(lightButton)
         pill.addView(View(context).apply { setBackgroundColor(OUTLINE_VARIANT) }, LinearLayout.LayoutParams(dp(1), dp(24)).apply {
             marginStart = dp(4)
             marginEnd = dp(4)
@@ -163,6 +175,7 @@ class SessionMenu(
     private fun show(next: Panel, animate: Boolean = true) {
         panel = next
         animateColor(sizeButton, if (next == Panel.SIZE) SELECTED else Color.TRANSPARENT)
+        animateColor(lightButton, if (next == Panel.LIGHT) SELECTED else Color.TRANSPARENT)
         if (next == Panel.NONE) {
             if (animate) fade(panelView, false) else panelView.visibility = View.GONE
             return
@@ -170,6 +183,7 @@ class SessionMenu(
         panelView.removeAllViews()
         when (next) {
             Panel.SIZE -> buildSizePanel()
+            Panel.LIGHT -> buildLightPanel()
             Panel.EXIT -> buildExitPanel()
             Panel.NONE -> Unit
         }
@@ -193,9 +207,22 @@ class SessionMenu(
             .apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(16) }
     }
 
-    /** A titled slider from [min] to [max] in [step]s; [apply] runs once it rests. Returns its title row. */
+    /** Brightness and volume apply as the slider moves: they cost nothing to redraw. */
+    private fun buildLightPanel() {
+        addSlider(R.string.menu_brightness, listener.brightness(), MIN_BRIGHTNESS, 1f, STEP, null) {
+            listener.onBrightnessChanged(it)
+        }
+        val steps = listener.volumeSteps().coerceAtLeast(1)
+        addSlider(R.string.menu_volume, listener.volume(), 0f, 1f, 1f / steps, null) { listener.onVolumeChanged(it) }
+            .apply { (layoutParams as LinearLayout.LayoutParams).topMargin = dp(16) }
+    }
+
+    /**
+     * A titled slider from [min] to [max] in [step]s; [apply] runs once it rests
+     * (null: [onChange] is all). Returns its title row.
+     */
     private fun addSlider(
-        title: Int, value: Float, min: Float, max: Float, step: Float, apply: Runnable, onChange: (Float) -> Unit,
+        title: Int, value: Float, min: Float, max: Float, step: Float, apply: Runnable?, onChange: (Float) -> Unit,
     ): View {
         val valueLabel = label(percent(value), PRIMARY, medium = true)
         val row = LinearLayout(context).apply {
@@ -231,8 +258,10 @@ class SessionMenu(
                     valueLabel.text = percent(newValue)
                     onChange(newValue)
                     // Applying costs a redraw (or a guest command): only once the slider rests.
-                    handler.removeCallbacks(apply)
-                    handler.postDelayed(apply, RESIZE_DELAY_MS)
+                    if (apply != null) {
+                        handler.removeCallbacks(apply)
+                        handler.postDelayed(apply, RESIZE_DELAY_MS)
+                    }
                 }
                 override fun onStartTrackingTouch(bar: SeekBar) = Unit
                 override fun onStopTrackingTouch(bar: SeekBar) = Unit
@@ -372,6 +401,7 @@ class SessionMenu(
         const val MEDIUM_MS = 250L
         const val RESIZE_DELAY_MS = 300L
         const val STEP = 0.05f
+        const val MIN_BRIGHTNESS = 0f // the dimmest backlight, not off
         val DECELERATE = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         val ACCELERATE = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
     }

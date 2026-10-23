@@ -8,10 +8,12 @@ import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.Typeface
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
@@ -660,6 +662,27 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             uiScale = scale
             DesktopSettings.update(this@DesktopActivity) { it.copy(uiScale = scale) }
             applyUiScale()
+        }
+
+        // The desktop's window only, while it is open: Android's own setting stays.
+        override fun brightness(): Float = window.attributes.screenBrightness.takeIf { it >= 0f }
+            ?: (Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128) / 255f).coerceIn(0f, 1f)
+
+        override fun onBrightnessChanged(brightness: Float) {
+            window.attributes = window.attributes.apply { screenBrightness = brightness }
+        }
+
+        // Android's media volume, which is also the desktop's (AudioVolume).
+        override fun volume(): Float {
+            val audio = getSystemService(AudioManager::class.java)
+            return audio.getStreamVolume(AudioManager.STREAM_MUSIC).toFloat() / volumeSteps()
+        }
+
+        override fun volumeSteps() = getSystemService(AudioManager::class.java).getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+
+        override fun onVolumeChanged(volume: Float) {
+            getSystemService(AudioManager::class.java)
+                .setStreamVolume(AudioManager.STREAM_MUSIC, (volume * volumeSteps()).roundToInt(), 0)
         }
 
         override fun onBackToAndroid() {

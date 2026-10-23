@@ -52,6 +52,9 @@
     <string name="menu_exit_title">Exit the session?</string>
     <string name="menu_exit_text">Apps open in the desktop will close.</string>
     <string name="menu_exit_confirm">Exit</string>
+    <string name="menu_light">Brightness and volume</string>
+    <string name="menu_brightness">Brightness</string>
+    <string name="menu_volume">Volume</string>
     <string name="menu_resolution">Resolution</string>
     <string name="menu_ui_scale">Interface size</string>
     <string name="tab_desktop">Desktop</string>

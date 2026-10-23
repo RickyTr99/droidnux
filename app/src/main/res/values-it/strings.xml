@@ -45,6 +45,9 @@
     <string name="menu_exit_title">Uscire dalla sessione?</string>
     <string name="menu_exit_text">Le app aperte nel desktop verranno chiuse.</string>
     <string name="menu_exit_confirm">Esci</string>
+    <string name="menu_light">Luminosità e volume</string>
+    <string name="menu_brightness">Luminosità</string>
+    <string name="menu_volume">Volume</string>
     <string name="menu_resolution">Risoluzione</string>
     <string name="menu_ui_scale">Dimensione degli elementi</string>
     <string name="tab_desktop">Desktop</string>
