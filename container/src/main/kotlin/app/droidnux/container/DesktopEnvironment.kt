@@ -945,6 +945,13 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         module.access.args = {
             access.socket = { pipewire-0 = "unrestricted", pipewire-0-manager = "unrestricted" }
         }
+        # pipewire-pulse answers a client's timing query with the position of
+        # the graph's last cycle as if it were now: Firefox's audio clock jumped
+        # by up to a cycle (2048 frames, 43 ms, for its latency) and 60 fps video
+        # lost frames. 512 frames (11 ms) leave the jumps below half a frame.
+        context.properties = {
+            default.clock.max-quantum = 512
+        }
         # The sink that plays through the app (AAudio).
         context.modules = [
             { name = libpipewire-module-droidnux flags = [ nofail ] }

@@ -76,6 +76,10 @@ PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
  * worth telling the graph (5 ms; AAudio's own swings by ~25 ms). */
 #define LATENCY_CHECK_MS 500
 #define LATENCY_STEP_FRAMES (RATE / 200u)
+/* The first check after START, and the latency reported before the device's
+ * is known: the Tab S9+ measures 95-110 ms. */
+#define LATENCY_FIRST_MS 150
+#define DEFAULT_LATENCY_FRAMES (RATE * 105u / 1000u)
 
 static const struct spa_dict_item module_props[] = {
     {PW_KEY_MODULE_AUTHOR, "DroidNux"},
@@ -402,7 +406,10 @@ static void on_latency_timer(void* data, uint64_t expirations) {
     struct impl* impl = data;
     (void) expirations;
     if (!impl->running || impl->stream == NULL || __atomic_load_n(&impl->ring->burst, __ATOMIC_RELAXED) == 0) return;
-    uint32_t frames = target_fill(impl) + __atomic_load_n(&impl->ring->latency, __ATOMIC_RELAXED);
+    /* 0 until the device's first timestamp, which can come after this check. */
+    uint32_t device = __atomic_load_n(&impl->ring->latency, __ATOMIC_RELAXED);
+    if (device == 0) return;
+    uint32_t frames = target_fill(impl) + device;
     uint32_t change = frames > impl->latency ? frames - impl->latency : impl->latency - frames;
     if (change >= LATENCY_STEP_FRAMES) publish_latency(impl, frames);
 }
@@ -501,14 +508,20 @@ static void stream_state_changed(void* data, enum pw_stream_state old, enum pw_s
     struct impl* impl = data;
     (void) old;
     if (state == PW_STREAM_STATE_PAUSED || state == PW_STREAM_STATE_STREAMING) apply_app_volume(impl);
+    /* A player's clock (libpulse) takes a jump of the latency for a slower
+     * rate and needs ~20 s to forget it: before the device's own, a typical
+     * latency rather than none. */
+    if (state == PW_STREAM_STATE_PAUSED && impl->latency_timer && impl->latency == 0)
+        publish_latency(impl, DEFAULT_LATENCY_FRAMES);
     if (state == PW_STREAM_STATE_STREAMING) {
         if (!impl->running) {
             impl->running = true;
             pw_loop_invoke(impl->data_loop, do_start, 0, NULL, 0, true, impl);
             send_message(impl, DNX_AUDIO_START);
             if (impl->latency_timer) {
+                struct timespec first = {0, LATENCY_FIRST_MS * SPA_NSEC_PER_MSEC};
                 struct timespec interval = {0, LATENCY_CHECK_MS * SPA_NSEC_PER_MSEC};
-                pw_loop_update_timer(pw_context_get_main_loop(impl->context), impl->latency_timer, &interval,
+                pw_loop_update_timer(pw_context_get_main_loop(impl->context), impl->latency_timer, &first,
                                      &interval, false);
             }
         }
