@@ -100,6 +100,23 @@ static void on_vsync(int64_t frame_time_ns, void* data) {
     eventfd_write(vsync_fd, 1);
 }
 
+/* Binder thread: Android latched our last frame. */
+static int latch_fd = -1;
+
+static void on_latch(void* data) {
+    (void) data;
+    eventfd_write(latch_fd, 1);
+}
+
+static int on_latch_fd(int fd, uint32_t mask, void* data) {
+    (void) mask;
+    (void) data;
+    eventfd_t count;
+    eventfd_read(fd, &count);
+    dnx_wl_surface_on_latch();
+    return 0;
+}
+
 int64_t dnx_wl_vsync_ns(void) {
     return atomic_load(&vsync_ns);
 }
@@ -447,7 +464,8 @@ bool dnx_wl_start(const dnx_wl_config* config) {
     free(path);
 
     if (pipe2(event_pipe, O_CLOEXEC | O_NONBLOCK) != 0 ||
-        (vsync_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)) < 0 || !(dnx_wl_display = wl_display_create())) {
+        (vsync_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)) < 0 ||
+        (latch_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)) < 0 || !(dnx_wl_display = wl_display_create())) {
         log(ERROR, "setup: %s", strerror(errno));
         running = false;
         return false;
@@ -468,6 +486,8 @@ bool dnx_wl_start(const dnx_wl_config* config) {
     wl_event_loop_add_fd(loop, event_pipe[0], WL_EVENT_READABLE, on_events, NULL);
     wl_event_loop_add_fd(loop, vsync_fd, WL_EVENT_READABLE, on_vsync_fd, NULL);
     dnx_presenter_set_vsync_callback(on_vsync, NULL);
+    wl_event_loop_add_fd(loop, latch_fd, WL_EVENT_READABLE, on_latch_fd, NULL);
+    dnx_presenter_set_latch_callback(on_latch, NULL);
 
     wl_display_init_shm(dnx_wl_display); /* ARGB8888 and XRGB8888: the presenter's BGRX */
     wl_list_init(&outputs);

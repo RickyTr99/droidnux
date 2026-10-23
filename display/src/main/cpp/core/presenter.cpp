@@ -270,6 +270,7 @@ public:
             ASurfaceTransaction_setVisibility(t, surface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
             ASurfaceTransaction_setZOrder(t, windowSurface_, 1);
             ASurfaceTransaction_setZOrder(t, cursorSurface_, 2);
+            voteMaxRefreshLocked(t);
             geometryDirty_ = false;
             cursorDirty_ = true;  // cursor geometry depends on the scale
         }
@@ -315,6 +316,7 @@ public:
             ASurfaceTransaction_setVisibility(t, surface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
             ASurfaceTransaction_setZOrder(t, windowSurface_, 1);
             ASurfaceTransaction_setZOrder(t, cursorSurface_, 2);
+            voteMaxRefreshLocked(t);
             // Our own frames set it back at their size.
             geometryDirty_ = width != width_ || height != height_;
             cursorDirty_ = true;
@@ -433,6 +435,17 @@ public:
     uint64_t frameTimeTotalNs() const { return frameTimeTotalNs_.load(); }
     uint64_t takeFrameTimeMaxNs() { return frameTimeMaxNs_.exchange(0); }
 
+    // Without a vote SurfaceFlinger picks the refresh rate from how often the
+    // desktop changes: at 60 fps it switches the display to 60 Hz, and the
+    // vsync that paces the desktop (and KWin) stays there. A layer that does not
+    // change has no say, so this costs nothing while the desktop is still.
+    void voteMaxRefreshLocked(ASurfaceTransaction* t) {
+        if (__builtin_available(android 30, *)) {
+            ASurfaceTransaction_setFrameRate(t, surface_, maxRefreshRate_,
+                                             ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
+        }
+    }
+
     // Counts a frame transaction until SurfaceFlinger latches it (framePending()).
     void trackCommit(ASurfaceTransaction* t) {
         if (__builtin_available(android 31, *)) {
@@ -444,7 +457,15 @@ public:
 
     static void onCommit(void* context, ASurfaceTransactionStats* stats) {
         (void) stats;
-        static_cast<Presenter*>(context)->uncommitted_--;
+        auto* self = static_cast<Presenter*>(context);
+        if (--self->uncommitted_ > 0) return;
+        dnx_latch_callback callback = self->latchCallback_.load();
+        if (callback) callback(self->latchData_.load());
+    }
+
+    void setLatchCallback(dnx_latch_callback callback, void* data) {
+        latchData_ = data;
+        latchCallback_ = callback;
     }
 
     static void onComplete(void* context, ASurfaceTransactionStats* stats) {
@@ -745,6 +766,8 @@ private:
     bool pending_ = false;
     std::atomic<uint64_t> frameCount_{0};
     std::atomic<int> uncommitted_{0};              // frame transactions not latched yet
+    std::atomic<dnx_latch_callback> latchCallback_{nullptr};
+    std::atomic<void*> latchData_{nullptr};
     std::atomic<int64_t> lastFrameApplied_{0};     // steady_clock ns
     std::atomic<uint64_t> frameTimeTotalNs_{0};
     std::atomic<uint64_t> frameTimeMaxNs_{0};
@@ -815,6 +838,9 @@ void dnx_presenter_request_vsync(void) { vsyncClock().request(); }
 int dnx_presenter_refresh_rate(void) { return vsyncClock().refreshRate(); }
 uint64_t dnx_presenter_frame_count(void) { return presenter().frameCount(); }
 bool dnx_presenter_frame_pending(void) { return presenter().framePending(); }
+void dnx_presenter_set_latch_callback(dnx_latch_callback callback, void* data) {
+    presenter().setLatchCallback(callback, data);
+}
 uint64_t dnx_presenter_frame_time_total_ns(void) { return presenter().frameTimeTotalNs(); }
 uint64_t dnx_presenter_take_frame_time_max_ns(void) { return presenter().takeFrameTimeMaxNs(); }
 

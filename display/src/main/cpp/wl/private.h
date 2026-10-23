@@ -96,6 +96,8 @@ void dnx_wl_surface_init(struct wl_display* display);
 struct dnx_wl_surface* dnx_wl_shown_surface(void);
 /* Vsync: frame callbacks done, damage the presenter could not take retried. */
 void dnx_wl_surface_on_frame(void);
+/* Android latched the last frame: a held one goes now. */
+void dnx_wl_surface_on_latch(void);
 /* Full repaint of the shown surface. */
 void dnx_wl_surface_redraw(void);
 /* The shown surface scaled to width x height (ARGB), false without one. */

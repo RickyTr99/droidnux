@@ -108,6 +108,11 @@ uint64_t dnx_presenter_frame_count(void);
  * (Android 12+; always false before). */
 bool dnx_presenter_frame_pending(void);
 
+/* Called on a binder thread when SurfaceFlinger latched the last frame: one
+ * held back by dnx_presenter_frame_pending() can go now, for the next vsync. */
+typedef void (*dnx_latch_callback)(void* data);
+void dnx_presenter_set_latch_callback(dnx_latch_callback callback, void* data);
+
 /* Time spent preparing frames (copying damage, submitting), for the debug
  * overlay: the total since start, and the longest frame since the last call. */
 uint64_t dnx_presenter_frame_time_total_ns(void);

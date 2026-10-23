@@ -33,6 +33,9 @@ object DesktopEnvironment {
 
     /** Path syscalls without a proot stop (guest/paths), preloaded into Plasma. */
     private const val PATHS_LIBRARY = "libdroidnux-guest-paths.so"
+
+    /** KWin's render time prediction (guest/kwin-pacing), preloaded into Plasma. */
+    private const val KWIN_LIBRARY = "libdroidnux-guest-kwin.so"
     private const val GUEST_LIB_DIR = "/usr/local/lib/droidnux"
 
     /** Sound: DroidNux's PipeWire sink (guest/pipewire), in PipeWire's module directory. */
@@ -175,6 +178,10 @@ object DesktopEnvironment {
         )
         writeFile(
             rootfs, "$GUEST_LIB_DIR/$PATHS_LIBRARY", File(nativeLibraryDir, PATHS_LIBRARY).readBytes(),
+            mode = 0x1A4,
+        )
+        writeFile(
+            rootfs, "$GUEST_LIB_DIR/$KWIN_LIBRARY", File(nativeLibraryDir, KWIN_LIBRARY).readBytes(),
             mode = 0x1A4,
         )
         writeFile(rootfs, "$PIPEWIRE_MODULE_DIR/$PIPEWIRE_MODULE", File(nativeLibraryDir, PIPEWIRE_MODULE).readBytes())
@@ -631,6 +638,8 @@ ${GPU_ENV.prependIndent("            ")}
             # Turnip on KGSL has no calibrated timestamps: Zink answers
             # GL_TIMESTAMP with a GPU round trip, which KWin asks every frame.
             export KWIN_NO_TIMER_QUERY=1
+            # KWin's render time prediction (guest/kwin-pacing): clients at the full refresh rate.
+            export LD_PRELOAD=$GUEST_LIB_DIR/$KWIN_LIBRARY${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}
             # Opening apps: most of their path syscalls skip proot (proot patch 0009).
             # Burrow has no stops to skip.
             if [ "${'$'}DROIDNUX_RUNTIME" != burrow ]; then

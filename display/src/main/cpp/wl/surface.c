@@ -220,6 +220,13 @@ void dnx_wl_surface_on_frame(void) {
     if (!present_shown()) flush_held_feedbacks(false);
 }
 
+/* The frame sent this vsync is latched: the next one is for the next vsync,
+ * no need to wait for its tick (KWin's frame would miss it). */
+void dnx_wl_surface_on_latch(void) {
+    frame_sent = false;
+    if (shown && shown->damage.count > 0) present_shown();
+}
+
 void dnx_wl_surface_redraw(void) {
     if (!shown) return;
     damage_all(shown);

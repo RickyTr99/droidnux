@@ -42,6 +42,15 @@ target_compile_options(droidnux-guest-paths PRIVATE
 target_link_options(droidnux-guest-paths PRIVATE
     -nostdlib -Wl,--as-needed -Wl,-z,undefs -Wl,--pack-dyn-relocs=none -Wl,--hash-style=both)
 
+# Preload library for KWin (guest/kwin-pacing): its render time prediction.
+# Loaded by glibc like the libraries above.
+add_library(droidnux-guest-kwin SHARED ${GUEST_DIR}/kwin-pacing/droidnux-kwin-pacing.c)
+target_compile_options(droidnux-guest-kwin PRIVATE
+    -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics
+    -U_FORTIFY_SOURCE -fno-asynchronous-unwind-tables -fvisibility=hidden)
+target_link_options(droidnux-guest-kwin PRIVATE
+    -nostdlib -Wl,--as-needed -Wl,-z,undefs -Wl,--pack-dyn-relocs=none -Wl,--hash-style=both)
+
 # PipeWire module for the container's audio (guest/pipewire): an Audio/Sink
 # playing through core/audio_output.cpp. Like the library above it is loaded by
 # glibc, so it links to nothing; the PipeWire headers are only for its types and
