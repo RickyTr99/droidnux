@@ -6,9 +6,10 @@
  * On a Unix stream socket, one connection per sink or source. Every message starts with
  * a dnx_audio_header whose `size` counts the bytes that follow it.
  *
- * Client:  HELLO once, with the ring's memfd in SCM_RIGHTS; then START and
- *          STOP in any number. The server sends nothing back: what the client
- *          needs from it is in the ring header.
+ * Client:  HELLO once, with the ring's memfd in SCM_RIGHTS; then START,
+ *          STOP and (sink) VOLUME in any number.
+ * Server:  (sink) VOLUME after HELLO and whenever Android's media volume
+ *          changes. The rest the client needs is in the ring header.
  *
  * The ring is a dnx_audio_ring followed by `frames` interleaved F32 frames of
  * `channels` samples. For a sink the client (PipeWire's graph clock) writes
@@ -30,6 +31,7 @@ enum dnx_audio_type {
     DNX_AUDIO_HELLO = 1, /* dnx_audio_hello, ring memfd in SCM_RIGHTS */
     DNX_AUDIO_START = 2, /* the node is running: play (record) the ring */
     DNX_AUDIO_STOP = 3,  /* the node is idle: stop the device (battery) */
+    DNX_AUDIO_VOLUME = 4, /* dnx_audio_volume: the sink's volume is Android's media volume */
 };
 
 enum dnx_audio_direction {
@@ -44,6 +46,11 @@ typedef struct dnx_audio_header {
 typedef struct dnx_audio_hello {
     uint32_t magic, version;
 } dnx_audio_hello;
+
+typedef struct dnx_audio_volume {
+    float volume;  /* linear, 0 to 1, as PipeWire's channel volumes */
+    uint32_t mute; /* 0 or 1 */
+} dnx_audio_volume;
 
 typedef struct dnx_audio_ring {
     /* Set by the client before HELLO, constant afterwards. */

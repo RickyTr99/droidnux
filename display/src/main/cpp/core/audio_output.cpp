@@ -17,6 +17,7 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "audio_protocol.h"
 
@@ -41,6 +42,15 @@ constexpr int64_t kInputDelayNs = 500'000'000;
 std::atomic<int> gPlaying{0};
 std::atomic<dnx_audio_playing_callback> gPlayingCallback{nullptr};
 std::atomic<bool> gMuted{false};
+std::atomic<dnx_audio_volume_callback> gVolumeCallback{nullptr};
+
+class Session;
+// Android's media volume and the sinks it goes to; the mutex also keeps a
+// session's messages to its client whole.
+std::mutex gVolumeMutex;
+dnx_audio_volume gVolume{};
+bool gHaveVolume = false;
+std::vector<Session*> gSinks;
 
 bool recvAll(int fd, void* data, size_t size) {
     auto* p = static_cast<uint8_t*>(data);
@@ -65,6 +75,10 @@ public:
     explicit Session(int fd) : fd_(fd) {}
 
     ~Session() {
+        {
+            std::lock_guard lock(gVolumeMutex);
+            gSinks.erase(std::remove(gSinks.begin(), gSinks.end(), this), gSinks.end());
+        }
         setPlaying(false);
         closeStream();
         if (ring_ != nullptr) munmap(ring_, size_);
@@ -76,6 +90,11 @@ public:
         pthread_setname_np(pthread_self(), "dnx-audio");
         if (!hello()) return;
         LOGI("sink connected: %u Hz, %u channels, ring of %u frames", rate_, channels_, frames_);
+        if (!input_) {
+            std::lock_guard lock(gVolumeMutex);
+            gSinks.push_back(this);
+            if (gHaveVolume) sendVolume(gVolume);
+        }
         for (;;) {
             pollfd p{fd_, POLLIN, 0};
             int timeout = playing_ ? kPollMs : -1;
@@ -84,7 +103,15 @@ public:
             if (r < 0 && errno != EINTR) break;
             if (r > 0) {
                 dnx_audio_header header{};
-                if (!recvAll(fd_, &header, sizeof(header)) || header.size != 0) break;
+                if (!recvAll(fd_, &header, sizeof(header))) break;
+                if (header.type == DNX_AUDIO_VOLUME && header.size == sizeof(dnx_audio_volume)) {
+                    dnx_audio_volume volume{};
+                    if (!recvAll(fd_, &volume, sizeof(volume))) break;
+                    dnx_audio_volume_callback callback = gVolumeCallback.load();
+                    if (callback != nullptr && !input_) callback(std::clamp(volume.volume, 0.0f, 1.0f), volume.mute != 0);
+                    continue;
+                }
+                if (header.size != 0) break;
                 if (header.type == DNX_AUDIO_START) {
                     if (input_) {
                         startAt_ = nowNs() + kInputDelayNs;
@@ -114,6 +141,17 @@ public:
             }
         }
         LOGI("sink disconnected");
+    }
+
+    // With gVolumeMutex held.
+    void sendVolume(const dnx_audio_volume& volume) {
+        struct {
+            dnx_audio_header header;
+            dnx_audio_volume volume;
+        } message{{DNX_AUDIO_VOLUME, sizeof(dnx_audio_volume)}, volume};
+        if (send(fd_, &message, sizeof(message), MSG_NOSIGNAL | MSG_DONTWAIT) != static_cast<ssize_t>(sizeof(message))) {
+            LOGW("cannot send the volume: %s", std::strerror(errno));
+        }
     }
 
 private:
@@ -391,6 +429,17 @@ extern "C" void dnx_audio_output_set_playing_callback(dnx_audio_playing_callback
 }
 
 extern "C" void dnx_audio_output_set_muted(bool muted) { gMuted.store(muted); }
+
+extern "C" void dnx_audio_output_set_volume(float volume, bool mute) {
+    std::lock_guard lock(gVolumeMutex);
+    gVolume = {std::clamp(volume, 0.0f, 1.0f), mute ? 1u : 0u};
+    gHaveVolume = true;
+    for (Session* sink : gSinks) sink->sendVolume(gVolume);
+}
+
+extern "C" void dnx_audio_output_set_volume_callback(dnx_audio_volume_callback callback) {
+    gVolumeCallback.store(callback);
+}
 
 extern "C" bool dnx_audio_output_start(const char* socket_path) {
     static Server* server = new Server();  // lives as long as the process

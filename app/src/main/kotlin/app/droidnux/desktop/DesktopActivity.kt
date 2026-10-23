@@ -38,6 +38,7 @@ import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
 import app.droidnux.container.Distro
 import app.droidnux.display.AudioFocus
+import app.droidnux.display.AudioVolume
 import app.droidnux.display.Presenter
 import app.droidnux.display.DisplayServer
 import java.util.Locale
@@ -80,6 +81,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         super.onCreate(savedInstanceState)
         current = this
         AudioFocus.init(this)
+        AudioVolume.init(this)
         DisplayServer.onClipboard = { text ->
             handler.post {
                 clipboardText = text

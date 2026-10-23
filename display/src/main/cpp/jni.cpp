@@ -81,6 +81,40 @@ Java_app_droidnux_display_AudioFocus_nativeSetMuted(JNIEnv*, jclass, jboolean mu
     dnx_audio_output_set_muted(muted);
 }
 
+// -- Audio volume ------------------------------------------------------------
+
+namespace {
+jclass audioVolumeClass;
+jmethodID audioVolumeMethod;
+
+// On a sink's thread, as onAudioPlaying.
+void onAudioVolume(float volume, bool mute) {
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (audioVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (audioVm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+        attached = true;
+    }
+    env->CallStaticVoidMethod(audioVolumeClass, audioVolumeMethod, volume, mute ? JNI_TRUE : JNI_FALSE);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (attached) audioVm->DetachCurrentThread();
+}
+}  // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_AudioVolume_nativeInit(JNIEnv* env, jclass clazz) {
+    if (audioVolumeClass != nullptr) return;
+    if (audioVm == nullptr) env->GetJavaVM(&audioVm);
+    audioVolumeClass = static_cast<jclass>(env->NewGlobalRef(clazz));
+    audioVolumeMethod = env->GetStaticMethodID(clazz, "onDesktopVolume", "(FZ)V");
+    dnx_audio_output_set_volume_callback(onAudioVolume);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_AudioVolume_nativeSetVolume(JNIEnv*, jclass, jfloat volume, jboolean mute) {
+    dnx_audio_output_set_volume(volume, mute);
+}
+
 // -- Presenter ---------------------------------------------------------------
 
 #include "presenter.h"

@@ -24,6 +24,14 @@ void dnx_audio_output_set_playing_callback(dnx_audio_playing_callback callback);
 /* Silences the output (the ring keeps flowing) while another app has the focus. */
 void dnx_audio_output_set_muted(bool muted);
 
+/* Android's media volume (linear, 0 to 1) and mute, for the sinks to show as
+ * theirs: sent to each sink now and on connection. */
+void dnx_audio_output_set_volume(float volume, bool mute);
+
+/* Called, on a sink's thread, when the desktop changes the sink's volume. */
+typedef void (*dnx_audio_volume_callback)(float volume, bool mute);
+void dnx_audio_output_set_volume_callback(dnx_audio_volume_callback callback);
+
 #ifdef __cplusplus
 }
 #endif
