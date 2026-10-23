@@ -256,8 +256,13 @@ private fun DesktopTab(
                 }
             }
             if (wide) {
-                Row(horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
-                    hero(Modifier.weight(1f))
+                // The picture at most 420 dp tall, so the quick launch row stays above the bar.
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    hero(Modifier.weight(1f, fill = false).heightIn(max = 420.dp))
                     actions(Modifier.width(300.dp))
                 }
             } else {
@@ -279,7 +284,10 @@ private fun DesktopTab(
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SectionHeader(stringResource(R.string.home_quick))
             val apps = state.apps.orEmpty().associateBy { it.id }
-            val favorites = FAVORITES.mapNotNull { apps[it] }.take(3)
+            // Each desktop's own apps: the rootfs may have both XFCE's and KDE's.
+            val plasma = context.resources.getBoolean(R.bool.wayland_frontend)
+            val favorites = FAVORITES.filter { it.startsWith("org.kde.") == plasma || it == "firefox-esr" || it == "mpv" }
+                .mapNotNull { apps[it] }.take(3)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 favorites.forEach { app -> AppTile(app, viewModel, Modifier.weight(1f)) }
                 Column(
