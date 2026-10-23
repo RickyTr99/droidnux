@@ -554,6 +554,9 @@ ${LAUNCH_LOOP.prependIndent("        ")}
             user=${'$'}{DROIDNUX_USER:-$DESKTOP_USER}
             pass=
             IFS= read -r pass || true
+            # Qt temporary files and directories (name.XXXXXX) of the last session, emptied
+            # but never removed: the session is killed, and /tmp is not cleared at boot.
+            find /tmp -mindepth 1 -maxdepth 1 -empty -name '*.??????' -delete 2> /dev/null
             # The account made before this one, by DroidNux (its comment).
             old=${'$'}(getent passwd | awk -F: '${'$'}5 == "DroidNux" { print ${'$'}1; exit }')
             if ! id -u "${'$'}user" > /dev/null 2>&1 && [ -n "${'$'}old" ]; then
