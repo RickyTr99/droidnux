@@ -73,9 +73,11 @@ PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
 #define MAX_ERROR 256.0
 #define DLL_BW 0.016
 /* How often the sink checks its latency while it plays, and the change that is
- * worth telling the graph (5 ms; AAudio's own swings by ~25 ms). */
+ * worth telling the graph: 20 ms, well within lip sync. A player's clock jumps
+ * with each change (Firefox drops 60 fps video frames), and AAudio's latency
+ * drifts by ~15 ms over its first seconds. */
 #define LATENCY_CHECK_MS 500
-#define LATENCY_STEP_FRAMES (RATE / 200u)
+#define LATENCY_STEP_FRAMES (RATE / 50u)
 /* The first check after START, and the latency reported before the device's
  * is known: the Tab S9+ measures 95-110 ms. */
 #define LATENCY_FIRST_MS 150
