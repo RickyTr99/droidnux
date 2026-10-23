@@ -28,6 +28,8 @@ object Icons {
     val Info = stroke("M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0", "M12 8v5M12 16v.01")
     val Pending = stroke("M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0")
     val Plus = stroke("M12 5v14M5 12h14")
+    val Visibility = stroke("M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z", "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0")
+    val VisibilityOff = stroke("M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z", "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0", "M4 4l16 16")
     val Back = stroke("M15 5l-7 7 7 7")
     val Chevron = stroke("M9 5l7 7-7 7")
     val Selected = stroke("M5 12.5l4.5 4.5L19 7.5", width = 2.2f)

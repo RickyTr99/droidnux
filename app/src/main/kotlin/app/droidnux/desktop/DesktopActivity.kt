@@ -8,6 +8,7 @@ import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.Typeface
+import android.net.Uri
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
@@ -444,6 +445,15 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
         // The soft keyboard's keys have no scan code: map the ones it sends as key events.
         val scanCode = event.scanCode.takeIf { it > 0 } ?: SOFT_KEYS[event.keyCode] ?: 0
+        // Plasma's volume keys: its OSD, and the volume (Android's, see AudioVolume) changes without Android's panel.
+        if (wayland && DisplayServer.running && VOLUME_KEYS[event.keyCode] != null) {
+            val key = VOLUME_KEYS.getValue(event.keyCode)
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) DisplayServer.key(key, true)
+                KeyEvent.ACTION_UP -> DisplayServer.key(key, false)
+            }
+            return true
+        }
         if (!DisplayServer.running || isSystemKey(event.keyCode)) return false
         if (scanCode <= 0) {
             // Other soft keys with a character (Gboard and Samsung Keyboard send digits so): typed as text.
@@ -600,6 +610,9 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** The last input came from a finger on the screen: a text field getting the focus then shows the soft keyboard. */
     private var lastInputTouch = false
+
+    /** The permission to change Android's brightness is asked once per desktop. */
+    private var askedWriteSettings = false
     /** The soft keyboard was shown for a text field, so it hides when the field loses the focus. */
     private var keyboardForTextField = false
 
@@ -664,12 +677,23 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             applyUiScale()
         }
 
-        // The desktop's window only, while it is open: Android's own setting stays.
+        // Android's brightness, as its own slider shows it. Without the permission to
+        // change it, the desktop's window only (and the permission is asked once).
         override fun brightness(): Float = window.attributes.screenBrightness.takeIf { it >= 0f }
-            ?: (Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128) / 255f).coerceIn(0f, 1f)
+            ?: Brightness.toSlider(Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128))
 
         override fun onBrightnessChanged(brightness: Float) {
+            if (Settings.System.canWrite(this@DesktopActivity)) {
+                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE,
+                    Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
+                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, Brightness.toSetting(brightness))
+                return
+            }
             window.attributes = window.attributes.apply { screenBrightness = brightness }
+            if (!askedWriteSettings) {
+                askedWriteSettings = true
+                startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.fromParts("package", packageName, null)))
+            }
         }
 
         // Android's media volume, which is also the desktop's (AudioVolume).
@@ -790,6 +814,13 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val KEY_BACKSPACE = 14
         private const val KEY_ENTER = 28
         private const val KEY_DELETE = 111
+
+        /** The volume keys as evdev keycodes (adb's have no scan code). */
+        private val VOLUME_KEYS = mapOf(
+            KeyEvent.KEYCODE_VOLUME_MUTE to 113,
+            KeyEvent.KEYCODE_VOLUME_DOWN to 114,
+            KeyEvent.KEYCODE_VOLUME_UP to 115,
+        )
 
         /** Android keycodes the soft keyboard sends without a scan code, as evdev keycodes. */
         private val SOFT_KEYS = mapOf(

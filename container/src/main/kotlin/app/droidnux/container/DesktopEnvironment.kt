@@ -187,6 +187,7 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PLASMA_DEFAULTS/kdeglobals", "[KDE]\nLookAndFeelPackage=org.droidnux.desktop\n".toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/kwinrc", PLASMA_KWINRC.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/kscreenlockerrc", PLASMA_SCREENLOCKER.toByteArray())
+        writeFile(rootfs, "$PLASMA_DEFAULTS/kwalletrc", PLASMA_KWALLETRC.toByteArray())
         writeFile(rootfs, IM_DESKTOP_FILE, IM_DESKTOP.toByteArray())
         writeFile(rootfs, IM_PROGRAM, File(nativeLibraryDir, IM_LIBRARY).readBytes(), mode = 0x1ED)
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/metadata.json", PLASMA_LNF_METADATA.toByteArray())
@@ -201,10 +202,13 @@ object DesktopEnvironment {
 
     /**
      * Command starting the session, with the X keyboard [layout] (e.g. "it"):
-     * XFCE on the X server, or Plasma on the Wayland compositor when [wayland].
+     * XFCE on the X server, or Plasma on the Wayland compositor when [wayland],
+     * as [user] (a valid Linux user name; empty: the default one). Plasma's
+     * session reads the user's password from its input, one line.
      */
-    fun sessionCommand(layout: String, dpi: Int, wayland: Boolean = false): String =
+    fun sessionCommand(layout: String, dpi: Int, wayland: Boolean = false, user: String = ""): String =
         "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_DPI=$dpi DROIDNUX_LOCALE=${glibcLocale()} " +
+            (if (user.isNotEmpty()) "DROIDNUX_USER=$user " else "") +
             "exec ${if (wayland) PLASMA_SESSION_SCRIPT else SESSION_SCRIPT}"
 
     /** Android's language as a glibc locale name ("it_IT"); the session checks Debian has it. */
@@ -531,18 +535,32 @@ ${LAUNCH_LOOP.prependIndent("        ")}
 
     /**
      * Plasma session part, as root under Burrow: the user the desktop runs as
-     * (some apps refuse root, VLC among them), made on first use with sudo
-     * without password and the settings root had; then the script again with
-     * the user's ids (perl: setpriv needs capabilities Android refuses).
+     * (some apps refuse root, VLC among them), DROIDNUX_USER, made on first use
+     * with the settings root had (or renamed from the account made before);
+     * the password the app sends on the input line becomes its password and
+     * sudo's, and the key of KDE's wallet, opened in --in-dbus as pam_kwallet
+     * would at login (DROIDNUX_WALLET). Then the script again with the user's
+     * ids (perl: setpriv needs capabilities Android refuses).
      */
     private val USER_SESSION = """
         if [ "${'$'}(id -u)" = 0 ] && [ "${'$'}DROIDNUX_RUNTIME" = burrow ] && [ "${'$'}1" != --in-dbus ]; then
-            if ! id -u $DESKTOP_USER > /dev/null 2>&1; then
-                useradd -m -s /bin/bash -c DroidNux $DESKTOP_USER
+            user=${'$'}{DROIDNUX_USER:-$DESKTOP_USER}
+            pass=
+            IFS= read -r pass || true
+            # The account made before this one, by DroidNux (its comment).
+            old=${'$'}(getent passwd | awk -F: '${'$'}5 == "DroidNux" { print ${'$'}1; exit }')
+            if ! id -u "${'$'}user" > /dev/null 2>&1 && [ -n "${'$'}old" ]; then
+                oldhome=${'$'}(getent passwd "${'$'}old" | cut -d: -f6)
+                usermod -l "${'$'}user" -d "/home/${'$'}user" -m "${'$'}old" && groupmod -n "${'$'}user" "${'$'}old" &&
+                    grep -rlI --exclude-dir=mozilla -e "${'$'}oldhome/" "/home/${'$'}user/.config" 2> /dev/null |
+                        xargs -r sed -i "s|${'$'}oldhome/|/home/${'$'}user/|g"
+            fi
+            if ! id -u "${'$'}user" > /dev/null 2>&1; then
+                useradd -m -s /bin/bash -c DroidNux "${'$'}user"
                 for g in sudo audio video render input; do
-                    getent group ${'$'}g > /dev/null && usermod -a -G ${'$'}g $DESKTOP_USER
+                    getent group ${'$'}g > /dev/null && usermod -a -G ${'$'}g "${'$'}user"
                 done
-                home=${'$'}(getent passwd $DESKTOP_USER | cut -d: -f6)
+                home=${'$'}(getent passwd "${'$'}user" | cut -d: -f6)
                 # The settings of the desktop that ran as root, once.
                 for f in .config .local .mozilla .thunderbird .ssh .gtkrc-2.0 .vscode; do
                     [ -e "/root/${'$'}f" ] && cp -a "/root/${'$'}f" "${'$'}home/"
@@ -550,14 +568,32 @@ ${LAUNCH_LOOP.prependIndent("        ")}
                 grep -rlI --exclude-dir=mozilla -e /root/ -e file:///root "${'$'}home/.config" "${'$'}home/.local/share/user-places.xbel" 2> /dev/null |
                     xargs -r sed -i "s|file:///root\b|file://${'$'}home|g; s|=/root/|=${'$'}home/|g; s|\"/root/|\"${'$'}home/|g"
             fi
-            if [ ! -f /etc/sudoers.d/droidnux ] && [ -d /etc/sudoers.d ]; then
-                echo '$DESKTOP_USER ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/droidnux && chmod 440 /etc/sudoers.d/droidnux
+            home=${'$'}(getent passwd "${'$'}user" | cut -d: -f6)
+            unset DROIDNUX_WALLET
+            if [ -n "${'$'}pass" ]; then
+                printf '%s:%s\n' "${'$'}user" "${'$'}pass" | chpasswd || echo "chpasswd failed"
+                sudo="ALL=(ALL:ALL) ALL"
+                # pam_kwallet's key: PBKDF2-HMAC-SHA512 of the password, 50000 rounds, the wallet's salt.
+                wallets=${'$'}home/.local/share/kwalletd
+                mkdir -p "${'$'}wallets"
+                [ -s "${'$'}wallets/kdewallet.salt" ] || head -c 56 /dev/urandom > "${'$'}wallets/kdewallet.salt"
+                chown -R "${'$'}user:" "${'$'}home/.local"
+                DROIDNUX_WALLET=${'$'}(printf %s "${'$'}pass" | perl -MDigest::SHA=hmac_sha512 -e '
+                    local ${'$'}/; my ${'$'}key = <STDIN>; open my ${'$'}f, "<", ${'$'}ARGV[0] or die "salt: ${'$'}!\n"; binmode ${'$'}f;
+                    my ${'$'}salt = <${'$'}f>; my ${'$'}u = hmac_sha512(${'$'}salt . pack("N", 1), ${'$'}key); my ${'$'}t = ${'$'}u;
+                    for (2 .. 50000) { ${'$'}u = hmac_sha512(${'$'}u, ${'$'}key); ${'$'}t ^= ${'$'}u }
+                    print "[", join(", ", unpack("C56", ${'$'}t)), "]";' "${'$'}wallets/kdewallet.salt") && export DROIDNUX_WALLET
+            else
+                sudo="ALL=(ALL:ALL) NOPASSWD: ALL"
             fi
-            home=${'$'}(getent passwd $DESKTOP_USER | cut -d: -f6)
+            unset pass
+            if [ -d /etc/sudoers.d ]; then
+                echo "${'$'}user ${'$'}sudo" > /etc/sudoers.d/droidnux && chmod 440 /etc/sudoers.d/droidnux
+            fi
             exec perl -e '${'$'}u = shift; @g = split / /, shift; ${'$'}) = "${'$'}g[0] @g"; ${'$'}( = ${'$'}g[0]; ${'$'}< = ${'$'}> = ${'$'}u;
                 die "cannot become ${'$'}u\n" if ${'$'}> != ${'$'}u; exec @ARGV or die "exec: ${'$'}!\n"' \
-                "${'$'}(id -u $DESKTOP_USER)" "${'$'}(id -G $DESKTOP_USER)" \
-                env HOME="${'$'}home" USER=$DESKTOP_USER LOGNAME=$DESKTOP_USER "${'$'}0" "${'$'}@"
+                "${'$'}(id -u "${'$'}user")" "${'$'}(id -G "${'$'}user")" \
+                env HOME="${'$'}home" USER="${'$'}user" LOGNAME="${'$'}user" "${'$'}0" "${'$'}@"
         fi
     """.trimIndent()
 
@@ -601,6 +637,11 @@ ${GPU_ENV.prependIndent("            ")}
                 export LD_PRELOAD=$GUEST_LIB_DIR/$PATHS_LIBRARY${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}
             fi
             mkdir -p "${'$'}XDG_RUNTIME_DIR" && chmod 700 "${'$'}XDG_RUNTIME_DIR"
+            # The wallet's key, from the environment (D-Bus would pass it to every service) to a private file.
+            if [ -n "${'$'}DROIDNUX_WALLET" ]; then
+                (umask 077 && printf %s "${'$'}DROIDNUX_WALLET" > "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet")
+                unset DROIDNUX_WALLET
+            fi
             # Xwayland's sockets, made by KWin.
             mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
 
@@ -627,6 +668,14 @@ ${SDCARD_LINK.prependIndent("            ")}
             exec dbus-run-session "${'$'}0" --in-dbus
         fi
 
+        # KDE's wallet, opened with the account's password (USER_SESSION) as pam_kwallet does at login.
+        if [ -f "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet" ]; then
+            key=${'$'}(cat "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet")
+            rm -f "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet"
+            gdbus call --session --dest org.kde.kwalletd6 --object-path /modules/kwalletd6 \
+                --method org.kde.KWallet.pamOpen kdewallet "${'$'}key" 0 > /dev/null 2>&1 &
+            unset key
+        fi
 ${SESSION_SERVICES.prependIndent("        ")}
         LAUNCH_AFTER=plasmashell
 ${LAUNCH_LOOP.prependIndent("        ")}
@@ -642,7 +691,19 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         VirtualKeyboardEnabled=true
     """.trimIndent() + "\n"
 
-    /** No lock screen: Android locks the device, and root has no password to unlock Plasma's. */
+    /** One wallet, opened at the session's start, that apps use without asking. */
+    private val PLASMA_KWALLETRC = """
+        [Wallet]
+        First Use=false
+        Enabled=true
+        Use One Wallet=true
+        Default Wallet=kdewallet
+        Prompt on Open=false
+        Close When Idle=false
+        Leave Open=true
+    """.trimIndent() + "\n"
+
+    /** No lock screen: Android locks the device. */
     private val PLASMA_SCREENLOCKER = """
         [Daemon]
         Autolock=false

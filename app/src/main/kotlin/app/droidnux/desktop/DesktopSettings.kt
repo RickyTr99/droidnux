@@ -21,6 +21,8 @@ data class DesktopSettings(
     val layout: String = "",
     /** The frame counter in the top right corner of the desktop (debug builds). */
     val stats: Boolean = true,
+    /** The Linux account's name (Wayland build), empty until the user chose one; see [Account]. */
+    val user: String = "",
 ) {
     /** The layout the session uses. */
     fun xkbLayout(): String = layout.ifEmpty {
@@ -52,6 +54,7 @@ data class DesktopSettings(
                 trackpad = props.getProperty("trackpad")?.toBooleanStrictOrNull() ?: defaults.trackpad,
                 layout = props.getProperty("layout")?.takeIf { it in LAYOUTS } ?: defaults.layout,
                 stats = props.getProperty("stats")?.toBooleanStrictOrNull() ?: defaults.stats,
+                user = props.getProperty("user")?.takeIf { Account.isValidName(it) } ?: defaults.user,
             )
         }
 
@@ -64,6 +67,7 @@ data class DesktopSettings(
                 setProperty("trackpad", settings.trackpad.toString())
                 setProperty("layout", settings.layout)
                 setProperty("stats", settings.stats.toString())
+                setProperty("user", settings.user)
             }
             val file = File(context.filesDir, FILE)
             val temp = File(context.filesDir, "$FILE.new")

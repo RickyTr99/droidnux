@@ -66,9 +66,16 @@ class DesktopSessionService : Service() {
         val container = Container(this)
         val rootfs = container.installer.rootfsDir(distro)
         DesktopEnvironment.prepare(rootfs, java.io.File(applicationInfo.nativeLibraryDir))
-        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, dpi, wayland = resources.getBoolean(R.bool.wayland_frontend)))
+        val wayland = resources.getBoolean(R.bool.wayland_frontend)
+        val user = DesktopSettings.load(this).user
+        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, dpi, wayland, user))
         session = process
         Log.i(TAG, "session started (layout $layout)")
+        // The account's password, on Plasma's session's input: it never sits in a file or the environment.
+        if (wayland) scope.launch {
+            val password = Account.password(this@DesktopSessionService).orEmpty()
+            runCatching { process.outputStream.use { it.write("$password\n".toByteArray()) } }
+        }
         scope.launch {
             try {
                 process.inputStream.bufferedReader().forEachLine {

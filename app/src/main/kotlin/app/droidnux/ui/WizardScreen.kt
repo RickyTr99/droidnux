@@ -31,7 +31,17 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.res.booleanResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import app.droidnux.desktop.Account
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -61,8 +71,11 @@ import app.droidnux.desktop.DesktopSettings
 @Composable
 fun WizardScreen(state: AppState, viewModel: AppViewModel) {
     var step by rememberSaveable { mutableStateOf(0) }
+    // Plasma runs as a Linux user: its account has a page (choice, account, checks, install).
+    val account = booleanResource(R.bool.wayland_frontend)
+    val pages = if (account) 4 else 3
     // An installation already under way (the activity was recreated) shows its progress.
-    val current = if (state.setup != null) 2 else step
+    val current = if (state.setup != null) pages - 1 else step
 
     Box(
         Modifier
@@ -77,27 +90,113 @@ fun WizardScreen(state: AppState, viewModel: AppViewModel) {
                     text = stringResource(R.string.wizard_welcome_text),
                     aside = { SpaceSummary() },
                     footer = {
-                        StepDots(0, 3)
+                        StepDots(0, pages)
                         Button(onClick = { step = 1 }, modifier = Modifier.height(48.dp)) { Text(stringResource(R.string.action_next)) }
                     },
                 ) { ChoicePage() }
-                1 -> WizardPage(
+                pages - 2 -> WizardPage(
                     title = stringResource(R.string.wizard_checks_title),
                     text = stringResource(R.string.wizard_checks_text),
                     footer = {
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            FilledTonalButton(onClick = { step = 0 }, modifier = Modifier.height(48.dp)) {
+                            FilledTonalButton(onClick = { step = pages - 3 }, modifier = Modifier.height(48.dp)) {
                                 Text(stringResource(R.string.action_back))
                             }
-                            StepDots(1, 3)
+                            StepDots(pages - 2, pages)
                         }
                         Button(onClick = { viewModel.runSetup() }, modifier = Modifier.height(48.dp)) {
                             Text(stringResource(R.string.action_install))
                         }
                     },
                 ) { SystemChecks(state.gpu) }
-                else -> InstallPage(state, viewModel)
+                pages - 1 -> InstallPage(state, viewModel, pages)
+                else -> AccountPage(back = { step = 0 }, dot = 1, pages = pages) { step = 2 }
             }
+        }
+    }
+}
+
+/**
+ * The desktop's Linux account (Wayland build): a name and a password, saved
+ * with [Account] before [onDone]. A wizard step with [back] and its [dot] of
+ * [pages], or on its own (installed before accounts existed) without them.
+ */
+@Composable
+fun AccountPage(back: (() -> Unit)?, dot: Int, pages: Int, onDone: () -> Unit) {
+    val context = LocalContext.current
+    var name by rememberSaveable { mutableStateOf(DesktopSettings.load(context).user) }
+    var password by remember { mutableStateOf("") }
+    var repeat by remember { mutableStateOf("") }
+    var visible by remember { mutableStateOf(false) }
+    val nameOk = Account.isValidName(name)
+    val passwordOk = Account.isValidPassword(password)
+    val done = nameOk && passwordOk && password == repeat
+
+    WizardPage(
+        title = stringResource(R.string.wizard_account_title),
+        text = stringResource(R.string.wizard_account_text),
+        footer = {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (back != null) {
+                    FilledTonalButton(onClick = back, modifier = Modifier.height(48.dp)) { Text(stringResource(R.string.action_back)) }
+                    StepDots(dot, pages)
+                }
+            }
+            Button(
+                onClick = {
+                    Account.savePassword(context, password)
+                    DesktopSettings.update(context) { it.copy(user = name) }
+                    onDone()
+                },
+                enabled = done,
+                modifier = Modifier.height(48.dp),
+            ) { Text(stringResource(R.string.action_next)) }
+        },
+    ) {
+        Column(Modifier.widthIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.trim().lowercase() },
+                label = { Text(stringResource(R.string.wizard_account_name)) },
+                supportingText = {
+                    Text(stringResource(if (name.isEmpty() || nameOk) R.string.wizard_account_name_hint else R.string.wizard_account_name_bad))
+                },
+                isError = name.isNotEmpty() && !nameOk,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            val transformation = if (visible) VisualTransformation.None else PasswordVisualTransformation()
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text(stringResource(R.string.wizard_account_password)) },
+                singleLine = true,
+                visualTransformation = transformation,
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
+                trailingIcon = {
+                    IconButton(onClick = { visible = !visible }) {
+                        Icon(
+                            if (visible) Icons.VisibilityOff else Icons.Visibility,
+                            stringResource(if (visible) R.string.wizard_account_hide else R.string.wizard_account_show),
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = repeat,
+                onValueChange = { repeat = it },
+                label = { Text(stringResource(R.string.wizard_account_repeat)) },
+                supportingText = {
+                    if (repeat.isNotEmpty() && repeat != password) Text(stringResource(R.string.wizard_account_mismatch))
+                },
+                isError = repeat.isNotEmpty() && repeat != password,
+                singleLine = true,
+                visualTransformation = transformation,
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -255,7 +354,7 @@ fun LayoutDialog(current: String, onDismiss: () -> Unit, onChoose: (String) -> U
 }
 
 @Composable
-private fun InstallPage(state: AppState, viewModel: AppViewModel) {
+private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
     val context = LocalContext.current
     val setup = state.setup
     var showLog by remember { mutableStateOf(false) }
@@ -274,7 +373,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel) {
             }
         },
         footer = {
-            StepDots(2, 3)
+            StepDots(pages - 1, pages)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 when {
                     setup?.done == true -> Button(onClick = {

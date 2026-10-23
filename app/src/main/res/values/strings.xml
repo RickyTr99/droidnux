@@ -111,6 +111,16 @@
     <string name="desktop_plasma">KDE Plasma</string>
     <string name="wizard_checks_title">Getting the tablet ready</string>
     <string name="wizard_checks_text">Some Android settings keep the desktop open and fast. Here is how they are set.</string>
+    <string name="wizard_account_title">Your account</string>
+    <string name="wizard_account_text">The name and password of your Linux desktop. The password is asked by sudo, and it opens KDE’s wallet when the desktop starts.</string>
+    <string name="wizard_account_name">User name</string>
+    <string name="wizard_account_name_hint">Lowercase letters, digits, - and _</string>
+    <string name="wizard_account_name_bad">Not a valid name: lowercase letters, digits, - and _, starting with a letter</string>
+    <string name="wizard_account_password">Password</string>
+    <string name="wizard_account_repeat">Repeat the password</string>
+    <string name="wizard_account_mismatch">The passwords differ</string>
+    <string name="wizard_account_show">Show the password</string>
+    <string name="wizard_account_hide">Hide the password</string>
     <string name="wizard_install_title">Installing</string>
     <string name="wizard_install_text">About 10 minutes on a good connection. Keep DroidNux open: in the background Android slows the installation down.</string>
     <string name="wizard_done_title">All set</string>
