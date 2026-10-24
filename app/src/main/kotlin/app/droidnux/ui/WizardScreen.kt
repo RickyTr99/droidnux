@@ -415,7 +415,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
     val step = setup?.step ?: SetupStep.ROOTFS
     val mesa = state.components[Component.MESA.id]
     val plasma = state.components[Component.PLASMA.id]
-    val total by animateFloatAsState(overallProgress(state), label = "total")
+    val total by animateFloatAsState(if (setup?.done == true) 1f else overallProgress(state), label = "total")
 
     WizardPage(
         title = stringResource(if (setup?.done == true) R.string.wizard_done_title else R.string.wizard_install_title),

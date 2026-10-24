@@ -75,6 +75,8 @@ object DesktopEnvironment {
         "sudo",
         // KDE's wallet moved to a new password over D-Bus (WALLET).
         "python3-gi",
+        // Digest::SHA, for the wallet's key (USER_SESSION); perl-base lacks it.
+        "perl",
         "konsole", "dolphin", "kwrite", "ark", "gwenview", "okular", "kde-spectacle",
         // GTK apps (Firefox) in Breeze, set from System Settings.
         "breeze-gtk-theme", "kde-config-gtk-style",
