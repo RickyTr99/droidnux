@@ -1,6 +1,6 @@
 name: Plasma component
 
-# Debian's KSvg and KIconThemes with DroidNux's patches for the Plasma session (guest/plasma).
+# Debian's KSvg, KIconThemes and ksystemstats plugins with DroidNux's patches for the Plasma session (guest/plasma).
 # Built inside the Debian release the app installs. Tags named
 # plasma-<ksvg version>-dn<revision> publish the archive as a GitHub release
 # the app downloads from.
@@ -48,4 +48,4 @@ jobs:
         with:
           files: out/*
           name: Plasma ${{ github.ref_name }}
-          body: KSvg and KIconThemes with DroidNux's patches (fewer file lookups under proot) for the Plasma session, built from guest/plasma.
+          body: KSvg and KIconThemes with DroidNux's patches (fewer file lookups under proot) and ksystemstats' GPU and disk plugins for Android, for the Plasma session, built from guest/plasma.

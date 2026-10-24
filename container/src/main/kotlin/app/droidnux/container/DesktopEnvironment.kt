@@ -661,6 +661,8 @@ ${GPU_ENV.prependIndent("            ")}
                 "${'$'}(sed 1d "${'$'}PLASMA/droidnux-plasma.version" | while read -r package version; do
                     echo "${'$'}package ${'$'}(dpkg-query -W -f '${'$'}{Version}' "${'$'}package" 2> /dev/null)"; done)" ]; then
                 export LD_LIBRARY_PATH=${'$'}PLASMA/lib/aarch64-linux-gnu${'$'}{LD_LIBRARY_PATH:+:${'$'}LD_LIBRARY_PATH}
+                # ksystemstats' GPU and disk plugins for Android, found before the distro's of the same name.
+                export QT_PLUGIN_PATH=${'$'}PLASMA/lib/aarch64-linux-gnu/qt6/plugins${'$'}{QT_PLUGIN_PATH:+:${'$'}QT_PLUGIN_PATH}
             fi
             # Turnip on KGSL has no calibrated timestamps: Zink answers
             # GL_TIMESTAMP with a GPU round trip, which KWin asks every frame.
