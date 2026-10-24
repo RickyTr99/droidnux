@@ -239,7 +239,7 @@ void dnx_wl_seat_cursor_committed(struct dnx_wl_surface* s) {
     /* KWin draws the cursor at its own scale with buffer scale 1 and the hotspot
      * in buffer pixels: the buffer is already in desktop pixels. */
     uint32_t* rgba = malloc(sizeof(uint32_t) * (size_t) width * (size_t) height);
-    /* Premultiplied 0xAARRGGBB to the layer's premultiplied RGBA bytes, as in x11/output.c. */
+    /* Premultiplied 0xAARRGGBB to the layer's premultiplied RGBA bytes. */
     for (int32_t y = 0; rgba && y < height; y++) {
         const uint32_t* row = (const uint32_t*) (data + (size_t) y * stride);
         for (int32_t x = 0; x < width; x++) {

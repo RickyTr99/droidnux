@@ -102,3 +102,5 @@ set_source_files_properties(
     PROPERTIES COMPILE_OPTIONS "-Wall;-Wextra;-Werror;-Wno-unused-parameter")
 target_include_directories(droidnux-display PRIVATE ${CMAKE_CURRENT_LIST_DIR})
 target_link_libraries(droidnux-display PRIVATE dnx-wayland)
+# --gc-sections drops libffi's closure code, which needs closures.c (not built).
+target_link_options(droidnux-display PRIVATE -Wl,--no-undefined -Wl,--gc-sections)

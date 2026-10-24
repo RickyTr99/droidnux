@@ -4,8 +4,8 @@
  * the most recently mapped toplevel, as the whole desktop: the guest's own
  * compositor (KWin, nested) does the window management. See PLAN.md, Fase 4b.
  *
- * Same entry points as the X11 front-end (dnx_x11.h). Input functions may be
- * called from any thread: events go through a pipe to the compositor thread.
+ * Input functions may be called from any thread: events go through a pipe to
+ * the compositor thread.
  */
 #ifndef DROIDNUX_WL_H
 #define DROIDNUX_WL_H
@@ -61,7 +61,7 @@ void dnx_wl_set_scale(double scale);
 /* Pointer, in desktop pixels. */
 void dnx_wl_pointer_move(float x, float y);
 void dnx_wl_pointer_move_relative(float dx, float dy);
-/* X button numbers, as in dnx_x11.h: 1 left, 2 middle, 3 right, 8/9 back/forward. */
+/* X button numbers: 1 left, 2 middle, 3 right, 8/9 back/forward. */
 void dnx_wl_button(int button, bool down);
 /* Scroll, in notches (1.0 = one wheel click); fractional values for touchpads. */
 void dnx_wl_scroll(float dx, float dy);

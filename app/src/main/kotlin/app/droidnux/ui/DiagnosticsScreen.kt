@@ -50,7 +50,6 @@ import app.droidnux.container.CommandResult
 import app.droidnux.container.Component
 import app.droidnux.container.InstallProgress
 import app.droidnux.desktop.DesktopActivity
-import app.droidnux.display.DisplayServer
 import app.droidnux.spike.BufferSpikeActivity
 
 @Composable
@@ -81,10 +80,6 @@ fun DiagnosticsScreen(viewModel: AppViewModel = viewModel()) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-            }
-
-            Section(stringResource(R.string.section_proot)) {
-                ResultText(state.proot)
             }
 
             Section(stringResource(R.string.section_rootfs)) {
@@ -127,9 +122,9 @@ fun DiagnosticsScreen(viewModel: AppViewModel = viewModel()) {
                         Component.MESA, stringResource(R.string.gpu_mesa, Component.MESA.version), state, viewModel,
                     )
                 }
-                Section(stringResource(R.string.section_theme)) {
+                Section(stringResource(R.string.plasma_component)) {
                     ComponentSection(
-                        Component.THEME, stringResource(R.string.theme_component, Component.THEME.version), state, viewModel,
+                        Component.PLASMA, stringResource(R.string.plasma_component_version, Component.PLASMA.version), state, viewModel,
                     )
                 }
             }
@@ -269,7 +264,6 @@ private fun StorageAccess() {
 private fun DesktopSection(state: AppState, onInstall: () -> Unit) {
     val context = LocalContext.current
     when {
-        !DisplayServer.available -> Status(stringResource(R.string.desktop_no_x11), error = true)
         state.desktopInstalling -> {
             Status(stringResource(R.string.desktop_installing))
             LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 8.dp))

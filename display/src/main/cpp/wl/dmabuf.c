@@ -2,7 +2,7 @@
  * linux-dmabuf (version 3) for the DroidNux Wayland front-end: single-plane
  * linear BGRA buffers, with version 4 feedback naming the GPU. Those the app allocated (Mesa patch 0003, found with
  * dnx_allocator_find) go to Android's compositor as they are; other ones are
- * copied from a CPU mapping, as the X11 front-end does for DRI3 pixmaps.
+ * copied from a CPU mapping.
  */
 #include <android/log.h>
 #include <errno.h>
@@ -129,7 +129,7 @@ static bool present_copy(struct dnx_wl_dmabuf* b, const dnx_box* rects, int coun
     const uint8_t* data = dnx_wl_dmabuf_begin_read(b, &format, &stride);
     if (!data) return true; /* nothing to retry */
     bool ok = dnx_presenter_present(data, (uint32_t) b->width, (uint32_t) b->height, stride, DNX_PIXEL_BGRX8888,
-                                    NULL, NULL, rects, count);
+                                    rects, count);
     dnx_wl_dmabuf_end_read(b);
     return ok;
 }

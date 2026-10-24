@@ -44,7 +44,6 @@ enum class SetupStep { ROOTFS, DESKTOP, COMPONENTS }
 
 data class AppState(
     val distro: Distro = Distro.DEBIAN_TRIXIE,
-    val proot: CommandResult? = null,
     val rootfs: InstallState = InstallState.Checking,
     val running: Boolean = false,
     val guest: CommandResult? = null,
@@ -67,7 +66,7 @@ data class AppState(
     val setup: SetupState? = null,
     /** The desktop's apps, once listed. */
     val apps: List<DesktopEnvironment.LinuxApp>? = null,
-    /** True while the desktop process (X server and session) is alive. */
+    /** True while the desktop process (display server and session) is alive. */
     val sessionRunning: Boolean = false,
 ) {
     /** Everything the desktop needs is there: the home screen instead of the first-run wizard. */
@@ -78,8 +77,6 @@ data class AppState(
 class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val container = Container(application)
-    /** The Wayland build installs Plasma instead of XFCE. */
-    private val wayland = application.resources.getBoolean(R.bool.wayland_frontend)
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
@@ -93,19 +90,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
-            val proot = runCatching { container.prootVersion() }
-                .getOrElse { CommandResult(-1, it.message ?: it.toString()) }
             val installed = withContext(Dispatchers.IO) { container.installer.isInstalled(_state.value.distro) }
             val display = withContext(Dispatchers.Default) {
                 runCatching { DisplayCore.probe() }.getOrElse { it.toString() }
             }
             val (desktop, upToDate) = withContext(Dispatchers.IO) {
-                DesktopEnvironment.isInstalled(rootfs, wayland) to DesktopEnvironment.isUpToDate(rootfs, wayland)
+                DesktopEnvironment.isInstalled(rootfs) to DesktopEnvironment.isUpToDate(rootfs)
             }
-            Component.all(wayland).forEach { refreshComponent(it) }
+            Component.ALL.forEach { refreshComponent(it) }
             _state.update {
                 it.copy(
-                    proot = proot,
                     rootfs = if (installed) InstallState.Installed else InstallState.NotInstalled,
                     display = display,
                     gpu = GPU_NAME.find(display)?.let { match -> "Adreno ${match.groupValues[1]}" },
@@ -155,7 +149,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     if (!installDesktopPackages()) throw IllegalStateException(_state.value.desktopLog.lines().lastOrNull().orEmpty())
                 }
                 _state.update { it.copy(setup = SetupState(SetupStep.COMPONENTS)) }
-                for (component in Component.all(wayland)) {
+                for (component in Component.ALL) {
                     if (component.sha256.isEmpty() || _state.value.components[component.id] == InstallState.Installed) continue
                     installComponentNow(component)
                 }
@@ -179,7 +173,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         loadApps()
     }
 
-    /** Installs XFCE in the container with apt, streaming the log. */
+    /** Installs the desktop in the container with apt, streaming the log. */
     fun installDesktop() {
         if (_state.value.desktopInstalling) return
         viewModelScope.launch { installDesktopPackages() }
@@ -194,7 +188,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             var total = 0
             var done = 0
             runCatching {
-                val process = container.spawnShell(distro, DesktopEnvironment.installScript(wayland))
+                val process = container.spawnShell(distro, DesktopEnvironment.installScript())
                 process.inputStream.bufferedReader().forEachLine { line ->
                     if (line == "DROIDNUX_INSTALL_OK") success = true
                     APT_SUMMARY.find(line)?.let { total = it.groupValues[1].toInt() + it.groupValues[2].toInt() }
@@ -205,7 +199,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 process.waitFor()
             }.onFailure { e -> _state.update { it.copy(desktopLog = e.toString()) } }
-            (success && DesktopEnvironment.isInstalled(rootfs, wayland)) to DesktopEnvironment.isUpToDate(rootfs, wayland)
+            (success && DesktopEnvironment.isInstalled(rootfs)) to DesktopEnvironment.isUpToDate(rootfs)
         }
         val (installed, upToDate) = ok
         _state.update { it.copy(desktopInstalling = false, desktopInstalled = installed, desktopUpToDate = upToDate) }
@@ -234,10 +228,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             }
             _state.update { it.copy(rootfs = InstallState.Installed) }
             val (desktop, upToDate) = withContext(Dispatchers.IO) {
-                DesktopEnvironment.isInstalled(rootfs, wayland) to DesktopEnvironment.isUpToDate(rootfs, wayland)
+                DesktopEnvironment.isInstalled(rootfs) to DesktopEnvironment.isUpToDate(rootfs)
             }
             _state.update { it.copy(desktopInstalled = desktop, desktopUpToDate = upToDate) }
-            Component.all(wayland).forEach { refreshComponent(it) } // a fresh rootfs has no components
+            Component.ALL.forEach { refreshComponent(it) } // a fresh rootfs has no components
         } catch (e: CancellationException) {
             _state.update { it.copy(rootfs = InstallState.NotInstalled) }
             throw e

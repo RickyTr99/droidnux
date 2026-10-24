@@ -52,8 +52,7 @@ class MainActivity : ComponentActivity() {
                 val state by viewModel.state.collectAsStateWithLifecycle()
                 var needsAccount by remember {
                     mutableStateOf(
-                        resources.getBoolean(R.bool.wayland_frontend) &&
-                            (DesktopSettings.load(this).user.isEmpty() || !Account.hasPassword(this)),
+                        DesktopSettings.load(this).user.isEmpty() || !Account.hasPassword(this),
                     )
                 }
                 LifecycleResumeEffect(Unit) {

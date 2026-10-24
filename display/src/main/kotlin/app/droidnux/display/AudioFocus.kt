@@ -36,7 +36,7 @@ object AudioFocus {
             .build()
     }
 
-    /** Call once in the process that runs the X server, before Linux apps play. */
+    /** Call once in the process that runs the display server, before Linux apps play. */
     fun init(context: Context) {
         if (manager != null) return
         manager = context.applicationContext.getSystemService(AudioManager::class.java)

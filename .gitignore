@@ -18,6 +18,3 @@ desktop.ini
 dist/
 *.keystore
 *.jks
-
-# Prebuilt X server libraries from CI (tools/fetch-x11-prebuilt.sh)
-display/prebuilt/

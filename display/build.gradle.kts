@@ -20,8 +20,8 @@ android {
                     arguments += listOf("-DCMAKE_C_COMPILER_LAUNCHER=$it", "-DCMAKE_CXX_COMPILER_LAUNCHER=$it")
                 }
                 cppFlags += listOf("-std=c++20")
-                // Only our libraries: Termux:X11's own Xlorie target is not used.
-                targets += listOf("droidnux-display", "droidnux-guest-shm", "droidnux-guest-paths", "droidnux-guest-kwin", "droidnux-guest-pipewire", "droidnux-guest-im")
+                // Only our libraries, not libwayland's own targets.
+                targets += listOf("droidnux-display", "droidnux-guest-kwin", "droidnux-guest-pipewire", "droidnux-guest-im")
             }
         }
     }

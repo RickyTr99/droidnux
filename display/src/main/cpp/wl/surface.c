@@ -122,8 +122,7 @@ static bool present_shown(void) {
     } else {
         wl_shm_buffer_begin_access(shm);
         ok = dnx_presenter_present(wl_shm_buffer_get_data(shm), (uint32_t) s->width, (uint32_t) s->height,
-                                   (uint32_t) wl_shm_buffer_get_stride(shm), DNX_PIXEL_BGRX8888, NULL, NULL, rects,
-                                   count);
+                                   (uint32_t) wl_shm_buffer_get_stride(shm), DNX_PIXEL_BGRX8888, rects, count);
         wl_shm_buffer_end_access(shm);
     }
     if (ok) {
@@ -257,7 +256,7 @@ bool dnx_wl_surface_snapshot(uint32_t* pixels, int width, int height) {
         return false;
     }
     if (base) {
-        /* Nearest pixel, as the X11 front-end: a thumbnail taken when the desktop leaves the screen. */
+        /* Nearest pixel: a thumbnail taken when the desktop leaves the screen. */
         for (int y = 0; y < height; y++) {
             const uint32_t* row = (const uint32_t*) (base + (size_t) (y * s->height / height) * stride);
             for (int x = 0; x < width; x++) pixels[y * width + x] = row[x * s->width / width] | 0xff000000u;

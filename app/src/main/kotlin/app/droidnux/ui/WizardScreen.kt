@@ -36,7 +36,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.ui.res.booleanResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -71,9 +70,8 @@ import app.droidnux.desktop.DesktopSettings
 @Composable
 fun WizardScreen(state: AppState, viewModel: AppViewModel) {
     var step by rememberSaveable { mutableStateOf(0) }
-    // Plasma runs as a Linux user: its account has a page (choice, account, checks, install).
-    val account = booleanResource(R.bool.wayland_frontend)
-    val pages = if (account) 4 else 3
+    // Choice, account (Plasma runs as a Linux user), checks, install.
+    val pages = 4
     // An installation already under way (the activity was recreated) shows its progress.
     val current = if (state.setup != null) pages - 1 else step
 
@@ -117,7 +115,7 @@ fun WizardScreen(state: AppState, viewModel: AppViewModel) {
 }
 
 /**
- * The desktop's Linux account (Wayland build): a name and a password, saved
+ * The desktop's Linux account: a name and a password, saved
  * with [Account] before [onDone]. A wizard step with [back] and its [dot] of
  * [pages], or on its own (installed before accounts existed) without them.
  */
@@ -275,8 +273,8 @@ private fun ChoicePage() {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SectionHeader(stringResource(R.string.wizard_desktop))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ChoiceCard(stringResource(R.string.desktop_xfce), stringResource(R.string.desktop_xfce_text), Icons.Desktop, Modifier.weight(1f))
-                ChoiceCard(stringResource(R.string.desktop_plasma), stringResource(R.string.coming_soon), null, Modifier.weight(1f))
+                ChoiceCard(stringResource(R.string.desktop_name), stringResource(R.string.desktop_text), Icons.Desktop, Modifier.weight(1f))
+                ChoiceCard(stringResource(R.string.desktop_gnome), stringResource(R.string.coming_soon), null, Modifier.weight(1f))
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -416,7 +414,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
     var showLog by remember { mutableStateOf(false) }
     val step = setup?.step ?: SetupStep.ROOTFS
     val mesa = state.components[Component.MESA.id]
-    val theme = state.components[Component.THEME.id]
+    val plasma = state.components[Component.PLASMA.id]
     val total by animateFloatAsState(overallProgress(state), label = "total")
 
     WizardPage(
@@ -455,7 +453,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
             )
             val (done, all) = state.desktopPackages
             StepRow(
-                stringResource(R.string.desktop_xfce),
+                stringResource(R.string.desktop_name),
                 when {
                     state.desktopInstalling && all > 0 -> stringResource(R.string.install_packages, done, all)
                     state.desktopInstalling -> stringResource(R.string.status_preparing)
@@ -476,10 +474,10 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
                 (mesa as? InstallState.Installing)?.progress?.fraction(),
             )
             StepRow(
-                stringResource(R.string.section_theme),
-                stepText(theme, stringResource(R.string.install_theme_text)),
-                stepStatus(theme),
-                (theme as? InstallState.Installing)?.progress?.fraction(),
+                stringResource(R.string.plasma_component),
+                stepText(plasma, stringResource(R.string.install_plasma_text)),
+                stepStatus(plasma),
+                (plasma as? InstallState.Installing)?.progress?.fraction(),
             )
             setup?.error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp)) }
             TextButton(onClick = { showLog = !showLog }) {
@@ -537,8 +535,8 @@ private fun overallProgress(state: AppState): Float {
         all > 0 -> done.toFloat() / all
         else -> 0f
     }
-    return 0.15f * part(state.rootfs) + 0.65f * desktop +
-        0.05f * part(state.components[Component.MESA.id]) + 0.15f * part(state.components[Component.THEME.id])
+    return 0.15f * part(state.rootfs) + 0.75f * desktop +
+        0.08f * part(state.components[Component.MESA.id]) + 0.02f * part(state.components[Component.PLASMA.id])
 }
 
 @Composable

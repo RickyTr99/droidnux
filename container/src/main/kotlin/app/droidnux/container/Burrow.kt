@@ -10,39 +10,19 @@ import java.io.File
 internal const val GUEST_SDCARD = "/sdcard"
 
 /**
- * Builds the command lines of the guest runtime: Burrow (our own, see
- * burrow/burrow.h) where the build enables it, proot otherwise.
+ * Builds the command lines of Burrow, the guest runtime (see burrow/burrow.h).
  *
- * Both ship as lib*.so in the APK and are extracted by the installer into the
+ * It ships as lib*.so in the APK and is extracted by the installer into the
  * native library directory, the only place an app with targetSdk >= 29 may
  * execute files from.
  */
-class Proot(context: Context) {
+class Burrow(context: Context) {
 
-    private val useBurrow = context.resources.getBoolean(R.bool.burrow_runtime)
-
-    private val nativeDir = File(context.applicationInfo.nativeLibraryDir)
-    private val tmpDir = File(context.cacheDir, "proot-tmp")
+    private val binary = File(context.applicationInfo.nativeLibraryDir, "libburrow.so")
     private val gpuNodeDir = File(context.filesDir, "gpu-node")
 
-    val binary = File(nativeDir, "libproot.so")
-    val loader = File(nativeDir, "libproot-loader.so")
-    private val burrow = File(nativeDir, "libburrow.so")
-
-    /** Where Burrow sends the guest's DNS queries; 0 under proot. */
-    val dnsPort: Int get() = if (useBurrow) DnsProxy.port else 0
-
-    /** Environment proot itself needs (not the guest's). */
-    fun hostEnvironment(): Map<String, String> {
-        tmpDir.mkdirs()
-        return mapOf(
-            "PROOT_LOADER" to loader.absolutePath,
-            "PROOT_TMP_DIR" to tmpDir.absolutePath,
-        )
-    }
-
-    /** `proot --version`, useful to check that the binary runs at all. */
-    fun versionCommand(): List<String> = listOf(binary.absolutePath, "--version")
+    /** Where the guest's DNS queries go (the app's proxy); 0 while it is not running. */
+    val dnsPort: Int get() = DnsProxy.port
 
     /**
      * Runs [command] inside [rootfs] as fake root, with a clean guest
@@ -50,19 +30,9 @@ class Proot(context: Context) {
      */
     fun guestCommand(rootfs: File, command: List<String>, workDir: String = "/root"): List<String> =
         buildList {
-            if (useBurrow) {
-                add(burrow.absolutePath)
-                add("-r"); add(rootfs.absolutePath)
-                if (dnsPort > 0) { add("-d"); add(dnsPort.toString()) }
-            } else {
-                add(binary.absolutePath)
-                add("--kill-on-exit")
-                add("--link2symlink")
-                add("--sysvipc")
-                add("-L")
-                add("-0")
-                add("-r"); add(rootfs.absolutePath)
-            }
+            add(binary.absolutePath)
+            add("-r"); add(rootfs.absolutePath)
+            if (dnsPort > 0) { add("-d"); add(dnsPort.toString()) }
             for (bind in DEFAULT_BINDS) {
                 add("-b"); add(bind)
             }
@@ -74,11 +44,9 @@ class Proot(context: Context) {
             }
             addAll(gpuNodeBinds())
             add("-w"); add(workDir)
-            if (useBurrow) add("--")
+            add("--")
             add("/usr/bin/env"); add("-i")
             addAll(GUEST_ENVIRONMENT.map { (k, v) -> "$k=$v" })
-            // Lets the session skip what only proot needs.
-            if (useBurrow) add("DROIDNUX_RUNTIME=burrow")
             // Android's time zone (the guest's /etc/localtime says UTC).
             add("TZ=${java.util.TimeZone.getDefault().id}")
             addAll(command)
@@ -87,10 +55,9 @@ class Proot(context: Context) {
     /**
      * Shows the KGSL device to the guest as the DRM render node
      * /dev/dri/renderD128, with the sysfs entries libdrm reads, so Mesa's
-     * loader and EGL see a GPU device (the X server's DRI3Open hands out the
-     * same device). Without one, EGL falls back to software and Firefox
-     * blocklists WebRender. KGSL answers no DRM ioctl: Turnip's msm probe
-     * skips the node and keeps using KGSL.
+     * loader and EGL see a GPU device. Without one, EGL falls back to
+     * software and Firefox blocklists WebRender. KGSL answers no DRM ioctl:
+     * Turnip's msm probe skips the node and keeps using KGSL.
      *
      * libdrm also finds a node's type from the device number alone
      * (drmGetNodeTypeFromFd, which libva's vaGetDisplayDRM needs): it looks

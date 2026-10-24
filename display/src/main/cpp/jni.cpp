@@ -1,7 +1,3 @@
-#ifndef DROIDNUX_HAVE_X11
-#define DROIDNUX_HAVE_X11 0
-#endif
-
 #include <android/native_window_jni.h>
 #include <jni.h>
 
@@ -157,37 +153,9 @@ Java_app_droidnux_display_Presenter_nativeTakeFrameTimeMax(JNIEnv*, jclass) {
     return static_cast<jlong>(dnx_presenter_take_frame_time_max_ns());
 }
 
-// -- Display server: X11 or Wayland front-end ------------------------------
-
-#include <atomic>
+// -- Display server: the Wayland front-end ------------------------------------
 
 #include "dnx_wl.h"
-#if DROIDNUX_HAVE_X11
-#include "dnx_x11.h"
-#define DNX_X11_CALL(fn, ...) dnx_x11_##fn(__VA_ARGS__)
-#else
-#define DNX_X11_CALL(fn, ...) ((void) 0)
-#endif
-
-namespace {
-// Which front-end DisplayServer started; set once, before any input.
-std::atomic<bool> wayland{false};
-}  // namespace
-
-// The same call to whichever front-end runs.
-#define DNX_DISPLAY_CALL(fn, ...)                    \
-    do {                                             \
-        if (wayland) {                               \
-            dnx_wl_##fn(__VA_ARGS__);                \
-        } else {                                     \
-            DNX_X11_CALL(fn, __VA_ARGS__);           \
-        }                                            \
-    } while (0)
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_app_droidnux_display_DisplayServer_nativeAvailable(JNIEnv*, jclass) {
-    return DROIDNUX_HAVE_X11 ? JNI_TRUE : JNI_FALSE;
-}
 
 namespace {
 struct JniString {
@@ -222,14 +190,14 @@ void onTextInput(bool active) {
 
 namespace {
 // Text copied in the desktop goes to DisplayServer.clipboardFromDesktop, on
-// the server or compositor thread.
+// the compositor thread.
 JavaVM* clipboardVm;
 jclass clipboardClass;
 jmethodID clipboardMethod;
 
 void onClipboard(const char* utf8) {
     JNIEnv* env = nullptr;
-    // The server thread lives as long as the process: attach it once.
+    // The compositor thread lives as long as the process: attach it once.
     if (clipboardVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK &&
         clipboardVm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
         return;
@@ -252,8 +220,8 @@ void initClipboard(JNIEnv* env, jclass clazz) {
 }  // namespace
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_app_droidnux_display_DisplayServer_nativeStartWayland(JNIEnv* env, jclass clazz, jstring tmpDir, jint display,
-                                                           jint width, jint height) {
+Java_app_droidnux_display_DisplayServer_nativeStart(JNIEnv* env, jclass clazz, jstring tmpDir, jint display,
+                                                    jint width, jint height) {
     JniString tmp(env, tmpDir);
     if (textInputVm == nullptr) {
         env->GetJavaVM(&textInputVm);
@@ -264,62 +232,50 @@ Java_app_droidnux_display_DisplayServer_nativeStartWayland(JNIEnv* env, jclass c
     initClipboard(env, clazz);
     dnx_wl_set_clipboard_callback(onClipboard);
     dnx_wl_config config{tmp.chars, display, width, height};
-    if (!dnx_wl_start(&config)) return JNI_FALSE;
-    wayland = true;
-    return JNI_TRUE;
+    return dnx_wl_start(&config) ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_app_droidnux_display_DisplayServer_nativeRunning(JNIEnv*, jclass) {
-    if (wayland) return dnx_wl_running() ? JNI_TRUE : JNI_FALSE;
-#if DROIDNUX_HAVE_X11
-    return dnx_x11_running() ? JNI_TRUE : JNI_FALSE;
-#else
-    return JNI_FALSE;
-#endif
+    return dnx_wl_running() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeResize(JNIEnv*, jclass, jint width, jint height) {
-    DNX_DISPLAY_CALL(resize, width, height);
+    dnx_wl_resize(width, height);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeRedraw(JNIEnv*, jclass) {
-    DNX_DISPLAY_CALL(redraw);
+    dnx_wl_redraw();
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeKey(JNIEnv*, jclass, jint keycode, jboolean down) {
-    DNX_DISPLAY_CALL(key, keycode, down);
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_DisplayServer_nativeText(JNIEnv*, jclass, jint codepoint) {
-    if (!wayland) DNX_X11_CALL(text, static_cast<uint32_t>(codepoint));
+    dnx_wl_key(keycode, down);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativePointer(JNIEnv*, jclass, jfloat x, jfloat y) {
-    DNX_DISPLAY_CALL(pointer_move, x, y);
+    dnx_wl_pointer_move(x, y);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativePointerRelative(JNIEnv*, jclass, jfloat dx, jfloat dy) {
-    DNX_DISPLAY_CALL(pointer_move_relative, dx, dy);
+    dnx_wl_pointer_move_relative(dx, dy);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeButton(JNIEnv*, jclass, jint button, jboolean down) {
-    DNX_DISPLAY_CALL(button, button, down);
+    dnx_wl_button(button, down);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeScroll(JNIEnv*, jclass, jfloat dx, jfloat dy) {
-    DNX_DISPLAY_CALL(scroll, dx, dy);
+    dnx_wl_scroll(dx, dy);
 }
 
-// Wayland only: soft keyboard text through KWin's input method, touch, scale.
+// Soft keyboard text through KWin's input method, touch, scale, clipboard.
 
 namespace {
 // The UTF-8 bytes (Java strings in JNI are modified UTF-8) as a C string.
@@ -332,27 +288,21 @@ std::string utf8String(JNIEnv* env, jbyteArray bytes) {
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeSetClipboard(JNIEnv* env, jclass, jbyteArray utf8) {
-    std::string text = utf8String(env, utf8);
-    if (wayland) {
-        dnx_wl_set_clipboard(text.c_str());
-    } else {
-        DNX_X11_CALL(set_clipboard, text.c_str(), text.size());
-    }
+    dnx_wl_set_clipboard(utf8String(env, utf8).c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeCommitText(JNIEnv* env, jclass, jbyteArray utf8) {
-    if (wayland) dnx_wl_commit_text(utf8String(env, utf8).c_str());
+    dnx_wl_commit_text(utf8String(env, utf8).c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativePreeditText(JNIEnv* env, jclass, jbyteArray utf8) {
-    if (wayland) dnx_wl_preedit_text(utf8String(env, utf8).c_str());
+    dnx_wl_preedit_text(utf8String(env, utf8).c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeTouch(JNIEnv*, jclass, jint type, jint id, jfloat x, jfloat y) {
-    if (!wayland) return;
     // DisplayServer.TOUCH_*
     switch (type) {
     case 0: dnx_wl_touch_down(id, x, y); break;
@@ -366,43 +316,15 @@ Java_app_droidnux_display_DisplayServer_nativeTouch(JNIEnv*, jclass, jint type, 
 
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeSetScale(JNIEnv*, jclass, jfloat scale) {
-    if (wayland) dnx_wl_set_scale(scale);
+    dnx_wl_set_scale(scale);
 }
 
 extern "C" JNIEXPORT jintArray JNICALL
 Java_app_droidnux_display_DisplayServer_nativeSnapshot(JNIEnv* env, jclass, jint width, jint height) {
     if (width <= 0 || height <= 0 || width > 4096 || height > 4096) return nullptr;
     std::vector<uint32_t> pixels(static_cast<size_t>(width) * height);
-#if DROIDNUX_HAVE_X11
-    bool ok = wayland ? dnx_wl_snapshot(pixels.data(), width, height) : dnx_x11_snapshot(pixels.data(), width, height);
-#else
-    bool ok = dnx_wl_snapshot(pixels.data(), width, height);
-#endif
-    if (!ok) return nullptr;
+    if (!dnx_wl_snapshot(pixels.data(), width, height)) return nullptr;
     jintArray result = env->NewIntArray(width * height);
     if (result != nullptr) env->SetIntArrayRegion(result, 0, width * height, reinterpret_cast<const jint*>(pixels.data()));
     return result;
 }
-
-// X11 entry points.
-
-#if DROIDNUX_HAVE_X11
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_app_droidnux_display_DisplayServer_nativeStart(JNIEnv* env, jclass clazz, jstring tmpDir, jstring xkbDir,
-                                                    jstring fontDir, jint display, jint width, jint height, jint dpi) {
-    JniString tmp(env, tmpDir), xkb(env, xkbDir), fonts(env, fontDir);
-    initClipboard(env, clazz);
-    dnx_x11_set_clipboard_callback(onClipboard);
-    dnx_x11_config config{tmp.chars, xkb.chars, fonts.chars, display, width, height, dpi};
-    return dnx_x11_start(&config) ? JNI_TRUE : JNI_FALSE;
-}
-
-#else  // Wayland only: the X11 entry points answer "nothing".
-
-extern "C" JNIEXPORT jboolean JNICALL
-Java_app_droidnux_display_DisplayServer_nativeStart(JNIEnv*, jclass, jstring, jstring, jstring, jint, jint, jint, jint) {
-    return JNI_FALSE;
-}
-
-#endif  // DROIDNUX_HAVE_X11

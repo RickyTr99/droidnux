@@ -11,7 +11,7 @@ import android.view.accessibility.AccessibilityEvent
  * Hands the desktop the keys Android keeps for itself (Meta, Alt+Tab,
  * Ctrl+Esc...), while the desktop has the focus. Key filtering is all it
  * does; the user turns it on in Android's accessibility settings. It runs in
- * the desktop's process, next to the X server.
+ * the desktop's process, next to the display server.
  */
 class DesktopKeysService : AccessibilityService() {
 

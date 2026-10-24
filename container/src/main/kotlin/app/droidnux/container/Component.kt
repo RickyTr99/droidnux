@@ -21,8 +21,6 @@ data class Component(
     val sizeBytes: Long,
     /** Absolute guest path the archive's contents go to. */
     val guestPath: String,
-    /** Only for the Plasma (Wayland) desktop. */
-    val waylandOnly: Boolean = false,
 ) {
     companion object {
         private const val RELEASES = "https://github.com/RickyTr99/droidnux/releases/download"
@@ -37,17 +35,7 @@ data class Component(
             guestPath = DesktopEnvironment.MESA_PREFIX,
         )
 
-        /** Papirus icons with their caches, and Arc-Dark window borders at 1.5x and 2x: guest/theme. */
-        val THEME = Component(
-            id = "theme",
-            version = "20250501-dn1",
-            url = "$RELEASES/theme-20250501-dn1/droidnux-theme-20250501-dn1.tar.xz",
-            sha256 = "e247749f3fba45cecd559f7caa53672b26b675660ee18f662eae05723a32f6ba",
-            sizeBytes = 17_731_972,
-            guestPath = DesktopEnvironment.THEME_PREFIX,
-        )
-
-        /** KSvg and KIconThemes with fewer file lookups, which proot makes slow, and system monitor plugins: guest/plasma. */
+        /** KSvg and KIconThemes with fewer file lookups, and system monitor plugins for Android: guest/plasma. */
         val PLASMA = Component(
             id = "plasma",
             version = "6.13.0-dn3",
@@ -55,13 +43,9 @@ data class Component(
             sha256 = "01b82e1d06d849075157fe6f5ae5cbfc5729c4d25d5e9c25e17dcb503d473c6f",
             sizeBytes = 181_768,
             guestPath = DesktopEnvironment.PLASMA_PREFIX,
-            waylandOnly = true,
         )
 
-        val ALL = listOf(MESA, THEME, PLASMA)
-
-        /** The components a desktop uses. */
-        fun all(wayland: Boolean) = ALL.filter { wayland || !it.waylandOnly }
+        val ALL = listOf(MESA, PLASMA)
     }
 }
 

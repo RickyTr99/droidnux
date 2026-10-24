@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds the DroidNux Plasma component: Debian's KSvg and KIconThemes with
 # DroidNux's patches (guest/plasma/patches/<library>), which save the file
-# lookups of Plasma's interface and of KDE's icons that proot makes slow, and
+# lookups of Plasma's interface and of KDE's icons, slow in the container, and
 # ksystemstats' GPU and disk plugins, which find Android's Adreno and storage.
 # Runs on a Debian of the release the app installs: in CI
 # (.github/workflows/plasma.yml) or inside the container itself.

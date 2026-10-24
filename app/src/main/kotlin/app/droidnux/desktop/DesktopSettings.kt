@@ -21,7 +21,7 @@ data class DesktopSettings(
     val layout: String = "",
     /** The frame counter in the top right corner of the desktop (debug builds). */
     val stats: Boolean = true,
-    /** The Linux account's name (Wayland build), empty until the user chose one; see [Account]. */
+    /** The Linux account's name, empty until the user chose one; see [Account]. */
     val user: String = "",
 ) {
     /** The layout the session uses. */

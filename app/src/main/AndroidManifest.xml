@@ -33,7 +33,7 @@
             </intent-filter>
         </activity>
 
-        <!-- The desktop, its X server and its session live in their own
+        <!-- The desktop, its display server and its session live in their own
              process: a crash there never takes down the rest of the app.
              Its own task too: the app's icon always leads to the home
              screen, and the desktop is a separate entry in recent apps. -->
@@ -54,7 +54,7 @@
             android:foregroundServiceType="specialUse|microphone">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Runs a Linux desktop session (X server and container) chosen by the user" />
+                android:value="Runs a Linux desktop session (display server and container) chosen by the user" />
         </service>
 
         <!-- Optional: gives the desktop the keys Android keeps (Meta, Alt+Tab). -->

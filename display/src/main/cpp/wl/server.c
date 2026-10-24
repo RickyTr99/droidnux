@@ -1,7 +1,6 @@
 /*
  * Compositor thread, socket, wl_output and frame clock of the DroidNux
- * Wayland front-end, and input from Android through a pipe (as in
- * x11/server.c).
+ * Wayland front-end, and input from Android through a pipe.
  */
 #define _GNU_SOURCE /* pipe2, asprintf */
 #include <android/log.h>
@@ -463,7 +462,7 @@ bool dnx_wl_start(const dnx_wl_config* config) {
     dnx_wl_height = config->height;
 
     /* GPU clients' swapchain images (Mesa patch 0003), video decoding and
-     * sound, as for the X11 front-end. */
+     * sound. */
     char* path = NULL;
     asprintf(&path, "%s/.droidnux-ahb", config->tmp_dir);
     dnx_allocator_start(path);

@@ -62,7 +62,7 @@ PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
 #define RATE 48000u
 #define RING_FRAMES 8192u /* 170 ms, above PipeWire's largest default quantum */
 /* Fill kept in the ring above one device burst at every period: the timer's
- * jitter under proot. */
+ * jitter in the container. */
 #define MARGIN_FRAMES (RATE / 200u) /* 5 ms */
 /* After START, the first period waits for the device to run (no sound is lost
  * while AAudio starts), but not forever: a device that fails to start must not

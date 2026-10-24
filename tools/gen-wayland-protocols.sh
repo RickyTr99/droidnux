@@ -23,7 +23,8 @@ $WP/stable/viewporter/viewporter.xml"
 PWP=third_party/plasma-wayland-protocols/src/protocols
 CLIENT="$WP/unstable/input-method/input-method-unstable-v1.xml
 $PWP/kde-output-device-v2.xml
-$PWP/kde-output-management-v2.xml"
+$PWP/kde-output-management-v2.xml
+third_party/wlr-protocols/wlr-data-control-unstable-v1.xml"
 
 "$ADB" shell "rm -rf $XFER && mkdir -p $XFER"
 for x in $EXT $CLIENT; do "$ADB" push -q "$x" "$XFER/"; done

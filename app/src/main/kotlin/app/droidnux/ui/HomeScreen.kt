@@ -80,7 +80,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.booleanResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -111,9 +110,8 @@ private enum class Tab(val label: Int, val icon: ImageVector) {
 }
 
 /** Apps opened from the desktop tab when installed, in this order. */
-private val FAVORITES = listOf("firefox-esr", "thunar", "org.kde.dolphin", "mpv", "xfce4-terminal", "org.kde.konsole")
-private const val TERMINAL = "xfce4-terminal"
-private const val PLASMA_TERMINAL = "org.kde.konsole"
+private val FAVORITES = listOf("firefox-esr", "org.kde.dolphin", "mpv", "org.kde.konsole")
+private const val TERMINAL = "org.kde.konsole"
 
 @Composable
 fun HomeScreen(state: AppState, viewModel: AppViewModel) {
@@ -250,7 +248,7 @@ private fun DesktopTab(
                             modifier = Modifier.padding(start = 10.dp),
                         )
                     }
-                    FilledTonalButton(onClick = { launchApp(context, if (context.resources.getBoolean(R.bool.wayland_frontend)) PLASMA_TERMINAL else TERMINAL, null) }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                    FilledTonalButton(onClick = { launchApp(context, TERMINAL, null) }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                         Text(stringResource(R.string.action_terminal), fontSize = 16.sp)
                     }
                 }
@@ -284,10 +282,7 @@ private fun DesktopTab(
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SectionHeader(stringResource(R.string.home_quick))
             val apps = state.apps.orEmpty().associateBy { it.id }
-            // Each desktop's own apps: the rootfs may have both XFCE's and KDE's.
-            val plasma = context.resources.getBoolean(R.bool.wayland_frontend)
-            val favorites = FAVORITES.filter { it.startsWith("org.kde.") == plasma || it == "firefox-esr" || it == "mpv" }
-                .mapNotNull { apps[it] }.take(3)
+            val favorites = FAVORITES.mapNotNull { apps[it] }.take(3)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 favorites.forEach { app -> AppTile(app, viewModel, Modifier.weight(1f)) }
                 Column(
@@ -341,9 +336,7 @@ private fun AppsTab(state: AppState, viewModel: AppViewModel, padding: PaddingVa
         }
         return
     }
-    // XFCE's "preferred application" launchers repeat apps already listed.
-    val visible = apps.filter { "X-Xfce-Toplevel" !in it.categories }
-    val (settings, programs) = visible.partition { "Settings" in it.categories }
+    val (settings, programs) = apps.partition { "Settings" in it.categories }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(132.dp),
         contentPadding = padding,
@@ -463,14 +456,12 @@ private fun SettingsTab(padding: PaddingValues) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(start = 4.dp, top = 4.dp),
             )
-            if (booleanResource(R.bool.wayland_frontend)) {
-                SectionHeader(stringResource(R.string.settings_account), Modifier.padding(top = 20.dp, bottom = 4.dp))
-                InfoRow(
-                    stringResource(R.string.wizard_account_password),
-                    text = stringResource(R.string.settings_password_summary, settings.user),
-                ) {
-                    FilledTonalButton(onClick = { changingPassword = true }) { Text(stringResource(R.string.action_change)) }
-                }
+            SectionHeader(stringResource(R.string.settings_account), Modifier.padding(top = 20.dp, bottom = 4.dp))
+            InfoRow(
+                stringResource(R.string.wizard_account_password),
+                text = stringResource(R.string.settings_password_summary, settings.user),
+            ) {
+                FilledTonalButton(onClick = { changingPassword = true }) { Text(stringResource(R.string.action_change)) }
             }
             if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
                 SectionHeader(stringResource(R.string.settings_debug), Modifier.padding(top = 20.dp, bottom = 4.dp))
@@ -566,7 +557,7 @@ private fun SystemTab(state: AppState, viewModel: AppViewModel, padding: Padding
                 TextButton(onClick = { confirmReinstall = true }) { Text(stringResource(R.string.action_reinstall)) }
             }
             InfoRow(
-                stringResource(R.string.desktop_xfce),
+                stringResource(R.string.desktop_name),
                 text = stringResource(
                     when {
                         state.desktopInstalling -> R.string.desktop_installing
@@ -590,10 +581,7 @@ private fun SystemTab(state: AppState, viewModel: AppViewModel, padding: Padding
                 }
             }
             ComponentRow(Component.MESA, stringResource(R.string.install_gpu), state, viewModel)
-            ComponentRow(Component.THEME, stringResource(R.string.section_theme), state, viewModel)
-            if (booleanResource(R.bool.wayland_frontend)) {
-                ComponentRow(Component.PLASMA, stringResource(R.string.plasma_component), state, viewModel)
-            }
+            ComponentRow(Component.PLASMA, stringResource(R.string.plasma_component), state, viewModel)
 
             SectionHeader(stringResource(R.string.system_checks), Modifier.padding(top = 20.dp, bottom = 4.dp))
             SystemChecks(state.gpu)

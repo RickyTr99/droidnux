@@ -24,7 +24,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Keeps the desktop session alive: a foreground service in the :desktop
- * process (with the X server and DesktopActivity) that runs the guest session
+ * process (with the display server and DesktopActivity) that runs the guest session
  * and keeps the network on while the desktop is not on screen.
  */
 class DesktopSessionService : Service() {
@@ -50,7 +50,7 @@ class DesktopSessionService : Service() {
                 (if (microphone) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0),
         )
         if (session == null) {
-            startSession(intent?.getStringExtra(EXTRA_LAYOUT) ?: "us", intent?.getIntExtra(EXTRA_DPI, 96) ?: 96)
+            startSession(intent?.getStringExtra(EXTRA_LAYOUT) ?: "us")
         }
         return START_NOT_STICKY
     }
@@ -61,19 +61,18 @@ class DesktopSessionService : Service() {
         super.onDestroy()
     }
 
-    private fun startSession(layout: String, dpi: Int) {
+    private fun startSession(layout: String) {
         val distro = Distro.DEBIAN_TRIXIE
         val container = Container(this)
         val rootfs = container.installer.rootfsDir(distro)
         DesktopEnvironment.prepare(rootfs, java.io.File(applicationInfo.nativeLibraryDir))
-        val wayland = resources.getBoolean(R.bool.wayland_frontend)
         val user = DesktopSettings.load(this).user
-        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, dpi, wayland, user))
-        val password = if (wayland) Account.password(this).orEmpty() else ""
+        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, user))
+        val password = Account.password(this).orEmpty()
         session = process
         Log.i(TAG, "session started (layout $layout)")
-        // The account's password, on Plasma's session's input: it never sits in a file or the environment.
-        if (wayland) scope.launch {
+        // The account's password, on the session's input: it never sits in a file or the environment.
+        scope.launch {
             val before = Account.passwordBefore(this@DesktopSessionService).orEmpty()
             runCatching { process.outputStream.use { it.write("$password\n$before\n".toByteArray()) } }
         }
@@ -81,7 +80,7 @@ class DesktopSessionService : Service() {
             try {
                 process.inputStream.bufferedReader().forEachLine {
                     Log.i(TAG_GUEST, it)
-                    // The desktop logged out; its services (PipeWire, D-Bus) would keep proot alive.
+                    // The desktop logged out; its services (PipeWire, D-Bus) would keep the runtime alive.
                     if (it == DesktopEnvironment.SESSION_END_MARKER) process.destroy()
                     if (it == DesktopEnvironment.WALLET_MOVED_MARKER) Account.walletMoved(this@DesktopSessionService, password)
                 }
@@ -96,15 +95,15 @@ class DesktopSessionService : Service() {
     }
 
     /**
-     * Ends everything: the guest (proot kills all its processes when it
-     * exits), the desktop activity, and this process with the X server.
+     * Ends everything: the guest (Burrow kills all its processes when it
+     * exits), the desktop activity, and this process with the display server.
      */
     private fun endDesktop() {
         stopSession()
         DesktopActivity.finishCurrent()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
-        // Let the activity close first; a restart then starts a new X server.
+        // Let the activity close first; a restart then starts a new display server.
         handler.postDelayed({ android.os.Process.killProcess(android.os.Process.myPid()) }, EXIT_DELAY_MS)
     }
 
@@ -141,7 +140,6 @@ class DesktopSessionService : Service() {
         private const val NOTIFICATION_ID = 1
         private const val ACTION_STOP = "app.droidnux.action.STOP_SESSION"
         private const val EXTRA_LAYOUT = "layout"
-        private const val EXTRA_DPI = "dpi"
         private const val EXIT_DELAY_MS = 500L
 
         /** Ends the session, as the notification's Stop action does. */
@@ -149,9 +147,9 @@ class DesktopSessionService : Service() {
             context.startService(Intent(context, DesktopSessionService::class.java).setAction(ACTION_STOP))
         }
 
-        fun start(context: Context, layout: String, dpi: Int) {
+        fun start(context: Context, layout: String) {
             context.startForegroundService(
-                Intent(context, DesktopSessionService::class.java).putExtra(EXTRA_LAYOUT, layout).putExtra(EXTRA_DPI, dpi),
+                Intent(context, DesktopSessionService::class.java).putExtra(EXTRA_LAYOUT, layout),
             )
         }
     }

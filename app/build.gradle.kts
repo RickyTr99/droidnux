@@ -30,7 +30,6 @@ android {
         ndk {
             abiFilters += "arm64-v8a"
         }
-        resValue("bool", "wayland_frontend", "false")
     }
 
     signingConfigs {
@@ -48,14 +47,6 @@ android {
         debug {
             applicationIdSuffix = ".debug"
         }
-        // Debug build of the Wayland front-end, installed next to the X11 debug app.
-        create("wayland") {
-            initWith(getByName("debug"))
-            applicationIdSuffix = ".wl"
-            matchingFallbacks += "debug"
-            resValue("bool", "wayland_frontend", "true")
-            resValue("bool", "burrow_runtime", "true")
-        }
         release {
             if (!signingProps.isEmpty) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
@@ -66,17 +57,14 @@ android {
 
     packaging {
         jniLibs {
-            // proot and its loader are executables shipped as lib*.so: they
-            // must be extracted to disk to be runnable.
+            // Burrow and the guest helpers are executables shipped as lib*.so:
+            // they must be extracted to disk to be runnable.
             useLegacyPackaging = true
         }
     }
 
-    sourceSets.getByName("wayland").manifest.srcFile("src/debug/AndroidManifest.xml")
-
     buildFeatures {
         compose = true
-        resValues = true
     }
 
     compileOptions {

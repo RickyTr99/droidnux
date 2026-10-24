@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <!-- Run the guest with Burrow (true) or proot (false); the app may override it per build type. -->
-    <bool name="burrow_runtime">false</bool>
-</resources>

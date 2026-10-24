@@ -1,7 +1,5 @@
 #include "presenter.h"
 
-#include "gpu_copy.h"
-
 #include <android/choreographer.h>
 #include <android/hardware_buffer.h>
 #include <android/log.h>
@@ -32,10 +30,9 @@ constexpr size_t kMaxMissedRects = 48;  // beyond this, missed damage collapses 
 constexpr uint32_t kCursorSize = 256;   // largest cursor image kept (X cursors are almost always <= 64)
 constexpr uint32_t kFormatBgra8888 = 5; // AHARDWAREBUFFER_FORMAT_B8G8R8A8_UNORM, not in the NDK headers
 
-constexpr uint64_t kCursorUsage = AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+// Frames and cursor images are both written by the CPU.
+constexpr uint64_t kBufferUsage = AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
                                   AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY;
-// The GPU copies into frames when the source is an AHardwareBuffer, the CPU otherwise.
-constexpr uint64_t kFrameUsage = kCursorUsage | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT;
 
 // ---------------------------------------------------------------------------
 // Vsync clock: AChoreographer on a dedicated looper thread, ticking only when
@@ -126,8 +123,7 @@ private:
 struct FrameBuffer {
     AHardwareBuffer* buffer = nullptr;
     uint32_t stride = 0;  // pixels
-    void* gpuImage = nullptr;  // buffer as the GPU sees it (gpu_copy.h), made at the first GPU copy
-    bool busy = false;         // presented, release fence not signalled yet
+    bool busy = false;    // presented, release fence not signalled yet
     bool fullDamage = true;
     std::vector<dnx_box> missed;  // damage not copied into this buffer yet
 };
@@ -161,9 +157,6 @@ struct Completion {
     int cursorPrevious = -1;
     External external{};          // the client buffer the transaction set
     External externalPrevious{};  // the client buffer it replaced
-    External window{};            // the same for the window layer
-    External windowPrevious{};
-    bool windowHidden = false;  // the transaction hid the window layer instead of replacing its buffer
 };
 
 class Presenter {
@@ -179,8 +172,7 @@ public:
         // A sibling of the desktop layer, not a child: children inherit the
         // desktop's buffer-to-window scale, which applyCursorLocked applies itself.
         cursorSurface_ = surface_ ? ASurfaceControl_createFromWindow(window, "droidnux-cursor") : nullptr;
-        windowSurface_ = surface_ ? ASurfaceControl_createFromWindow(window, "droidnux-window") : nullptr;
-        if (surface_ == nullptr || cursorSurface_ == nullptr || windowSurface_ == nullptr) {
+        if (surface_ == nullptr || cursorSurface_ == nullptr) {
             LOGE("cannot create surface controls");
             detachLocked();
             return;
@@ -196,7 +188,6 @@ public:
         for (CursorBuffer& c : cursors_) c.busy = false;
         onScreen_ = -1;
         cursorOnScreen_ = -1;
-        hideWindow_ = false;
         geometryDirty_ = true;
         cursorDirty_ = true;
         cursorImageDirty_ = true;  // the new cursor layer has no buffer yet
@@ -215,7 +206,7 @@ public:
     }
 
     bool present(const void* pixels, uint32_t width, uint32_t height, uint32_t stride, dnx_pixel_format,
-                 AHardwareBuffer* source, void** sourceImage, const dnx_box* rects, int count) {
+                 const dnx_box* rects, int count) {
         auto start = std::chrono::steady_clock::now();
         std::lock_guard lock(mutex_);
         if (width != width_ || height != height_) {
@@ -241,23 +232,15 @@ public:
         }
         for (dnx_box& box : target.missed) box = clampLocked(box);
         int acquireFence = -1;
-        // The GPU copy waits for its blits: no acquire fence, and the caller may
-        // draw into the source again as soon as we return.
-        bool copied = source != nullptr && sourceImage != nullptr &&
-                      dnx_gpu_copy(source, sourceImage, target.buffer, &target.gpuImage, target.missed.data(),
-                                   static_cast<int>(target.missed.size()), 0, 0);
-        if (!copied) {
-            void* dst = nullptr;
-            if (AHardwareBuffer_lock(target.buffer, AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, nullptr, &dst) != 0) {
-                LOGE("cannot lock frame buffer");
-                return false;
-            }
-            for (const dnx_box& box : target.missed) {
-                copyRect(static_cast<const uint8_t*>(pixels), stride, static_cast<uint8_t*>(dst), target.stride * 4,
-                         box);
-            }
-            AHardwareBuffer_unlock(target.buffer, &acquireFence);
+        void* dst = nullptr;
+        if (AHardwareBuffer_lock(target.buffer, AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN, -1, nullptr, &dst) != 0) {
+            LOGE("cannot lock frame buffer");
+            return false;
         }
+        for (const dnx_box& box : target.missed) {
+            copyRect(static_cast<const uint8_t*>(pixels), stride, static_cast<uint8_t*>(dst), target.stride * 4, box);
+        }
+        AHardwareBuffer_unlock(target.buffer, &acquireFence);
         target.missed.clear();
         target.fullDamage = false;
 
@@ -269,8 +252,7 @@ public:
             ASurfaceTransaction_setGeometry(t, surface_, source, destination, ANATIVEWINDOW_TRANSFORM_IDENTITY);
             ASurfaceTransaction_setBufferTransparency(t, surface_, ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE);
             ASurfaceTransaction_setVisibility(t, surface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
-            ASurfaceTransaction_setZOrder(t, windowSurface_, 1);
-            ASurfaceTransaction_setZOrder(t, cursorSurface_, 2);
+            ASurfaceTransaction_setZOrder(t, cursorSurface_, 1);
             voteMaxRefreshLocked(t);
             geometryDirty_ = false;
             cursorDirty_ = true;  // cursor geometry depends on the scale
@@ -280,7 +262,6 @@ public:
         completion->framePrevious = onScreen_;
         completion->externalPrevious = external_;
         external_ = External{};
-        applyHideWindowLocked(t, completion);
         if (cursorDirty_) applyCursorLocked(t, completion);
         trackCommit(t);
         ASurfaceTransaction_setOnComplete(t, completion, onComplete);
@@ -315,8 +296,7 @@ public:
             ASurfaceTransaction_setGeometry(t, surface_, source, destination, ANATIVEWINDOW_TRANSFORM_IDENTITY);
             ASurfaceTransaction_setBufferTransparency(t, surface_, ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE);
             ASurfaceTransaction_setVisibility(t, surface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
-            ASurfaceTransaction_setZOrder(t, windowSurface_, 1);
-            ASurfaceTransaction_setZOrder(t, cursorSurface_, 2);
+            ASurfaceTransaction_setZOrder(t, cursorSurface_, 1);
             voteMaxRefreshLocked(t);
             // Our own frames set it back at their size.
             geometryDirty_ = width != width_ || height != height_;
@@ -332,7 +312,6 @@ public:
         onScreen_ = -1;
         // Our buffers missed this frame entirely.
         for (FrameBuffer& b : frames_) b.fullDamage = true;
-        applyHideWindowLocked(t, completion);
         if (cursorDirty_) applyCursorLocked(t, completion);
         trackCommit(t);
         ASurfaceTransaction_setOnComplete(t, completion, onComplete);
@@ -344,47 +323,6 @@ public:
             std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count());
         frameTimeTotalNs_ += ns;
         return true;
-    }
-
-    bool showWindow(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_box where,
-                    dnx_buffer_callback callback, void* data) {
-        std::lock_guard lock(mutex_);
-        if (surface_ == nullptr || width_ == 0 || height_ == 0) return false;
-        // Framebuffer to surface scale, as for the cursor.
-        float sx = static_cast<float>(windowWidth_) / static_cast<float>(width_);
-        float sy = static_cast<float>(windowHeight_) / static_cast<float>(height_);
-        ARect source{0, 0, static_cast<int32_t>(width), static_cast<int32_t>(height)};
-        ARect destination{static_cast<int32_t>(where.x1 * sx), static_cast<int32_t>(where.y1 * sy),
-                          static_cast<int32_t>(where.x2 * sx), static_cast<int32_t>(where.y2 * sy)};
-        ASurfaceTransaction* t = ASurfaceTransaction_create();
-        // No acquire fence, as in presentBuffer().
-        ASurfaceTransaction_setBuffer(t, windowSurface_, buffer, -1);
-        ASurfaceTransaction_setGeometry(t, windowSurface_, source, destination, ANATIVEWINDOW_TRANSFORM_IDENTITY);
-        ASurfaceTransaction_setBufferTransparency(t, windowSurface_, ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE);
-        ASurfaceTransaction_setVisibility(t, windowSurface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
-        ASurfaceTransaction_setZOrder(t, windowSurface_, 1);
-        // SurfaceFlinger picks the refresh rate from the layers that change;
-        // a window smaller than the screen alone would leave it at 60 Hz.
-        // The client renders at the display's rate (Present follows the vsync).
-        if (__builtin_available(android 30, *)) {
-            ASurfaceTransaction_setFrameRate(t, windowSurface_, maxRefreshRate_,
-                                             ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
-        }
-        AHardwareBuffer_acquire(buffer);
-        auto* completion = new Completion{this, generation_};
-        completion->window = External{buffer, callback, data};
-        completion->windowPrevious = windowBuffer_;
-        windowBuffer_ = completion->window;
-        hideWindow_ = false;
-        ASurfaceTransaction_setOnComplete(t, completion, onComplete);
-        ASurfaceTransaction_apply(t);
-        ASurfaceTransaction_delete(t);
-        return true;
-    }
-
-    void hideWindow() {
-        std::lock_guard lock(mutex_);
-        hideWindow_ = static_cast<bool>(windowBuffer_);
     }
 
     void setCursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot) {
@@ -480,7 +418,6 @@ private:
     void complete(const Completion& completion, ASurfaceTransactionStats* stats) {
         int frameFence = -1;
         int cursorFence = -1;
-        int windowFence = -1;
         bool releaseFrame = completion.frame && (completion.framePrevious >= 0 || completion.externalPrevious);
         bool releaseCursor = completion.cursor && completion.cursorPrevious >= 0;
         bool current;
@@ -491,18 +428,11 @@ private:
             if (current && releaseCursor) {
                 cursorFence = ASurfaceTransactionStats_getPreviousReleaseFenceFd(stats, cursorSurface_);
             }
-            if (current && completion.windowPrevious) {
-                // A hidden buffer is not replaced, so it has no release fence:
-                // it is no longer read once the frame without it is on screen.
-                windowFence = completion.windowHidden
-                                  ? ASurfaceTransactionStats_getPresentFenceFd(stats)
-                                  : ASurfaceTransactionStats_getPreviousReleaseFenceFd(stats, windowSurface_);
-            }
         }
         // The replaced buffers may still be read by the display until their
         // fences signal; wait outside the lock. Client buffers are reported
         // whatever happened to the surface: their clients wait for these events.
-        for (int fence : {frameFence, cursorFence, windowFence}) {
+        for (int fence : {frameFence, cursorFence}) {
             if (fence < 0) continue;
             pollfd pfd{fence, POLLIN, 0};
             poll(&pfd, 1, 1000);
@@ -524,37 +454,20 @@ private:
             AHardwareBuffer_release(completion.externalPrevious.buffer);
         }
         if (completion.external) completion.external.report(DNX_BUFFER_SHOWN);
-        if (completion.windowPrevious) {
-            completion.windowPrevious.report(DNX_BUFFER_RELEASED);
-            AHardwareBuffer_release(completion.windowPrevious.buffer);
-        }
-        if (completion.window) completion.window.report(DNX_BUFFER_SHOWN);
-    }
-
-    void applyHideWindowLocked(ASurfaceTransaction* t, Completion* completion) {
-        if (!hideWindow_) return;
-        ASurfaceTransaction_setVisibility(t, windowSurface_, ASURFACE_TRANSACTION_VISIBILITY_HIDE);
-        completion->windowPrevious = windowBuffer_;
-        completion->windowHidden = true;
-        windowBuffer_ = External{};
-        hideWindow_ = false;
     }
 
     void detachLocked() {
         if (surface_ != nullptr) {
             ASurfaceTransaction* t = ASurfaceTransaction_create();
             if (cursorSurface_ != nullptr) ASurfaceTransaction_reparent(t, cursorSurface_, nullptr);
-            if (windowSurface_ != nullptr) ASurfaceTransaction_reparent(t, windowSurface_, nullptr);
             ASurfaceTransaction_reparent(t, surface_, nullptr);
             ASurfaceTransaction_apply(t);
             ASurfaceTransaction_delete(t);
         }
         if (cursorSurface_ != nullptr) ASurfaceControl_release(cursorSurface_);
-        if (windowSurface_ != nullptr) ASurfaceControl_release(windowSurface_);
         if (surface_ != nullptr) ASurfaceControl_release(surface_);
         if (window_ != nullptr) ANativeWindow_release(window_);
         cursorSurface_ = nullptr;
-        windowSurface_ = nullptr;
         surface_ = nullptr;
         window_ = nullptr;
         generation_++;  // pending completions refer to the old surface
@@ -565,12 +478,6 @@ private:
             AHardwareBuffer_release(external_.buffer);
             external_ = External{};
         }
-        if (windowBuffer_) {
-            windowBuffer_.report(DNX_BUFFER_RELEASED);
-            AHardwareBuffer_release(windowBuffer_.buffer);
-            windowBuffer_ = External{};
-        }
-        hideWindow_ = false;
         for (CursorBuffer& c : cursors_) c.busy = false;
     }
 
@@ -583,7 +490,6 @@ private:
 
     void reallocateFramesLocked(uint32_t width, uint32_t height) {
         for (FrameBuffer& b : frames_) {
-            dnx_gpu_image_free(b.gpuImage);  // present() runs on the GPU copy thread
             if (b.buffer != nullptr) AHardwareBuffer_release(b.buffer);
             b = FrameBuffer{};
         }
@@ -593,7 +499,7 @@ private:
         desc.width = width;
         desc.height = height;
         desc.layers = 1;
-        desc.usage = kFrameUsage;
+        desc.usage = kBufferUsage;
         desc.format = kFormatBgra8888;
         swizzle_ = AHardwareBuffer_isSupported(&desc) == 0;
         if (swizzle_) desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8X8_UNORM;
@@ -712,7 +618,7 @@ private:
             desc.height = kCursorSize;
             desc.layers = 1;
             desc.format = AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM;
-            desc.usage = kCursorUsage;
+            desc.usage = kBufferUsage;
             if (AHardwareBuffer_allocate(&desc, &c.buffer) != 0) {
                 LOGE("cannot allocate cursor buffer");
                 c.buffer = nullptr;
@@ -747,7 +653,6 @@ private:
     ANativeWindow* window_ = nullptr;
     ASurfaceControl* surface_ = nullptr;
     ASurfaceControl* cursorSurface_ = nullptr;
-    ASurfaceControl* windowSurface_ = nullptr;  // a client window's buffer, between the desktop and the cursor
     float maxRefreshRate_ = 0;  // Hz, 0: unknown (no vote)
     int32_t windowWidth_ = 0;
     int32_t windowHeight_ = 0;
@@ -762,8 +667,6 @@ private:
     bool swizzle_ = false;
     int onScreen_ = -1;
     External external_;  // client buffer on screen (or about to be), instead of frames_[onScreen_]
-    External windowBuffer_;    // client buffer on the window layer
-    bool hideWindow_ = false;  // hide the window layer with the next desktop frame
     bool geometryDirty_ = true;
     bool pending_ = false;
     std::atomic<uint64_t> frameCount_{0};
@@ -810,21 +713,14 @@ void dnx_presenter_detach(void) { presenter().detach(); }
 bool dnx_presenter_attached(void) { return presenter().attached(); }
 
 bool dnx_presenter_present(const void* pixels, uint32_t width, uint32_t height, uint32_t stride_bytes,
-                           dnx_pixel_format format, AHardwareBuffer* buffer, void** gpu_image, const dnx_box* rects,
-                           int rect_count) {
-    return presenter().present(pixels, width, height, stride_bytes, format, buffer, gpu_image, rects, rect_count);
+                           dnx_pixel_format format, const dnx_box* rects, int rect_count) {
+    return presenter().present(pixels, width, height, stride_bytes, format, rects, rect_count);
 }
 
 bool dnx_presenter_present_buffer(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_buffer_callback callback,
                                   void* data) {
     return presenter().presentBuffer(buffer, width, height, callback, data);
 }
-
-bool dnx_presenter_show_window(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_box where,
-                               dnx_buffer_callback callback, void* data) {
-    return presenter().showWindow(buffer, width, height, where, callback, data);
-}
-void dnx_presenter_hide_window(void) { presenter().hideWindow(); }
 
 void dnx_presenter_set_cursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot) {
     presenter().setCursor(rgba, width, height, xhot, yhot);
