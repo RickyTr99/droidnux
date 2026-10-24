@@ -51,13 +51,14 @@ enum event_type {
     EVENT_TOUCH_CANCEL,
     EVENT_SCALE,
     EVENT_SNAPSHOT,
+    EVENT_CLIPBOARD,
 };
 
 struct event {
     uint32_t type;
     int32_t a, b; /* keycode/down, button/down, width/height, released, touch id */
     float x, y;   /* pointer or touch position, delta, scroll amount, scale */
-    void* data;   /* the buffer of EVENT_BUFFER, the text (malloc) of EVENT_*_TEXT, a snapshot */
+    void* data;   /* the buffer of EVENT_BUFFER, the text (malloc) of EVENT_*_TEXT and EVENT_CLIPBOARD, a snapshot */
 };
 
 /* Shared by the caller and the compositor thread; the last one to let go frees it. */
@@ -216,6 +217,14 @@ void dnx_wl_preedit_text(const char* utf8) {
     send_text(EVENT_PREEDIT_TEXT, utf8);
 }
 
+void dnx_wl_set_clipboard(const char* utf8) {
+    send_text(EVENT_CLIPBOARD, utf8);
+}
+
+void dnx_wl_set_clipboard_callback(void (*callback)(const char* utf8)) {
+    dnx_wl_nested_set_clipboard_callback(callback);
+}
+
 void dnx_wl_set_text_input_callback(void (*callback)(bool active)) {
     dnx_wl_nested_set_text_input_callback(callback);
 }
@@ -368,6 +377,9 @@ static void handle_event(const struct event* e) {
         break;
     case EVENT_SCALE:
         dnx_wl_nested_set_scale(e->x);
+        break;
+    case EVENT_CLIPBOARD:
+        dnx_wl_nested_set_clipboard(e->data);
         break;
     case EVENT_SNAPSHOT: {
         struct snapshot* s = e->data;

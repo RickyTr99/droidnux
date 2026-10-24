@@ -220,6 +220,37 @@ void onTextInput(bool active) {
 }
 }  // namespace
 
+namespace {
+// Text copied in the desktop goes to DisplayServer.clipboardFromDesktop, on
+// the server or compositor thread.
+JavaVM* clipboardVm;
+jclass clipboardClass;
+jmethodID clipboardMethod;
+
+void onClipboard(const char* utf8) {
+    JNIEnv* env = nullptr;
+    // The server thread lives as long as the process: attach it once.
+    if (clipboardVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK &&
+        clipboardVm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+        return;
+    }
+    auto length = static_cast<jsize>(strlen(utf8));
+    jbyteArray bytes = env->NewByteArray(length);
+    if (bytes == nullptr) return;
+    env->SetByteArrayRegion(bytes, 0, length, reinterpret_cast<const jbyte*>(utf8));
+    env->CallStaticVoidMethod(clipboardClass, clipboardMethod, bytes);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    env->DeleteLocalRef(bytes);
+}
+
+void initClipboard(JNIEnv* env, jclass clazz) {
+    if (clipboardVm != nullptr) return;
+    env->GetJavaVM(&clipboardVm);
+    clipboardClass = static_cast<jclass>(env->NewGlobalRef(clazz));
+    clipboardMethod = env->GetStaticMethodID(clazz, "clipboardFromDesktop", "([B)V");
+}
+}  // namespace
+
 extern "C" JNIEXPORT jboolean JNICALL
 Java_app_droidnux_display_DisplayServer_nativeStartWayland(JNIEnv* env, jclass clazz, jstring tmpDir, jint display,
                                                            jint width, jint height) {
@@ -230,6 +261,8 @@ Java_app_droidnux_display_DisplayServer_nativeStartWayland(JNIEnv* env, jclass c
         textInputMethod = env->GetStaticMethodID(clazz, "textInputFromWayland", "(Z)V");
         dnx_wl_set_text_input_callback(onTextInput);
     }
+    initClipboard(env, clazz);
+    dnx_wl_set_clipboard_callback(onClipboard);
     dnx_wl_config config{tmp.chars, display, width, height};
     if (!dnx_wl_start(&config)) return JNI_FALSE;
     wayland = true;
@@ -298,6 +331,16 @@ std::string utf8String(JNIEnv* env, jbyteArray bytes) {
 }  // namespace
 
 extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_DisplayServer_nativeSetClipboard(JNIEnv* env, jclass, jbyteArray utf8) {
+    std::string text = utf8String(env, utf8);
+    if (wayland) {
+        dnx_wl_set_clipboard(text.c_str());
+    } else {
+        DNX_X11_CALL(set_clipboard, text.c_str(), text.size());
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_DisplayServer_nativeCommitText(JNIEnv* env, jclass, jbyteArray utf8) {
     if (wayland) dnx_wl_commit_text(utf8String(env, utf8).c_str());
 }
@@ -341,55 +384,18 @@ Java_app_droidnux_display_DisplayServer_nativeSnapshot(JNIEnv* env, jclass, jint
     return result;
 }
 
-// Clipboard: X11 only so far.
+// X11 entry points.
 
 #if DROIDNUX_HAVE_X11
-
-namespace {
-// X clients' copies go to DisplayServer.clipboardFromX, on the X server thread.
-JavaVM* clipboardVm;
-jclass clipboardClass;
-jmethodID clipboardMethod;
-
-void onClipboardFromX(const char* utf8) {
-    JNIEnv* env = nullptr;
-    // The X server thread lives as long as the process: attach it once.
-    if (clipboardVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK &&
-        clipboardVm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
-        return;
-    }
-    auto length = static_cast<jsize>(strlen(utf8));
-    jbyteArray bytes = env->NewByteArray(length);
-    if (bytes == nullptr) return;
-    env->SetByteArrayRegion(bytes, 0, length, reinterpret_cast<const jbyte*>(utf8));
-    env->CallStaticVoidMethod(clipboardClass, clipboardMethod, bytes);
-    if (env->ExceptionCheck()) env->ExceptionClear();
-    env->DeleteLocalRef(bytes);
-}
-}  // namespace
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_app_droidnux_display_DisplayServer_nativeStart(JNIEnv* env, jclass clazz, jstring tmpDir, jstring xkbDir,
                                                     jstring fontDir, jint display, jint width, jint height, jint dpi) {
     JniString tmp(env, tmpDir), xkb(env, xkbDir), fonts(env, fontDir);
-    if (clipboardVm == nullptr) {
-        env->GetJavaVM(&clipboardVm);
-        clipboardClass = static_cast<jclass>(env->NewGlobalRef(clazz));
-        clipboardMethod = env->GetStaticMethodID(clazz, "clipboardFromX", "([B)V");
-        dnx_x11_set_clipboard_callback(onClipboardFromX);
-    }
+    initClipboard(env, clazz);
+    dnx_x11_set_clipboard_callback(onClipboard);
     dnx_x11_config config{tmp.chars, xkb.chars, fonts.chars, display, width, height, dpi};
     return dnx_x11_start(&config) ? JNI_TRUE : JNI_FALSE;
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_DisplayServer_nativeSetClipboard(JNIEnv* env, jclass, jbyteArray utf8) {
-    if (wayland) return;
-    jsize length = env->GetArrayLength(utf8);
-    jbyte* bytes = env->GetByteArrayElements(utf8, nullptr);
-    if (bytes == nullptr) return;
-    dnx_x11_set_clipboard(reinterpret_cast<const char*>(bytes), static_cast<size_t>(length));
-    env->ReleaseByteArrayElements(utf8, bytes, JNI_ABORT);
 }
 
 #else  // Wayland only: the X11 entry points answer "nothing".
@@ -398,8 +404,5 @@ extern "C" JNIEXPORT jboolean JNICALL
 Java_app_droidnux_display_DisplayServer_nativeStart(JNIEnv*, jclass, jstring, jstring, jstring, jint, jint, jint, jint) {
     return JNI_FALSE;
 }
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_DisplayServer_nativeSetClipboard(JNIEnv*, jclass, jbyteArray) {}
 
 #endif  // DROIDNUX_HAVE_X11

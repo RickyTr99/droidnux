@@ -49,6 +49,12 @@ void dnx_wl_preedit_text(const char* utf8);
  * focus: the soft keyboard may show. Set before dnx_wl_start. */
 void dnx_wl_set_text_input_callback(void (*callback)(bool active));
 
+/* Android's clipboard text (UTF-8, copied): the nested desktop pastes it. */
+void dnx_wl_set_clipboard(const char* utf8);
+/* Called on the compositor thread with the text copied in the nested desktop.
+ * Set before dnx_wl_start. */
+void dnx_wl_set_clipboard_callback(void (*callback)(const char* utf8));
+
 /* The interface scale the nested KWin should use (1.0 = 100%). */
 void dnx_wl_set_scale(double scale);
 

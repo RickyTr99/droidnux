@@ -93,6 +93,7 @@ target_sources(droidnux-display PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}/protocols/kde-output-management-v2-protocol.c
     ${CMAKE_CURRENT_LIST_DIR}/protocols/linux-dmabuf-v1-protocol.c
     ${CMAKE_CURRENT_LIST_DIR}/protocols/presentation-time-protocol.c
+    ${CMAKE_CURRENT_LIST_DIR}/protocols/wlr-data-control-unstable-v1-protocol.c
     ${CMAKE_CURRENT_LIST_DIR}/protocols/xdg-shell-protocol.c)
 set_source_files_properties(
     ${CMAKE_CURRENT_LIST_DIR}/dmabuf.c ${CMAKE_CURRENT_LIST_DIR}/nested.c ${CMAKE_CURRENT_LIST_DIR}/seat.c

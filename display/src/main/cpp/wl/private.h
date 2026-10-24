@@ -89,6 +89,10 @@ void dnx_wl_nested_set_text_input_callback(void (*callback)(bool active));
 /* Text for the focused text field, committed or composing; dropped without one. */
 void dnx_wl_nested_commit(const char* utf8);
 void dnx_wl_nested_preedit(const char* utf8);
+/* Android's clipboard text (malloc, taken) becomes KWin's clipboard. */
+void dnx_wl_nested_set_clipboard(char* utf8);
+/* Called with the text of each new KWin clipboard. */
+void dnx_wl_nested_set_clipboard_callback(void (*callback)(const char* utf8));
 
 /* -- surface.c -- */
 void dnx_wl_surface_init(struct wl_display* display);

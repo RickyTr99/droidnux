@@ -93,15 +93,15 @@ object DisplayServer {
      */
     fun snapshot(width: Int, height: Int): IntArray? = if (running) nativeSnapshot(width, height) else null
 
-    /** Called on the X server thread with the text an X client copied. */
+    /** Called on the server's thread with the text copied in the desktop. */
     @Volatile var onClipboard: ((String) -> Unit)? = null
 
-    /** Android's clipboard text: X clients paste it (CLIPBOARD selection). */
+    /** Android's clipboard text: the desktop's apps paste it. */
     fun setClipboard(text: String) {
         if (running) nativeSetClipboard(text.toByteArray())
     }
 
-    @JvmStatic private fun clipboardFromX(utf8: ByteArray) {
+    @JvmStatic private fun clipboardFromDesktop(utf8: ByteArray) {
         onClipboard?.invoke(String(utf8, Charsets.UTF_8))
     }
 
