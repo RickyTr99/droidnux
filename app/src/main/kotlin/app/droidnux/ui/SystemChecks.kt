@@ -154,5 +154,13 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
  */
 private fun phantomProcessesUnlimited(context: Context): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
-    return Settings.Global.getString(context.contentResolver, "settings_enable_monitor_phantom_procs") == "false"
+    val flag = "settings_enable_monitor_phantom_procs"
+    // Same lookup as FeatureFlagUtils: the global setting (adb) wins, then the
+    // property the developer option writes.
+    val value = Settings.Global.getString(context.contentResolver, flag)
+        ?: runCatching {
+            ProcessBuilder("getprop", "persist.sys.fflag.override.$flag").start()
+                .inputStream.bufferedReader().use { it.readText().trim() }
+        }.getOrNull()
+    return value == "false"
 }

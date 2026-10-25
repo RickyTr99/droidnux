@@ -132,7 +132,7 @@
     <string name="check_phantom">Limite ai processi</string>
     <string name="check_phantom_text">Android chiude il desktop oltre 32 programmi aperti. Disattiva «Restrizioni sui processi figli» nelle opzioni sviluppatore.</string>
     <string name="check_phantom_ok">Nessun limite: Android lascia stare i programmi del desktop</string>
-    <string name="check_phantom_steps">1. Impostazioni › Info sul tablet › Informazioni software: tocca 7 volte «Numero build».\n2. Impostazioni › Opzioni sviluppatore: attiva «Disattiva restrizioni processi figli».\n3. Torna qui.</string>
+    <string name="check_phantom_steps">1. Impostazioni › Info sul tablet (o telefono) › Informazioni software: tocca 7 volte «Numero build».\n2. Impostazioni › Opzioni sviluppatore: attiva «Disattiva restrizioni processi figli».\n3. Torna qui.</string>
     <string name="check_open_developer">Apri le opzioni sviluppatore</string>
     <string name="check_how">Come fare</string>
     <string name="check_allow">Consenti</string>

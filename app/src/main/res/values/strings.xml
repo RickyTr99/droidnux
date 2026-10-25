@@ -138,7 +138,7 @@
     <string name="check_phantom">Process limit</string>
     <string name="check_phantom_text">Android closes the desktop beyond 32 running programs. Turn off “child process restrictions” in the developer options.</string>
     <string name="check_phantom_ok">No limit: Android leaves the desktop’s programs alone</string>
-    <string name="check_phantom_steps">1. Settings › About tablet › Software information: tap “Build number” 7 times.\n2. Settings › Developer options: turn on “Disable child process restrictions”.\n3. Come back here.</string>
+    <string name="check_phantom_steps">1. Settings › About tablet (or phone) › Software information: tap “Build number” 7 times.\n2. Settings › Developer options: turn on “Disable child process restrictions”.\n3. Come back here.</string>
     <string name="check_open_developer">Open developer options</string>
     <string name="check_how">How to</string>
     <string name="check_allow">Allow</string>
