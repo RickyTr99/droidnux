@@ -8,7 +8,7 @@ display fd, so there is no reason to refuse the device.
 1857:   device->master_fd = -1;
 --- a/src/freedreno/vulkan/tu_knl_kgsl.cc
 +++ b/src/freedreno/vulkan/tu_knl_kgsl.cc
-@@ -1788,11 +1788,10 @@
+@@ -1898,11 +1898,10 @@
  VkResult
  tu_knl_kgsl_load(struct tu_instance *instance, int fd)
  {
@@ -21,6 +21,6 @@ display fd, so there is no reason to refuse the device.
 +    * has no display: the WSI gets no display fd (master_fd stays -1) and
 +    * simply reports no displays, so the instance need not fail.
 +    */
-    struct tu_physical_device *device = (struct tu_physical_device *)
+    struct tu_physical_device *device = static_cast<struct tu_physical_device *>(
        vk_zalloc(&instance->vk.alloc, sizeof(*device), 8,
-                 VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE);
+                 VK_SYSTEM_ALLOCATION_SCOPE_INSTANCE));
