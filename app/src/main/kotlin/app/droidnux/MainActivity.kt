@@ -50,7 +50,8 @@ class MainActivity : ComponentActivity() {
             DroidNuxTheme {
                 val viewModel: AppViewModel = viewModel()
                 val state by viewModel.state.collectAsStateWithLifecycle()
-                var needsAccount by remember {
+                // Checked again when the wizard ends: its account page made one.
+                var needsAccount by remember(state.ready) {
                     mutableStateOf(
                         DesktopSettings.load(this).user.isEmpty() || !Account.hasPassword(this),
                     )
