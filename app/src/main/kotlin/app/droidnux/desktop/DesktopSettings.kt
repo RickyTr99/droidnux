@@ -20,7 +20,7 @@ data class DesktopSettings(
     /** X keyboard layout; empty: the one of Android's language. */
     val layout: String = "",
     /** The frame counter in the top right corner of the desktop (debug builds). */
-    val stats: Boolean = true,
+    val stats: Boolean = false,
     /** The Linux account's name, empty until the user chose one; see [Account]. */
     val user: String = "",
 ) {

@@ -36,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -82,6 +83,7 @@ fun StoreTab(state: AppState, viewModel: AppViewModel, padding: PaddingValues) {
     var removing by remember { mutableStateOf<Entry?>(null) }
     val search = state.storeSearch?.takeIf { query.isNotBlank() }
     val row = @Composable { entry: Entry -> StoreRow(entry, state, viewModel) { removing = entry } }
+    LaunchedEffect(Unit) { viewModel.loadStoreIcons() }
 
     LazyVerticalGrid(
         columns = GridCells.Adaptive(300.dp),
@@ -224,11 +226,12 @@ private fun launcherOf(entry: Entry, installed: Boolean, viewModel: AppViewModel
     return launcher
 }
 
-/** The app's own icon once installed, else a tile in its color with its initial. */
+/** The app's own icon once installed, else Debian's (or Flathub's), else a tile in its color with its initial. */
 @Composable
-private fun StoreIcon(entry: Entry, launcher: String?, viewModel: AppViewModel, size: Dp) {
-    val icon by produceState(launcher?.let(viewModel::cachedIcon), launcher) {
-        if (value == null && launcher != null) value = withContext(Dispatchers.IO) { viewModel.icon(launcher) }
+private fun StoreIcon(entry: Entry, launcher: String?, state: AppState, viewModel: AppViewModel, size: Dp) {
+    val name = entry.app?.icon ?: entry.packages.first()
+    val icon by produceState(launcher?.let(viewModel::cachedIcon) ?: viewModel.cachedIcon("store:$name"), launcher, state.storeIcons) {
+        value = withContext(Dispatchers.IO) { launcher?.let(viewModel::icon) ?: viewModel.storeIcon(name) } ?: value
     }
     val bitmap = icon
     if (bitmap != null) {
@@ -258,7 +261,7 @@ private fun FeaturedCard(entry: Entry, state: AppState, viewModel: AppViewModel,
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            StoreIcon(entry, launcher, viewModel, 56.dp)
+            StoreIcon(entry, launcher, state, viewModel, 56.dp)
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(entry.name, fontSize = 17.sp, fontWeight = FontWeight.Medium)
                 Text(stringResource(entry.app?.vendor ?: R.string.store_vendor_debian), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -286,7 +289,7 @@ private fun StoreRow(entry: Entry, state: AppState, viewModel: AppViewModel, onR
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-            StoreIcon(entry, launcher, viewModel, 36.dp)
+            StoreIcon(entry, launcher, state, viewModel, 36.dp)
             Column(Modifier.weight(1f)) {
                 Text(entry.name, fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val summary = entry.summary ?: entry.app?.let { stringResource(it.summary) }

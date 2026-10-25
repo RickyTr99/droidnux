@@ -13,7 +13,8 @@ enum class StoreCategory(val label: Int) {
 /**
  * An app of the store: [packages] are installed together, and the launcher
  * of the first one (or [launcher]) opens it. [sizeMb] is roughly what it adds
- * to a desktop install, [color] its tile until its own icon is there.
+ * to a desktop install, [color] its tile until an icon is there. [icon] names its
+ * store icon (see AppStore.downloadIcons).
  */
 data class StoreApp(
     val id: String,
@@ -25,6 +26,7 @@ data class StoreApp(
     val color: Long,
     val vendor: Int? = null,
     val launcher: String? = null,
+    val icon: String = packages.first(),
 )
 
 object StoreCatalog {
@@ -35,9 +37,9 @@ object StoreCatalog {
         StoreApp(
             "libreoffice", "LibreOffice", R.string.store_libreoffice, StoreCategory.OFFICE,
             listOf("libreoffice-writer", "libreoffice-calc", "libreoffice-impress", "libreoffice-kf6"), 450, 0xFF18A303,
-            launcher = "libreoffice-startcenter",
+            launcher = "libreoffice-startcenter", icon = "libreoffice",
         ),
-        StoreApp("keepassxc", "KeePassXC", R.string.store_keepassxc, StoreCategory.OFFICE, listOf("keepassxc"), 30, 0xFF5E9E3A),
+        StoreApp("keepassxc", "KeePassXC", R.string.store_keepassxc, StoreCategory.OFFICE, listOf("keepassxc"), 30, 0xFF5E9E3A, icon = "keepassxc-full"),
         StoreApp("gimp", "GIMP", R.string.store_gimp, StoreCategory.GRAPHICS, listOf("gimp"), 300, 0xFF6E5494),
         StoreApp("inkscape", "Inkscape", R.string.store_inkscape, StoreCategory.GRAPHICS, listOf("inkscape"), 200, 0xFF3B3B3B),
         StoreApp("krita", "Krita", R.string.store_krita, StoreCategory.GRAPHICS, listOf("krita"), 350, 0xFFC83E8A),

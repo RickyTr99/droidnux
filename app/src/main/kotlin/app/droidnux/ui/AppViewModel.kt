@@ -95,6 +95,8 @@ data class AppState(
     /** The store's apt jobs, by store id (or package name, for search results). */
     val storeJobs: Map<String, StoreJob> = emptyMap(),
     val storeSearch: StoreSearch? = null,
+    /** The store's icons are downloaded: tiles look for theirs again. */
+    val storeIcons: Boolean = false,
 ) {
     /** Everything the desktop needs is there: the home screen instead of the first-run wizard. */
     val ready: Boolean get() = rootfs == InstallState.Installed && desktopInstalled && setup == null
@@ -126,6 +128,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val storeJobs = mutableMapOf<String, Job>()
     private val storeProcesses = java.util.concurrent.ConcurrentHashMap<String, Process>()
     private var searchJob: Job? = null
+    private val storeIconsDir = File(application.cacheDir, "store-icons")
+    private var storeIconsJob: Job? = null
 
     private val rootfs get() = container.installer.rootfsDir(_state.value.distro)
 
@@ -329,6 +333,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Decodes an app's icon (off the main thread) and keeps it for the next time. */
     fun icon(id: String): Bitmap? = icons[id] ?: DesktopEnvironment.iconFile(rootfs, id)
         ?.let { BitmapFactory.decodeFile(it.path) }?.also { icons[id] = it }
+
+    /** Downloads the store's icons, once (again on the next call if it failed). */
+    fun loadStoreIcons() {
+        if (storeIconsJob != null) return
+        storeIconsJob = viewModelScope.launch {
+            val done = withContext(Dispatchers.IO) { runCatching { AppStore.downloadIcons(storeIconsDir) } }
+            if (done.isFailure) storeIconsJob = null
+            _state.update { it.copy(storeIcons = done.isSuccess) }
+        }
+    }
+
+    /** The store's icon called [name] (off the main thread), null until downloaded. */
+    fun storeIcon(name: String): Bitmap? = icons["store:$name"] ?: File(storeIconsDir, "$name.png").takeIf { it.isFile }
+        ?.let { BitmapFactory.decodeFile(it.path) }?.also { icons["store:$name"] = it }
 
     /** First run: installs whatever is missing, in order, and stops at the first failure. */
     fun runSetup(apps: List<String> = _state.value.setup?.apps.orEmpty()) {
