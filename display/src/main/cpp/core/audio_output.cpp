@@ -17,6 +17,7 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include "audio_protocol.h"
 
@@ -33,10 +34,23 @@ constexpr uint32_t kMaxChannels = 8;
 // the latency estimate.
 constexpr int kPollMs = 200;
 constexpr int64_t kStopTimeoutNs = 200'000'000;
+// The microphone opens only if its source still runs after this: PipeWire runs
+// every node for a moment when the session starts, and each opening shows
+// Android's microphone indicator.
+constexpr int64_t kInputDelayNs = 500'000'000;
 
 std::atomic<int> gPlaying{0};
 std::atomic<dnx_audio_playing_callback> gPlayingCallback{nullptr};
 std::atomic<bool> gMuted{false};
+std::atomic<dnx_audio_volume_callback> gVolumeCallback{nullptr};
+
+class Session;
+// Android's media volume and the sinks it goes to; the mutex also keeps a
+// session's messages to its client whole.
+std::mutex gVolumeMutex;
+dnx_audio_volume gVolume{};
+bool gHaveVolume = false;
+std::vector<Session*> gSinks;
 
 bool recvAll(int fd, void* data, size_t size) {
     auto* p = static_cast<uint8_t*>(data);
@@ -61,6 +75,10 @@ public:
     explicit Session(int fd) : fd_(fd) {}
 
     ~Session() {
+        {
+            std::lock_guard lock(gVolumeMutex);
+            gSinks.erase(std::remove(gSinks.begin(), gSinks.end(), this), gSinks.end());
+        }
         setPlaying(false);
         closeStream();
         if (ring_ != nullptr) munmap(ring_, size_);
@@ -72,21 +90,45 @@ public:
         pthread_setname_np(pthread_self(), "dnx-audio");
         if (!hello()) return;
         LOGI("sink connected: %u Hz, %u channels, ring of %u frames", rate_, channels_, frames_);
+        if (!input_) {
+            std::lock_guard lock(gVolumeMutex);
+            gSinks.push_back(this);
+            if (gHaveVolume) sendVolume(gVolume);
+        }
         for (;;) {
             pollfd p{fd_, POLLIN, 0};
-            int r = poll(&p, 1, playing_ ? kPollMs : -1);
+            int timeout = playing_ ? kPollMs : -1;
+            if (startAt_ != 0) timeout = static_cast<int>(std::max<int64_t>(startAt_ - nowNs(), 0) / 1'000'000 + 1);
+            int r = poll(&p, 1, timeout);
             if (r < 0 && errno != EINTR) break;
             if (r > 0) {
                 dnx_audio_header header{};
-                if (!recvAll(fd_, &header, sizeof(header)) || header.size != 0) break;
+                if (!recvAll(fd_, &header, sizeof(header))) break;
+                if (header.type == DNX_AUDIO_VOLUME && header.size == sizeof(dnx_audio_volume)) {
+                    dnx_audio_volume volume{};
+                    if (!recvAll(fd_, &volume, sizeof(volume))) break;
+                    dnx_audio_volume_callback callback = gVolumeCallback.load();
+                    if (callback != nullptr && !input_) callback(std::clamp(volume.volume, 0.0f, 1.0f), volume.mute != 0);
+                    continue;
+                }
+                if (header.size != 0) break;
                 if (header.type == DNX_AUDIO_START) {
-                    start();
+                    if (input_) {
+                        startAt_ = nowNs() + kInputDelayNs;
+                    } else {
+                        start();
+                    }
                 } else if (header.type == DNX_AUDIO_STOP) {
+                    startAt_ = 0;
                     stop();
                 } else {
                     LOGE("unknown message %u", header.type);
                     break;
                 }
+            }
+            if (startAt_ != 0 && nowNs() >= startAt_) {
+                startAt_ = 0;
+                start();
             }
             if (!playing_) continue;
             if (lost_.exchange(false)) {
@@ -99,6 +141,17 @@ public:
             }
         }
         LOGI("sink disconnected");
+    }
+
+    // With gVolumeMutex held.
+    void sendVolume(const dnx_audio_volume& volume) {
+        struct {
+            dnx_audio_header header;
+            dnx_audio_volume volume;
+        } message{{DNX_AUDIO_VOLUME, sizeof(dnx_audio_volume)}, volume};
+        if (send(fd_, &message, sizeof(message), MSG_NOSIGNAL | MSG_DONTWAIT) != static_cast<ssize_t>(sizeof(message))) {
+            LOGW("cannot send the volume: %s", std::strerror(errno));
+        }
     }
 
 private:
@@ -228,7 +281,8 @@ private:
         if (callback != nullptr && now == (playing ? 1 : 0)) callback(playing);
     }
 
-    // The stream stays open: restarting it is faster than opening it again.
+    // An output stays open: restarting it is faster than opening it again. The
+    // microphone closes, so that Android's indicator goes away.
     void stop() {
         playing_ = false;
         setPlaying(false);
@@ -242,6 +296,7 @@ private:
              input_ ? "input" : "output", static_cast<long long>(AAudioStream_getFramesWritten(stream_)),
              __atomic_load_n(&ring_->underruns, __ATOMIC_RELAXED) - underruns_, AAudioStream_getXRunCount(stream_),
              __atomic_load_n(&ring_->latency, __ATOMIC_RELAXED));
+        if (input_) closeStream();
     }
 
     // Frames between the ring and the speaker, for the sink's delay (A/V sync).
@@ -319,6 +374,7 @@ private:
     std::atomic<bool> playing_{false};
     std::atomic<bool> lost_{false};
     bool counted_ = false;  // in gPlaying (session thread only)
+    int64_t startAt_ = 0;   // when to open the microphone (session thread only)
     bool input_ = false;    // a source: the microphone
 };
 
@@ -373,6 +429,17 @@ extern "C" void dnx_audio_output_set_playing_callback(dnx_audio_playing_callback
 }
 
 extern "C" void dnx_audio_output_set_muted(bool muted) { gMuted.store(muted); }
+
+extern "C" void dnx_audio_output_set_volume(float volume, bool mute) {
+    std::lock_guard lock(gVolumeMutex);
+    gVolume = {std::clamp(volume, 0.0f, 1.0f), mute ? 1u : 0u};
+    gHaveVolume = true;
+    for (Session* sink : gSinks) sink->sendVolume(gVolume);
+}
+
+extern "C" void dnx_audio_output_set_volume_callback(dnx_audio_volume_callback callback) {
+    gVolumeCallback.store(callback);
+}
 
 extern "C" bool dnx_audio_output_start(const char* socket_path) {
     static Server* server = new Server();  // lives as long as the process

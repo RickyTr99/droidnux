@@ -9,7 +9,9 @@
  * device's clock, and a DLL on the ring's fill corrects the timer, so the
  * graph follows the device's clock with no message per period. The sink is
  * the preferred driver; the source drives only graphs that record without
- * playing.
+ * playing. The sink's volume is Android's media volume, as a sound card's
+ * hardware volume: PipeWire scales the samples by it as for any node, and the
+ * sink scales them back before the ring, so that only Android applies it.
  *
  * Built with the NDK (display/src/main/cpp/CMakeLists.txt) as
  * libpipewire-module-droidnux.so, but loaded by the guest's PipeWire under
@@ -35,6 +37,9 @@
 #include <unistd.h>
 
 #include <spa/param/audio/format-utils.h>
+#include <spa/param/latency-utils.h>
+#include <spa/param/props.h>
+#include <spa/pod/iter.h>
 #include <spa/utils/result.h>
 
 #include <pipewire/impl.h>
@@ -57,7 +62,7 @@ PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
 #define RATE 48000u
 #define RING_FRAMES 8192u /* 170 ms, above PipeWire's largest default quantum */
 /* Fill kept in the ring above one device burst at every period: the timer's
- * jitter under proot. */
+ * jitter in the container. */
 #define MARGIN_FRAMES (RATE / 200u) /* 5 ms */
 /* After START, the first period waits for the device to run (no sound is lost
  * while AAudio starts), but not forever: a device that fails to start must not
@@ -67,6 +72,16 @@ PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
 /* Largest fill error the DLL sees, in frames, and its bandwidth (spa/utils/dll.h). */
 #define MAX_ERROR 256.0
 #define DLL_BW 0.016
+/* How often the sink checks its latency while it plays, and the change that is
+ * worth telling the graph: 20 ms, well within lip sync. A player's clock jumps
+ * with each change (Firefox drops 60 fps video frames), and AAudio's latency
+ * drifts by ~15 ms over its first seconds. */
+#define LATENCY_CHECK_MS 500
+#define LATENCY_STEP_FRAMES (RATE / 50u)
+/* The first check after START, and the latency reported before the device's
+ * is known: the Tab S9+ measures 95-110 ms. */
+#define LATENCY_FIRST_MS 150
+#define DEFAULT_LATENCY_FRAMES (RATE * 105u / 1000u)
 
 static const struct spa_dict_item module_props[] = {
     {PW_KEY_MODULE_AUTHOR, "DroidNux"},
@@ -97,6 +112,22 @@ struct impl {
     struct pw_stream* stream;
     struct spa_hook stream_listener;
     bool running; /* main loop: START sent */
+    /* Main loop, sink only: the latency the stream's port reports (frames). */
+    struct spa_source* latency_timer;
+    uint32_t latency;
+    /* Main loop, sink only: messages from the app; the node, bound through a
+     * connection of its own to set its volume as the desktop does (neither
+     * pw_stream_set_param nor the stream's own connection reach the node's
+     * converter); the volume last shown and the one PipeWire applies, which the
+     * data loop reads (atomically) to undo it; whether the app's volume still
+     * has to be set on the node. */
+    struct spa_source* sock_source;
+    struct pw_core* volume_core;
+    struct pw_registry* registry;
+    struct pw_node* node;
+    float volume, node_volume;
+    bool mute;
+    bool volume_pending;
 
     int sock;
     dnx_audio_ring* ring;
@@ -310,10 +341,20 @@ static void stream_process(void* data) {
             pw_log_debug("ring full, %u frames dropped", frames - space);
             frames = space;
         }
+        /* PipeWire scaled the period by the node's volume, which Android applies. */
+        float volume;
+        __atomic_load(&impl->node_volume, &volume, __ATOMIC_RELAXED);
+        float gain = volume > 0.0f && volume < 1.0f ? 1.0f / volume : 1.0f;
         for (uint32_t done = 0; done < frames;) {
             uint32_t at = (write + done) & (RING_FRAMES - 1);
             uint32_t n = SPA_MIN(frames - done, RING_FRAMES - at);
-            memcpy(impl->samples + at * impl->channels, src + done * impl->channels, n * frame_size(impl));
+            float* dst = impl->samples + at * impl->channels;
+            const float* from = src + done * impl->channels;
+            if (gain == 1.0f) {
+                memcpy(dst, from, n * frame_size(impl));
+            } else {
+                for (uint32_t i = 0; i < n * impl->channels; i++) dst[i] = from[i] * gain;
+            }
             done += n;
         }
         __atomic_store_n(&impl->ring->write_index, write + frames, __ATOMIC_RELEASE);
@@ -350,20 +391,149 @@ static int do_stop(struct spa_loop* loop, bool async, uint32_t seq, const void* 
     return 0;
 }
 
+/* Main loop: frames from the graph to the speaker, the ring's fill plus the
+ * device's own latency, as the sink's port latency. Players (pipewire-pulse
+ * clients: Firefox, mpv) only see a port's latency, not the driver's
+ * clock.delay: without it the picture ran ~90 ms ahead of the sound. */
+static void publish_latency(struct impl* impl, uint32_t frames) {
+    uint8_t buffer[256];
+    struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    struct spa_latency_info latency = SPA_LATENCY_INFO(SPA_DIRECTION_INPUT, .min_rate = frames, .max_rate = frames);
+    const struct spa_pod* params[1] = {spa_latency_build(&b, SPA_PARAM_Latency, &latency)};
+    impl->latency = frames;
+    pw_stream_update_params(impl->stream, params, 1);
+}
+
+static void on_latency_timer(void* data, uint64_t expirations) {
+    struct impl* impl = data;
+    (void) expirations;
+    if (!impl->running || impl->stream == NULL || __atomic_load_n(&impl->ring->burst, __ATOMIC_RELAXED) == 0) return;
+    /* 0 until the device's first timestamp, which can come after this check. */
+    uint32_t device = __atomic_load_n(&impl->ring->latency, __ATOMIC_RELAXED);
+    if (device == 0) return;
+    uint32_t frames = target_fill(impl) + device;
+    uint32_t change = frames > impl->latency ? frames - impl->latency : impl->latency - frames;
+    if (change >= LATENCY_STEP_FRAMES) publish_latency(impl, frames);
+}
+
+/* Main loop: shows Android's volume and mute as the node's, through the
+ * server, once the node is there. */
+static void apply_app_volume(struct impl* impl) {
+    uint32_t id = impl->stream ? pw_stream_get_node_id(impl->stream) : SPA_ID_INVALID;
+    if (!impl->volume_pending || id == SPA_ID_INVALID) return;
+    if (impl->node == NULL) {
+        if (impl->volume_core == NULL) impl->volume_core = pw_context_connect(impl->context, NULL, 0);
+        if (impl->volume_core != NULL && impl->registry == NULL)
+            impl->registry = pw_core_get_registry(impl->volume_core, PW_VERSION_REGISTRY, 0);
+        if (impl->registry != NULL)
+            impl->node = pw_registry_bind(impl->registry, id, PW_TYPE_INTERFACE_Node, PW_VERSION_NODE, 0);
+        if (impl->node == NULL) {
+            pw_log_warn("cannot bind the sink's node: %m");
+            return;
+        }
+    }
+    uint8_t buffer[512];
+    struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
+    struct spa_pod_frame f;
+    float volumes[SPA_AUDIO_MAX_CHANNELS];
+    for (uint32_t i = 0; i < impl->channels; i++) volumes[i] = impl->volume;
+    spa_pod_builder_push_object(&b, &f, SPA_TYPE_OBJECT_Props, SPA_PARAM_Props);
+    spa_pod_builder_prop(&b, SPA_PROP_mute, 0);
+    spa_pod_builder_bool(&b, impl->mute);
+    spa_pod_builder_prop(&b, SPA_PROP_channelVolumes, 0);
+    spa_pod_builder_array(&b, sizeof(float), SPA_TYPE_Float, impl->channels, volumes);
+    pw_node_set_param(impl->node, SPA_PARAM_Props, 0, spa_pod_builder_pop(&b, &f));
+    impl->volume_pending = false;
+}
+
+/* Main loop: the node's volume or mute changed (Plasma's slider, wpctl, or
+ * apply_app_volume): Android's media volume follows. */
+static void stream_param_changed(void* data, uint32_t id, const struct spa_pod* param) {
+    struct impl* impl = data;
+    if (impl->capture || id != SPA_PARAM_Props || param == NULL || !spa_pod_is_object(param)) return;
+    float volume = impl->volume;
+    bool mute = impl->mute;
+    const struct spa_pod_object* object = (const struct spa_pod_object*) param;
+    const struct spa_pod_prop* prop;
+    SPA_POD_OBJECT_FOREACH(object, prop) {
+        if (prop->key == SPA_PROP_mute) {
+            bool value;
+            if (spa_pod_get_bool(&prop->value, &value) == 0) mute = value;
+        } else if (prop->key == SPA_PROP_channelVolumes) {
+            float volumes[SPA_AUDIO_MAX_CHANNELS];
+            uint32_t n = spa_pod_copy_array(&prop->value, SPA_TYPE_Float, volumes, SPA_AUDIO_MAX_CHANNELS);
+            if (n > 0) {
+                volume = 0.0f;
+                for (uint32_t i = 0; i < n; i++) volume = SPA_MAX(volume, volumes[i]);
+            }
+        }
+    }
+    __atomic_store(&impl->node_volume, &volume, __ATOMIC_RELAXED);
+    if (volume == impl->volume && mute == impl->mute) return;
+    impl->volume = volume;
+    impl->mute = mute;
+    struct {
+        dnx_audio_header header;
+        dnx_audio_volume volume;
+    } message = {{DNX_AUDIO_VOLUME, sizeof(dnx_audio_volume)}, {SPA_CLAMPF(volume, 0.0f, 1.0f), mute}};
+    if (impl->sock >= 0 && send(impl->sock, &message, sizeof(message), MSG_NOSIGNAL) != sizeof(message))
+        pw_log_warn("cannot reach the app: %m");
+}
+
+/* Main loop: Android's media volume, from the app. */
+static void on_app_message(void* data, int fd, uint32_t mask) {
+    struct impl* impl = data;
+    struct {
+        dnx_audio_header header;
+        dnx_audio_volume volume;
+    } message;
+    if (mask & (SPA_IO_ERR | SPA_IO_HUP)) {
+        pw_log_warn("the app closed the connection");
+        pw_loop_destroy_source(pw_context_get_main_loop(impl->context), impl->sock_source);
+        impl->sock_source = NULL;
+        return;
+    }
+    ssize_t n = recv(fd, &message, sizeof(message), MSG_DONTWAIT);
+    if (n == (ssize_t) sizeof(message) && message.header.type == DNX_AUDIO_VOLUME &&
+        message.header.size == sizeof(dnx_audio_volume)) {
+        impl->volume = SPA_CLAMPF(message.volume.volume, 0.0f, 1.0f);
+        impl->mute = message.volume.mute != 0;
+        impl->volume_pending = true;
+        apply_app_volume(impl);
+    } else if (n > 0) {
+        pw_log_warn("unexpected message from the app (%zd bytes)", n);
+    }
+}
+
 static void stream_state_changed(void* data, enum pw_stream_state old, enum pw_stream_state state,
                                  const char* error) {
     struct impl* impl = data;
     (void) old;
+    if (state == PW_STREAM_STATE_PAUSED || state == PW_STREAM_STATE_STREAMING) apply_app_volume(impl);
+    /* A player's clock (libpulse) takes a jump of the latency for a slower
+     * rate and needs ~20 s to forget it: before the device's own, a typical
+     * latency rather than none. */
+    if (state == PW_STREAM_STATE_PAUSED && impl->latency_timer && impl->latency == 0)
+        publish_latency(impl, DEFAULT_LATENCY_FRAMES);
     if (state == PW_STREAM_STATE_STREAMING) {
         if (!impl->running) {
             impl->running = true;
             pw_loop_invoke(impl->data_loop, do_start, 0, NULL, 0, true, impl);
             send_message(impl, DNX_AUDIO_START);
+            if (impl->latency_timer) {
+                struct timespec first = {0, LATENCY_FIRST_MS * SPA_NSEC_PER_MSEC};
+                struct timespec interval = {0, LATENCY_CHECK_MS * SPA_NSEC_PER_MSEC};
+                pw_loop_update_timer(pw_context_get_main_loop(impl->context), impl->latency_timer, &first,
+                                     &interval, false);
+            }
         }
         return;
     }
     if (impl->running) {
         impl->running = false;
+        if (impl->latency_timer) {
+            pw_loop_update_timer(pw_context_get_main_loop(impl->context), impl->latency_timer, NULL, NULL, false);
+        }
         pw_loop_invoke(impl->data_loop, do_stop, 0, NULL, 0, true, impl);
         send_message(impl, DNX_AUDIO_STOP);
     }
@@ -391,6 +561,7 @@ static const struct pw_stream_events stream_events = {
     .destroy = stream_destroy,
     .state_changed = stream_state_changed,
     .io_changed = stream_io_changed,
+    .param_changed = stream_param_changed,
     .process = stream_process,
 };
 
@@ -475,6 +646,8 @@ static int create_stream(struct impl* impl) {
         "priority.driver", impl->capture ? "1500" : "2000",
         /* The source above the sink: WirePlumber also offers the sink's monitor as a source. */
         "priority.session", impl->capture ? "2100" : "2000",
+        /* WirePlumber would restore its last volume onto the node: Android's is the volume. */
+        "state.restore-props", "false",
         NULL);
     if (props == NULL) return -errno;
     pw_properties_set(props, PW_KEY_NODE_LOOP_NAME, impl->data_loop->name);
@@ -503,6 +676,11 @@ static void impl_destroy(struct impl* impl) {
     if (impl->core && impl->core_proxy_listener.link.next) spa_hook_remove(&impl->core_proxy_listener);
     if (impl->core && impl->do_disconnect) pw_core_disconnect(impl->core);
     if (impl->timer) pw_loop_destroy_source(impl->data_loop, impl->timer);
+    if (impl->latency_timer) pw_loop_destroy_source(pw_context_get_main_loop(impl->context), impl->latency_timer);
+    if (impl->sock_source) pw_loop_destroy_source(pw_context_get_main_loop(impl->context), impl->sock_source);
+    if (impl->node) pw_proxy_destroy((struct pw_proxy*) impl->node);
+    if (impl->registry) pw_proxy_destroy((struct pw_proxy*) impl->registry);
+    if (impl->volume_core) pw_core_disconnect(impl->volume_core);
     if (impl->data_loop) pw_context_release_loop(impl->context, impl->data_loop);
     if (impl->ring) munmap(impl->ring, impl->ring_size);
     if (impl->sock >= 0) close(impl->sock);
@@ -556,6 +734,14 @@ static int create_node(struct pw_impl_module* module, bool capture) {
         goto error;
     }
 
+    if (!capture) {
+        impl->latency_timer = pw_loop_add_timer(pw_context_get_main_loop(context), on_latency_timer, impl);
+        if (impl->latency_timer == NULL) {
+            res = -errno;
+            goto error;
+        }
+    }
+
     impl->core = pw_context_get_object(context, PW_TYPE_INTERFACE_Core);
     if (impl->core == NULL) {
         impl->core = pw_context_connect(context, NULL, 0);
@@ -569,6 +755,15 @@ static int create_node(struct pw_impl_module* module, bool capture) {
     pw_proxy_add_listener((struct pw_proxy*) impl->core, &impl->core_proxy_listener, &core_proxy_events, impl);
 
     if ((res = connect_app(impl)) < 0 || (res = create_stream(impl)) < 0) goto error;
+    if (!capture) {
+        impl->volume = impl->node_volume = 1.0f;
+        impl->sock_source = pw_loop_add_io(pw_context_get_main_loop(context), impl->sock, SPA_IO_IN, false,
+                                           on_app_message, impl);
+        if (impl->sock_source == NULL) {
+            res = -errno;
+            goto error;
+        }
+    }
 
     pw_impl_module_add_listener(module, &impl->module_listener, &module_events, impl);
     pw_log_info("%s through the app, %u Hz, %u channels", capture ? "recording" : "playing", RATE, impl->channels);

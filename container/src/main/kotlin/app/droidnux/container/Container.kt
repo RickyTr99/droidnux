@@ -12,12 +12,9 @@ class Container(context: Context) {
 
     private val context = context.applicationContext
 
-    val proot = Proot(context)
+    private val burrow = Burrow(context)
     val installer = RootfsInstaller(context)
     val components = ComponentInstaller(File(context.cacheDir, "downloads"))
-
-    /** Runs proot itself, without a rootfs. */
-    suspend fun prootVersion(): CommandResult = run(proot.versionCommand())
 
     /** Runs [command] inside the installed [distro]. */
     suspend fun exec(distro: Distro, command: List<String>): CommandResult {
@@ -38,25 +35,20 @@ class Container(context: Context) {
         val command = guestCommand(distro, listOf("/bin/sh", "-c", script))
         return ProcessBuilder(command)
             .redirectErrorStream(true)
-            .apply { environment().putAll(proot.hostEnvironment()) }
             .start()
     }
 
-    /** proot command for [distro], with the guest network settings refreshed first. */
+    /** Burrow command for [distro], with the guest network settings refreshed first. */
     private fun guestCommand(distro: Distro, command: List<String>): List<String> {
         val rootfs = installer.rootfsDir(distro)
-        NetworkConfig.writeResolvConf(context, rootfs)
-        return proot.guestCommand(rootfs, command)
+        NetworkConfig.writeResolvConf(context, rootfs, proxied = burrow.dnsPort > 0)
+        return burrow.guestCommand(rootfs, command)
     }
 
-    private suspend fun run(command: List<String>, workDir: File? = null): CommandResult =
+    private suspend fun run(command: List<String>): CommandResult =
         withContext(Dispatchers.IO) {
             val process = ProcessBuilder(command)
                 .redirectErrorStream(true)
-                .apply {
-                    environment().putAll(proot.hostEnvironment())
-                    workDir?.let { directory(it) }
-                }
                 .start()
             val output = process.inputStream.bufferedReader().readText()
             CommandResult(process.waitFor(), output.trimEnd())

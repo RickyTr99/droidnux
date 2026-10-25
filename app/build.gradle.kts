@@ -57,8 +57,8 @@ android {
 
     packaging {
         jniLibs {
-            // proot and its loader are executables shipped as lib*.so: they
-            // must be extracted to disk to be runnable.
+            // Burrow and the guest helpers are executables shipped as lib*.so:
+            // they must be extracted to disk to be runnable.
             useLegacyPackaging = true
         }
     }

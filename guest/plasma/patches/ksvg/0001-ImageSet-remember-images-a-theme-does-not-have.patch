@@ -1,0 +1,71 @@
+From 115e189cb27e2aa693d984aca52b47e923604bf8 Mon Sep 17 00:00:00 2001
+From: RickyTr99 <rickytorre99@gmail.com>
+Date: Wed, 21 Oct 2026 17:35:09 +0200
+Subject: [PATCH] ImageSet: remember images a theme does not have
+
+findInImageSet cached the paths it found but not the misses, so asking
+for a file a theme lacks went to the disk every time: SvgItem and
+FrameSvgItem ask for the theme's "colors" file on every creation, which
+Breeze does not ship, eight stat calls each.
+---
+ src/ksvg/private/imageset_p.cpp | 8 ++++++++
+ src/ksvg/private/imageset_p.h   | 3 +++
+ 2 files changed, 11 insertions(+)
+
+diff --git a/src/ksvg/private/imageset_p.cpp b/src/ksvg/private/imageset_p.cpp
+index cdc7a14..5808a1b 100644
+--- a/src/ksvg/private/imageset_p.cpp
++++ b/src/ksvg/private/imageset_p.cpp
+@@ -245,6 +245,11 @@ QString ImageSetPrivate::findInImageSet(const QString &image, const QString &the
+         if (it != discoveries.constEnd()) {
+             return it.value();
+         }
++        // Lookups of missing files, such as "colors" for every SvgItem with a
++        // theme that has none, would hit the disk each time.
++        if (misses.contains(theme % QLatin1Char('/') % image)) {
++            return QString();
++        }
+     }
+ 
+     QString search;
+@@ -265,6 +270,8 @@ QString ImageSetPrivate::findInImageSet(const QString &image, const QString &the
+ 
+     if (cache && !search.isEmpty()) {
+         discoveries.insert(image, search);
++    } else if (cache) {
++        misses.insert(theme % QLatin1Char('/') % image);
+     }
+ 
+     return search;
+@@ -290,6 +297,7 @@ void ImageSetPrivate::discardCache(CacheTypes caches)
+ 
+     if (caches & SvgElementsCache) {
+         discoveries.clear();
++        misses.clear();
+     }
+ }
+ 
+diff --git a/src/ksvg/private/imageset_p.h b/src/ksvg/private/imageset_p.h
+index eaf3b23..1e74d79 100644
+--- a/src/ksvg/private/imageset_p.h
++++ b/src/ksvg/private/imageset_p.h
+@@ -11,6 +11,7 @@
+ #include "imageset.h"
+ #include "svg.h"
+ #include <QHash>
++#include <QSet>
+ 
+ #include <KColorScheme>
+ #include <KImageCache>
+@@ -147,6 +148,8 @@ public:
+     QHash<qint64, QString> cachedSelectedSvgStyleSheets;
+     QHash<qint64, QString> cachedInactiveSvgStyleSheets;
+     QHash<QString, QString> discoveries;
++    // theme/image pairs findInImageSet did not find, cleared with discoveries
++    QSet<QString> misses;
+     QTimer *pixmapSaveTimer;
+     QTimer *updateNotificationTimer;
+     unsigned cacheSize;
+-- 
+2.56.0.windows.1
+

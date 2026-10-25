@@ -55,8 +55,9 @@ done
 # with it the WSI's DRM image path that X11 presentation through DRI3 needs
 # (Turnip still picks KGSL at run time, as there is no /dev/dri).
 # Desktop GL through Zink only: no LLVM (llvmpipe comes from the distro), no
-# video, no DRM-only pieces (GBM, DRI2), and only system libraries (no wrap
+# video, and only system libraries (no wrap
 # fallbacks: freedreno would pull libarchive and libxml2 for its debug tools).
+# GBM (and EGL on it) for nested compositors such as KWin on the Wayland front-end.
 meson setup "$SRC/build" "$SRC" \
     --prefix="$PREFIX" --libdir=lib/aarch64-linux-gnu \
     --buildtype=release -Db_ndebug=true -Dstrip=true --wrap-mode=nofallback \
@@ -65,7 +66,7 @@ meson setup "$SRC/build" "$SRC" \
     -Dgallium-drivers=zink \
     -Dopengl=true -Dglx=dri -Degl=enabled -Dgles1=disabled -Dgles2=enabled \
     -Dglvnd=enabled -Dglvnd-vendor-name=droidnux \
-    -Dgbm=disabled -Dllvm=disabled -Dvalgrind=disabled -Dlibunwind=disabled \
+    -Dgbm=enabled -Dllvm=disabled -Dvalgrind=disabled -Dlibunwind=disabled \
     -Dvideo-codecs= -Dtools= -Dvulkan-layers= -Dbuild-tests=false
 ninja -C "$SRC/build"
 

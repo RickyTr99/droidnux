@@ -4,7 +4,7 @@
  * AHardwareBuffers, with the cursor on its own hardware layer and a vsync
  * clock that only ticks on request.
  *
- * C API so the X server (C) can call it. Threading: present/cursor/vsync
+ * C API so the compositor (C) can call it. Threading: present/cursor/vsync
  * requests come from the display server's thread; attach/detach/resize from
  * the Android main thread. All entry points are safe to call concurrently.
  */
@@ -26,7 +26,7 @@ typedef struct dnx_box {
 
 /* Pixel layout of the framebuffer handed to dnx_presenter_present(). */
 typedef enum dnx_pixel_format {
-    DNX_PIXEL_BGRX8888 = 0, /* uint32 0x00RRGGBB, little endian: B, G, R, X in memory (X11 depth 24) */
+    DNX_PIXEL_BGRX8888 = 0, /* uint32 0x00RRGGBB, little endian: B, G, R, X in memory (wl_shm XRGB8888) */
 } dnx_pixel_format;
 
 /* Called on the vsync thread for each requested frame. */
@@ -44,14 +44,9 @@ bool dnx_presenter_attached(void);
  * the whole surface. Returns false if nothing could be presented (no surface
  * or no free buffer yet); the caller should keep its damage and retry on the
  * next vsync. A size change implies full damage.
- *
- * If `pixels` live in `buffer` (BGRX, may be NULL), the GPU copies them
- * (gpu_copy.h, same thread rules), keeping its objects for `buffer` in
- * *gpu_image; the CPU copies from `pixels` if the GPU cannot.
  */
 bool dnx_presenter_present(const void* pixels, uint32_t width, uint32_t height, uint32_t stride_bytes,
-                           dnx_pixel_format format, AHardwareBuffer* buffer, void** gpu_image, const dnx_box* rects,
-                           int rect_count);
+                           dnx_pixel_format format, const dnx_box* rects, int rect_count);
 
 /* What happened to a buffer given to dnx_presenter_present_buffer(). */
 typedef enum dnx_buffer_event {
@@ -71,21 +66,6 @@ typedef void (*dnx_buffer_callback)(dnx_buffer_event event, void* data);
 bool dnx_presenter_present_buffer(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_buffer_callback callback,
                                   void* data);
 
-/*
- * Shows the top-left width x height of a client's buffer (BGRA) on a layer
- * above the desktop, at `where` (framebuffer pixels), without copying it:
- * a window the X server would otherwise copy into the screen. Events and
- * references as for dnx_presenter_present_buffer(). Returns false, reporting
- * nothing, without a surface or before the first frame.
- */
-bool dnx_presenter_show_window(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_box where,
-                               dnx_buffer_callback callback, void* data);
-
-/* Hides that layer together with the next desktop frame, which should show
- * the window's content by then. Its buffer is RELEASED once that frame is on
- * screen. */
-void dnx_presenter_hide_window(void);
-
 /* Cursor image in RGBA8888 (straight alpha), NULL or 0x0 hides it. Coordinates are framebuffer pixels. */
 void dnx_presenter_set_cursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot);
 void dnx_presenter_move_cursor(int32_t x, int32_t y);
@@ -102,6 +82,16 @@ int dnx_presenter_refresh_rate(void);
 
 /* Frames presented since start, for the debug overlay. */
 uint64_t dnx_presenter_frame_count(void);
+
+/* True while the last frame (present or present_buffer) waits for
+ * SurfaceFlinger to latch it: another one now would replace it on screen
+ * (Android 12+; always false before). */
+bool dnx_presenter_frame_pending(void);
+
+/* Called on a binder thread when SurfaceFlinger latched the last frame: one
+ * held back by dnx_presenter_frame_pending() can go now, for the next vsync. */
+typedef void (*dnx_latch_callback)(void* data);
+void dnx_presenter_set_latch_callback(dnx_latch_callback callback, void* data);
 
 /* Time spent preparing frames (copying damage, submitting), for the debug
  * overlay: the total since start, and the longest frame since the last call. */

@@ -28,8 +28,8 @@ constexpr uint32_t kMaxSize = 8192;
 constexpr size_t kMaxBuffers = 1024;  // every GL or Vulkan window has a swapchain of a few images
 
 // The display composes these buffers directly (overlay or GPU), the client
-// renders into them, and the X server reads them with the CPU when a window
-// is not flipped.
+// renders into them, and the compositor reads them with the CPU now and then
+// (cursor images, the home screen's thumbnail).
 constexpr uint64_t kUsage = AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
                             AHARDWAREBUFFER_USAGE_COMPOSER_OVERLAY | AHARDWAREBUFFER_USAGE_CPU_READ_RARELY;
 

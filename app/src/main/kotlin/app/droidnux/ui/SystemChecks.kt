@@ -149,7 +149,7 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
 
 /**
  * Android 12+ kills an app's child processes beyond 32 ("phantom
- * processes"); Firefox and XFCE together go past that. The developer option
+ * processes"); Firefox and Plasma together go past that. The developer option
  * "Disable child process restrictions" turns the limit off.
  */
 private fun phantomProcessesUnlimited(context: Context): Boolean {

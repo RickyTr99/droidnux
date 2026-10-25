@@ -1,0 +1,191 @@
+gbm: buffers in AHardwareBuffers from the DroidNux display server
+
+With DROIDNUX_AHB_SOCKET set, linear BGRA buffers come from the
+allocator the app runs (display/src/main/cpp/core/allocator.h in
+DroidNux), imported as dma-bufs, so a nested compositor's frames reach
+Android's compositor as they are. Rows are added for Turnip's linear
+layout (4-row alignment, 4 KiB size alignment).
+
+diff --git a/src/gbm/backends/dri/gbm_dri.c b/src/gbm/backends/dri/gbm_dri.c
+index 6640f16..231dc96 100644
+--- a/src/gbm/backends/dri/gbm_dri.c
++++ b/src/gbm/backends/dri/gbm_dri.c
+@@ -35,6 +35,8 @@
+ #include <limits.h>
+ #include <assert.h>
+ #include <sys/types.h>
++#include <sys/socket.h>
++#include <sys/un.h>
+ #include <unistd.h>
+ #include <dlfcn.h>
+ #include <xf86drm.h>
+@@ -652,6 +654,9 @@ gbm_dri_bo_destroy(struct gbm_bo *_bo)
+    struct gbm_dri_bo *bo = gbm_dri_bo(_bo);
+    struct drm_mode_destroy_dumb arg;
+ 
++   if (bo->droidnux)
++      close(bo->droidnux_conn);
++
+    if (bo->image != NULL) {
+       dri2_destroy_image(bo->image);
+    } else {
+@@ -882,6 +887,130 @@ free_bo:
+    return NULL;
+ }
+ 
++/* DroidNux allocator protocol (display/src/main/cpp/core/allocator.h in
++ * DroidNux, as in the WSI): one connection per buffer, a request, a reply
++ * with the buffer's dma-buf; the buffer lives until the connection is closed.
++ */
++#define DROIDNUX_AHB_MAGIC 0x41584e44 /* "DNXA" */
++#define DROIDNUX_AHB_VERSION 1
++
++struct droidnux_ahb_request {
++   uint32_t magic, version, width, height, drm_format;
++};
++
++struct droidnux_ahb_reply {
++   int32_t status; /* 0, or a negative errno */
++   uint32_t stride; /* bytes */
++   uint64_t size;
++};
++
++/* A width x rows BGRA buffer: its connection, dma-buf and stride, or -1. */
++static int
++droidnux_ahb_alloc(uint32_t width, uint32_t rows, int *dmabuf, uint32_t *stride)
++{
++   const char *path = getenv("DROIDNUX_AHB_SOCKET");
++   struct sockaddr_un addr = { .sun_family = AF_UNIX };
++   if (path == NULL || path[0] == '\0' || strlen(path) >= sizeof(addr.sun_path))
++      return -1;
++   strcpy(addr.sun_path, path);
++
++   int conn = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
++   if (conn < 0)
++      return -1;
++   if (connect(conn, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
++      close(conn);
++      return -1;
++   }
++
++   const struct droidnux_ahb_request request = {
++      .magic = DROIDNUX_AHB_MAGIC,
++      .version = DROIDNUX_AHB_VERSION,
++      .width = width,
++      .height = rows,
++      .drm_format = DRM_FORMAT_ARGB8888,
++   };
++   struct droidnux_ahb_reply reply = { .status = -EIO };
++   char control[CMSG_SPACE(sizeof(int))];
++   struct iovec iov = { .iov_base = &reply, .iov_len = sizeof(reply) };
++   struct msghdr msg = {
++      .msg_iov = &iov,
++      .msg_iovlen = 1,
++      .msg_control = control,
++      .msg_controllen = sizeof(control),
++   };
++   int fd = -1;
++
++   if (send(conn, &request, sizeof(request), MSG_NOSIGNAL) == sizeof(request) &&
++       recvmsg(conn, &msg, MSG_CMSG_CLOEXEC | MSG_WAITALL) == sizeof(reply)) {
++      struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
++      if (cmsg && cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS)
++         memcpy(&fd, CMSG_DATA(cmsg), sizeof(fd));
++   }
++   if (reply.status != 0 || fd < 0) {
++      if (fd >= 0)
++         close(fd);
++      close(conn);
++      return -1;
++   }
++   *dmabuf = fd;
++   *stride = reply.stride;
++   return conn;
++}
++
++/* With DROIDNUX_AHB_SOCKET set, linear BGRA buffers come from the DroidNux
++ * display server (AHardwareBuffers), imported as dma-bufs: a nested
++ * compositor's frames then reach Android's compositor as they are. NULL when
++ * the buffer does not fit or the allocator is not there.
++ */
++static struct gbm_bo *
++droidnux_bo_create(struct gbm_device *gbm, uint32_t width, uint32_t height,
++                   uint32_t format, uint32_t usage,
++                   const uint64_t *modifiers, const unsigned int count)
++{
++   if (format != DRM_FORMAT_ARGB8888 && format != DRM_FORMAT_XRGB8888)
++      return NULL;
++   if (width == 0 || height == 0 || width > 16384 || height > 16384)
++      return NULL;
++   if (usage & (GBM_BO_USE_WRITE | GBM_BO_USE_CURSOR | GBM_BO_USE_PROTECTED))
++      return NULL;
++   if (modifiers) {
++      bool linear = false;
++      for (unsigned i = 0; i < count; i++)
++         linear |= modifiers[i] == DRM_FORMAT_MOD_LINEAR;
++      if (!linear)
++         return NULL;
++   }
++
++   /* Turnip aligns linear images to 4 rows and their size to 4 KiB. */
++   uint32_t rows = ((height + 3) & ~3u) + (4096 + width * 4 - 1) / (width * 4);
++   int dmabuf;
++   uint32_t stride;
++   int conn = droidnux_ahb_alloc(width, rows, &dmabuf, &stride);
++   if (conn < 0)
++      return NULL;
++
++   struct gbm_import_fd_modifier_data data = {
++      .width = width,
++      .height = height,
++      .format = format,
++      .num_fds = 1,
++      .fds = { dmabuf },
++      .strides = { (int)stride },
++      .offsets = { 0 },
++      .modifier = DRM_FORMAT_MOD_LINEAR,
++   };
++   struct gbm_bo *bo = gbm_dri_bo_import(gbm, GBM_BO_IMPORT_FD_MODIFIER, &data, usage);
++   close(dmabuf); /* the driver keeps its own reference */
++   if (bo == NULL) {
++      close(conn);
++      return NULL;
++   }
++   gbm_dri_bo(bo)->droidnux = true;
++   gbm_dri_bo(bo)->droidnux_conn = conn;
++   bo->v0.format = format;
++   return bo;
++}
++
+ static struct gbm_bo *
+ gbm_dri_bo_create(struct gbm_device *gbm,
+                   uint32_t width, uint32_t height,
+@@ -899,6 +1028,13 @@ gbm_dri_bo_create(struct gbm_device *gbm,
+ 
+    format = core->v0.format_canonicalize(format);
+ 
++   if (dri->has_dmabuf_import) {
++      struct gbm_bo *droidnux = droidnux_bo_create(gbm, width, height, format, usage,
++                                                   modifiers, count);
++      if (droidnux)
++         return droidnux;
++   }
++
+    if (usage & GBM_BO_USE_WRITE || !dri->has_dmabuf_export)
+       return create_dumb(gbm, width, height, format, usage);
+ 
+diff --git a/src/gbm/backends/dri/gbm_driint.h b/src/gbm/backends/dri/gbm_driint.h
+index 9c7588e..5519ed9 100644
+--- a/src/gbm/backends/dri/gbm_driint.h
++++ b/src/gbm/backends/dri/gbm_driint.h
+@@ -105,6 +105,10 @@ struct gbm_dri_bo {
+    /* Used for cursors and the swrast front BO */
+    uint32_t handle, size;
+    void *map;
++
++   /* DroidNux: the allocator connection that keeps the buffer alive. */
++   bool droidnux;
++   int droidnux_conn;
+ };
+ 
+ struct gbm_dri_surface {

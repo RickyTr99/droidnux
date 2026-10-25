@@ -5,6 +5,11 @@ import android.os.StatFs
 import android.text.format.Formatter
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.Checkbox
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -14,7 +19,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,7 +38,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
+import app.droidnux.desktop.Account
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -61,8 +77,11 @@ import app.droidnux.desktop.DesktopSettings
 @Composable
 fun WizardScreen(state: AppState, viewModel: AppViewModel) {
     var step by rememberSaveable { mutableStateOf(0) }
+    var apps by rememberSaveable { mutableStateOf(StoreCatalog.WIZARD_DEFAULT) }
+    // Choice, account (Plasma runs as a Linux user), apps, checks, install.
+    val pages = 5
     // An installation already under way (the activity was recreated) shows its progress.
-    val current = if (state.setup != null) 2 else step
+    val current = if (state.setup != null) pages - 1 else step
 
     Box(
         Modifier
@@ -77,28 +96,178 @@ fun WizardScreen(state: AppState, viewModel: AppViewModel) {
                     text = stringResource(R.string.wizard_welcome_text),
                     aside = { SpaceSummary() },
                     footer = {
-                        StepDots(0, 3)
+                        StepDots(0, pages)
                         Button(onClick = { step = 1 }, modifier = Modifier.height(48.dp)) { Text(stringResource(R.string.action_next)) }
                     },
                 ) { ChoicePage() }
-                1 -> WizardPage(
+                pages - 2 -> WizardPage(
                     title = stringResource(R.string.wizard_checks_title),
                     text = stringResource(R.string.wizard_checks_text),
                     footer = {
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                            FilledTonalButton(onClick = { step = 0 }, modifier = Modifier.height(48.dp)) {
+                            FilledTonalButton(onClick = { step = pages - 3 }, modifier = Modifier.height(48.dp)) {
                                 Text(stringResource(R.string.action_back))
                             }
-                            StepDots(1, 3)
+                            StepDots(pages - 2, pages)
                         }
-                        Button(onClick = { viewModel.runSetup() }, modifier = Modifier.height(48.dp)) {
+                        Button(onClick = { viewModel.runSetup(apps) }, modifier = Modifier.height(48.dp)) {
                             Text(stringResource(R.string.action_install))
                         }
                     },
                 ) { SystemChecks(state.gpu) }
-                else -> InstallPage(state, viewModel)
+                pages - 1 -> InstallPage(state, viewModel, pages)
+                2 -> AppsPage(apps, { apps = it }, back = { step = 1 }, pages = pages) { step = 3 }
+                else -> AccountPage(back = { step = 0 }, dot = 1, pages = pages) { step = 2 }
             }
         }
+    }
+}
+
+/**
+ * The desktop's Linux account: a name and a password, saved
+ * with [Account] before [onDone]. A wizard step with [back] and its [dot] of
+ * [pages], or on its own (installed before accounts existed) without them.
+ */
+@Composable
+fun AccountPage(back: (() -> Unit)?, dot: Int, pages: Int, onDone: () -> Unit) {
+    val context = LocalContext.current
+    var name by rememberSaveable { mutableStateOf(DesktopSettings.load(context).user) }
+    var password by remember { mutableStateOf("") }
+    var repeat by remember { mutableStateOf("") }
+    var visible by remember { mutableStateOf(false) }
+    val nameOk = Account.isValidName(name)
+    val passwordOk = Account.isValidPassword(password)
+    val done = nameOk && passwordOk && password == repeat
+
+    WizardPage(
+        title = stringResource(R.string.wizard_account_title),
+        text = stringResource(R.string.wizard_account_text),
+        footer = {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (back != null) {
+                    FilledTonalButton(onClick = back, modifier = Modifier.height(48.dp)) { Text(stringResource(R.string.action_back)) }
+                    StepDots(dot, pages)
+                }
+            }
+            Button(
+                onClick = {
+                    Account.savePassword(context, password)
+                    DesktopSettings.update(context) { it.copy(user = name) }
+                    onDone()
+                },
+                enabled = done,
+                modifier = Modifier.height(48.dp),
+            ) { Text(stringResource(R.string.action_next)) }
+        },
+    ) {
+        Column(Modifier.widthIn(max = 480.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.trim().lowercase() },
+                label = { Text(stringResource(R.string.wizard_account_name)) },
+                supportingText = {
+                    Text(stringResource(if (name.isEmpty() || nameOk) R.string.wizard_account_name_hint else R.string.wizard_account_name_bad))
+                },
+                isError = name.isNotEmpty() && !nameOk,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            val transformation = if (visible) VisualTransformation.None else PasswordVisualTransformation()
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text(stringResource(R.string.wizard_account_password)) },
+                singleLine = true,
+                visualTransformation = transformation,
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password, imeAction = ImeAction.Next),
+                trailingIcon = {
+                    IconButton(onClick = { visible = !visible }) {
+                        Icon(
+                            if (visible) Icons.VisibilityOff else Icons.Visibility,
+                            stringResource(if (visible) R.string.wizard_account_hide else R.string.wizard_account_show),
+                        )
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = repeat,
+                onValueChange = { repeat = it },
+                label = { Text(stringResource(R.string.wizard_account_repeat)) },
+                supportingText = {
+                    if (repeat.isNotEmpty() && repeat != password) Text(stringResource(R.string.wizard_account_mismatch))
+                },
+                isError = repeat.isNotEmpty() && repeat != password,
+                singleLine = true,
+                visualTransformation = transformation,
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/** The store's apps to install with the desktop: [chosen] ids, changed with [onChange]. */
+@Composable
+private fun AppsPage(chosen: List<String>, onChange: (List<String>) -> Unit, back: () -> Unit, pages: Int, onDone: () -> Unit) {
+    val context = LocalContext.current
+    val megabytes = chosen.mapNotNull(StoreCatalog::get).sumOf { it.sizeMb }
+    WizardPage(
+        title = stringResource(R.string.wizard_apps_title),
+        text = stringResource(R.string.wizard_apps_text),
+        aside = {
+            Column(Modifier.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SummaryLine(stringResource(R.string.wizard_apps_selected), chosen.size.toString())
+                SummaryLine(stringResource(R.string.wizard_apps_space), Formatter.formatShortFileSize(context, megabytes * 1_000_000L))
+            }
+        },
+        footer = {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilledTonalButton(onClick = back, modifier = Modifier.height(48.dp)) { Text(stringResource(R.string.action_back)) }
+                StepDots(2, pages)
+            }
+            Button(onClick = onDone, modifier = Modifier.height(48.dp)) { Text(stringResource(R.string.action_next)) }
+        },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            for ((header, apps) in listOf(R.string.wizard_apps_popular to StoreCatalog.WIZARD_POPULAR, R.string.wizard_apps_more to StoreCatalog.WIZARD_MORE)) {
+                SectionHeader(stringResource(header), Modifier.padding(top = if (header == R.string.wizard_apps_more) 12.dp else 0.dp))
+                apps.chunked(2).forEach { pair ->
+                    Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        pair.forEach { app ->
+                            val selected = app.id in chosen
+                            AppChoice(app, selected, Modifier.weight(1f).fillMaxHeight()) { onChange(if (selected) chosen - app.id else chosen + app.id) }
+                        }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppChoice(app: StoreApp, selected: Boolean, modifier: Modifier, onToggle: () -> Unit) {
+    val background by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+        label = "app",
+    )
+    Row(
+        modifier.clip(CardShape).background(background)
+            .toggleable(selected, role = Role.Checkbox, onValueChange = { onToggle() })
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Color(app.color)), contentAlignment = Alignment.Center) {
+            Text(app.name.take(1), color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Medium)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(app.name, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+            Text(stringResource(app.summary), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+        }
+        Checkbox(checked = selected, onCheckedChange = null)
     }
 }
 
@@ -176,8 +345,8 @@ private fun ChoicePage() {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SectionHeader(stringResource(R.string.wizard_desktop))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ChoiceCard(stringResource(R.string.desktop_xfce), stringResource(R.string.desktop_xfce_text), Icons.Desktop, Modifier.weight(1f))
-                ChoiceCard(stringResource(R.string.desktop_plasma), stringResource(R.string.coming_soon), null, Modifier.weight(1f))
+                ChoiceCard(stringResource(R.string.desktop_name), stringResource(R.string.desktop_text), Icons.Desktop, Modifier.weight(1f))
+                ChoiceCard(stringResource(R.string.desktop_gnome), stringResource(R.string.coming_soon), null, Modifier.weight(1f))
             }
         }
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -254,15 +423,71 @@ fun LayoutDialog(current: String, onDismiss: () -> Unit, onChoose: (String) -> U
     )
 }
 
+/** A new password for the account ([Account.changePassword]), after the current one. */
 @Composable
-private fun InstallPage(state: AppState, viewModel: AppViewModel) {
+fun PasswordDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val current = remember { Account.password(context) }
+    var old by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var repeat by remember { mutableStateOf("") }
+    var wrong by remember { mutableStateOf(false) }
+    // A keystore that lost its key (Account.password) has no current password to ask for.
+    val done = (current == null || old.isNotEmpty()) && Account.isValidPassword(password) && password == repeat
+    val field = @Composable { value: String, onChange: (String) -> Unit, label: Int, error: Int?, last: Boolean ->
+        OutlinedTextField(
+            value = value,
+            onValueChange = onChange,
+            label = { Text(stringResource(label)) },
+            supportingText = error?.let { { Text(stringResource(it)) } },
+            isError = error != null,
+            singleLine = true,
+            visualTransformation = PasswordVisualTransformation(),
+            keyboardOptions = KeyboardOptions(
+                autoCorrectEnabled = false, keyboardType = KeyboardType.Password,
+                imeAction = if (last) ImeAction.Done else ImeAction.Next,
+            ),
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_password_change)) },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.settings_password_text), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (current != null) {
+                    field(old, { old = it; wrong = false }, R.string.settings_password_current,
+                        R.string.settings_password_wrong.takeIf { wrong }, false)
+                }
+                field(password, { password = it }, R.string.settings_password_new, null, false)
+                field(repeat, { repeat = it }, R.string.wizard_account_repeat,
+                    R.string.wizard_account_mismatch.takeIf { repeat.isNotEmpty() && repeat != password }, true)
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                if (current != null && old != current) {
+                    wrong = true
+                } else {
+                    Account.changePassword(context, password)
+                    onDismiss()
+                }
+            }, enabled = done) { Text(stringResource(R.string.action_save)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+@Composable
+private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
     val context = LocalContext.current
     val setup = state.setup
     var showLog by remember { mutableStateOf(false) }
     val step = setup?.step ?: SetupStep.ROOTFS
     val mesa = state.components[Component.MESA.id]
-    val theme = state.components[Component.THEME.id]
-    val total by animateFloatAsState(overallProgress(state), label = "total")
+    val plasma = state.components[Component.PLASMA.id]
+    val total by animateFloatAsState(if (setup?.done == true) 1f else overallProgress(state), label = "total")
 
     WizardPage(
         title = stringResource(if (setup?.done == true) R.string.wizard_done_title else R.string.wizard_install_title),
@@ -274,7 +499,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel) {
             }
         },
         footer = {
-            StepDots(2, 3)
+            StepDots(pages - 1, pages)
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 when {
                     setup?.done == true -> Button(onClick = {
@@ -300,7 +525,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel) {
             )
             val (done, all) = state.desktopPackages
             StepRow(
-                stringResource(R.string.desktop_xfce),
+                stringResource(R.string.desktop_name),
                 when {
                     state.desktopInstalling && all > 0 -> stringResource(R.string.install_packages, done, all)
                     state.desktopInstalling -> stringResource(R.string.status_preparing)
@@ -321,11 +546,30 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel) {
                 (mesa as? InstallState.Installing)?.progress?.fraction(),
             )
             StepRow(
-                stringResource(R.string.section_theme),
-                stepText(theme, stringResource(R.string.install_theme_text)),
-                stepStatus(theme),
-                (theme as? InstallState.Installing)?.progress?.fraction(),
+                stringResource(R.string.plasma_component),
+                stepText(plasma, stringResource(R.string.install_plasma_text)),
+                stepStatus(plasma),
+                (plasma as? InstallState.Installing)?.progress?.fraction(),
             )
+            val apps = setup?.apps.orEmpty().mapNotNull(StoreCatalog::get)
+            if (apps.isNotEmpty()) {
+                val current = apps.indexOfFirst { state.storeJobs[it.id] is StoreJob.Running }
+                val failed = apps.filter { state.storeJobs[it.id] is StoreJob.Failed }
+                StepRow(
+                    stringResource(R.string.install_apps),
+                    when {
+                        current >= 0 -> stringResource(R.string.install_apps_now, apps[current].name, current + 1, apps.size)
+                        failed.isNotEmpty() && setup?.done == true -> stringResource(R.string.install_apps_failed, failed.joinToString { it.name })
+                        else -> stringResource(R.string.install_apps_text, apps.size)
+                    },
+                    when {
+                        current >= 0 -> StepStatus.RUNNING
+                        setup?.done == true -> if (failed.isEmpty()) StepStatus.DONE else StepStatus.FAILED
+                        else -> StepStatus.WAITING
+                    },
+                    appsProgress(state, apps).takeIf { current >= 0 },
+                )
+            }
             setup?.error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp)) }
             TextButton(onClick = { showLog = !showLog }) {
                 Text(stringResource(if (showLog) R.string.install_hide_log else R.string.install_show_log))
@@ -382,9 +626,21 @@ private fun overallProgress(state: AppState): Float {
         all > 0 -> done.toFloat() / all
         else -> 0f
     }
-    return 0.15f * part(state.rootfs) + 0.65f * desktop +
-        0.05f * part(state.components[Component.MESA.id]) + 0.15f * part(state.components[Component.THEME.id])
+    val system = 0.15f * part(state.rootfs) + 0.75f * desktop +
+        0.08f * part(state.components[Component.MESA.id]) + 0.02f * part(state.components[Component.PLASMA.id])
+    val apps = state.setup?.apps.orEmpty().mapNotNull(StoreCatalog::get)
+    return if (apps.isEmpty()) system else 0.7f * system + 0.3f * appsProgress(state, apps)
 }
+
+/** Share of the chosen [apps] installed: the ones done, and the running one's steps. */
+private fun appsProgress(state: AppState, apps: List<StoreApp>): Float = apps.sumOf { app ->
+    val job = state.storeJobs[app.id]
+    when {
+        job is StoreJob.Running && job.total > 0 -> job.done.toDouble() / job.total
+        job == null && app.packages.first() in state.packages -> 1.0
+        else -> 0.0
+    }
+}.toFloat() / apps.size
 
 @Composable
 private fun StepRow(title: String, text: String, status: StepStatus, fraction: Float?) {

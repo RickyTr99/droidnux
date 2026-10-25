@@ -25,27 +25,27 @@ data class Component(
     companion object {
         private const val RELEASES = "https://github.com/RickyTr99/droidnux/releases/download"
 
-        /** Turnip (Vulkan on Adreno through KGSL), Zink (OpenGL on Vulkan) and the VA-API driver: guest/mesa, guest/va. */
+        /** Turnip (Vulkan on Adreno through KGSL), Zink (OpenGL on Vulkan), GBM (KWin) and the VA-API driver: guest/mesa, guest/va. */
         val MESA = Component(
             id = "mesa",
-            version = "26.2.5-dn3",
-            url = "$RELEASES/mesa-26.2.5-dn3/droidnux-mesa-26.2.5-dn3-arm64.tar.xz",
-            sha256 = "9de4ae08ac96954130f30f8d040fb742a6d2352fec90db7508bc0b50082bc20c",
-            sizeBytes = 5_214_696,
+            version = "26.2.5-dn6",
+            url = "$RELEASES/mesa-26.2.5-dn6/droidnux-mesa-26.2.5-dn6-arm64.tar.xz",
+            sha256 = "be525fbaffee235acb0f5777fff4fb4b8a0ebd9c806beb9f1353cf4c63b447bd",
+            sizeBytes = 5_239_920,
             guestPath = DesktopEnvironment.MESA_PREFIX,
         )
 
-        /** Papirus icons with their caches, and Arc-Dark window borders at 1.5x and 2x: guest/theme. */
-        val THEME = Component(
-            id = "theme",
-            version = "20250501-dn1",
-            url = "$RELEASES/theme-20250501-dn1/droidnux-theme-20250501-dn1.tar.xz",
-            sha256 = "e247749f3fba45cecd559f7caa53672b26b675660ee18f662eae05723a32f6ba",
-            sizeBytes = 17_731_972,
-            guestPath = DesktopEnvironment.THEME_PREFIX,
+        /** KSvg and KIconThemes with fewer file lookups, and system monitor plugins for Android: guest/plasma. */
+        val PLASMA = Component(
+            id = "plasma",
+            version = "6.13.0-dn3",
+            url = "$RELEASES/plasma-6.13.0-dn3/droidnux-plasma-6.13.0-dn3-arm64.tar.xz",
+            sha256 = "01b82e1d06d849075157fe6f5ae5cbfc5729c4d25d5e9c25e17dcb503d473c6f",
+            sizeBytes = 181_768,
+            guestPath = DesktopEnvironment.PLASMA_PREFIX,
         )
 
-        val ALL = listOf(MESA, THEME)
+        val ALL = listOf(MESA, PLASMA)
     }
 }
 

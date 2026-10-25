@@ -9,15 +9,25 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.droidnux.desktop.Account
 import app.droidnux.desktop.DesktopActivity
+import app.droidnux.desktop.DesktopSettings
+import app.droidnux.ui.AccountPage
 import app.droidnux.ui.AppViewModel
 import app.droidnux.ui.HomeScreen
 import app.droidnux.ui.InstallState
@@ -40,6 +50,11 @@ class MainActivity : ComponentActivity() {
             DroidNuxTheme {
                 val viewModel: AppViewModel = viewModel()
                 val state by viewModel.state.collectAsStateWithLifecycle()
+                var needsAccount by remember {
+                    mutableStateOf(
+                        DesktopSettings.load(this).user.isEmpty() || !Account.hasPassword(this),
+                    )
+                }
                 LifecycleResumeEffect(Unit) {
                     viewModel.refresh()
                     onPauseOrDispose { }
@@ -48,7 +63,14 @@ class MainActivity : ComponentActivity() {
                     // Nothing until the first checks tell which screen it is.
                     if (state.rootfs != InstallState.Checking) {
                         AnimatedContent(state.ready, transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "screen") { ready ->
-                            if (ready) HomeScreen(state, viewModel) else WizardScreen(state, viewModel)
+                            when {
+                                !ready -> WizardScreen(state, viewModel)
+                                // Installed before accounts existed: the account first, then the home screen.
+                                needsAccount -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
+                                    AccountPage(back = null, dot = 0, pages = 0) { needsAccount = false }
+                                }
+                                else -> HomeScreen(state, viewModel)
+                            }
                         }
                     }
                 }

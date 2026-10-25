@@ -2,9 +2,13 @@ package app.droidnux.ui
 
 import android.app.ActivityManager
 import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.droidnux.R
+import app.droidnux.container.AppStore
 import app.droidnux.container.CommandResult
 import app.droidnux.container.Component
 import app.droidnux.container.Container
@@ -15,11 +19,14 @@ import app.droidnux.display.DisplayCore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
@@ -32,18 +39,29 @@ sealed interface InstallState {
     data class Failed(val message: String) : InstallState
 }
 
-/** The first-run installation: rootfs, desktop packages, then the components. */
+/** The first-run installation: rootfs, desktop packages, the components, then the chosen [apps] (store ids). */
 data class SetupState(
     val step: SetupStep = SetupStep.ROOTFS,
     val done: Boolean = false,
     val error: String? = null,
+    val apps: List<String> = emptyList(),
 )
 
-enum class SetupStep { ROOTFS, DESKTOP, COMPONENTS }
+enum class SetupStep { ROOTFS, DESKTOP, COMPONENTS, APPS }
+
+/** An apt job of the store, waiting for the one before it, running, or failed. */
+sealed interface StoreJob {
+    data object Queued : StoreJob
+    /** [done] of [total] steps (downloads and setups) once apt knows them, 0 of 0 before. */
+    data class Running(val removing: Boolean, val done: Int = 0, val total: Int = 0) : StoreJob
+    data class Failed(val message: String) : StoreJob
+}
+
+/** Packages found by the store's search, for [query]; null results while searching. */
+data class StoreSearch(val query: String, val results: List<AppStore.Found>? = null)
 
 data class AppState(
     val distro: Distro = Distro.DEBIAN_TRIXIE,
-    val proot: CommandResult? = null,
     val rootfs: InstallState = InstallState.Checking,
     val running: Boolean = false,
     val guest: CommandResult? = null,
@@ -66,8 +84,19 @@ data class AppState(
     val setup: SetupState? = null,
     /** The desktop's apps, once listed. */
     val apps: List<DesktopEnvironment.LinuxApp>? = null,
-    /** True while the desktop process (X server and session) is alive. */
+    /** True while the desktop process (display server and session) is alive. */
     val sessionRunning: Boolean = false,
+    /** The Home's quick launch: desktop ids, in the user's order. */
+    val homeApps: List<String> = emptyList(),
+    /** Packages installed in the rootfs, as dpkg says. */
+    val packages: Set<String> = emptySet(),
+    /** Packages installed from the store's search, listed with the installed apps. */
+    val storePackages: List<String> = emptyList(),
+    /** The store's apt jobs, by store id (or package name, for search results). */
+    val storeJobs: Map<String, StoreJob> = emptyMap(),
+    val storeSearch: StoreSearch? = null,
+    /** The store's icons are downloaded: tiles look for theirs again. */
+    val storeIcons: Boolean = false,
 ) {
     /** Everything the desktop needs is there: the home screen instead of the first-run wizard. */
     val ready: Boolean get() = rootfs == InstallState.Installed && desktopInstalled && setup == null
@@ -86,12 +115,39 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var appsJob: Job? = null
     private var appsLoadedAt = 0L
 
+    /** The last list of apps, shown at once on the next start while the container lists them again. */
+    private val appsCache = File(application.filesDir, "apps.tsv")
+    private val icons = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
+
+    /** The Home's quick launch and the store's search installs: one name per line. */
+    private val homeFile = File(application.filesDir, "home-apps.txt")
+    private val storeFile = File(application.filesDir, "store-packages.txt")
+
+    /** One apt job at a time, in the order they came (Mutex is fair). */
+    private val apt = Mutex()
+    private val storeJobs = mutableMapOf<String, Job>()
+    private val storeProcesses = java.util.concurrent.ConcurrentHashMap<String, Process>()
+    private var searchJob: Job? = null
+    private val storeIconsDir = File(application.cacheDir, "store-icons")
+    private var storeIconsJob: Job? = null
+
     private val rootfs get() = container.installer.rootfsDir(_state.value.distro)
 
     init {
         viewModelScope.launch {
-            val proot = runCatching { container.prootVersion() }
-                .getOrElse { CommandResult(-1, it.message ?: it.toString()) }
+            val cached = withContext(Dispatchers.IO) {
+                runCatching { DesktopEnvironment.parseApps(appsCache.readText()) }.getOrNull()
+            }
+            if (!cached.isNullOrEmpty()) _state.update { it.copy(apps = it.apps ?: cached.sortedBy { app -> app.name.lowercase() }) }
+        }
+        viewModelScope.launch {
+            val (home, store) = withContext(Dispatchers.IO) {
+                (if (homeFile.isFile) readLines(homeFile) else HOME_DEFAULT) to readLines(storeFile)
+            }
+            _state.update { it.copy(homeApps = home, storePackages = store) }
+            refreshPackages()
+        }
+        viewModelScope.launch {
             val installed = withContext(Dispatchers.IO) { container.installer.isInstalled(_state.value.distro) }
             val display = withContext(Dispatchers.Default) {
                 runCatching { DisplayCore.probe() }.getOrElse { it.toString() }
@@ -102,7 +158,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             Component.ALL.forEach { refreshComponent(it) }
             _state.update {
                 it.copy(
-                    proot = proot,
                     rootfs = if (installed) InstallState.Installed else InstallState.NotInstalled,
                     display = display,
                     gpu = GPU_NAME.find(display)?.let { match -> "Adreno ${match.groupValues[1]}" },
@@ -117,7 +172,140 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun refresh() {
         val processes = getApplication<Application>().getSystemService(ActivityManager::class.java).runningAppProcesses
         _state.update { state -> state.copy(sessionRunning = processes.orEmpty().any { it.processName.endsWith(":desktop") }) }
-        if (_state.value.ready && SystemClock.elapsedRealtime() - appsLoadedAt > APPS_REFRESH_MS) loadApps()
+        if (_state.value.ready && SystemClock.elapsedRealtime() - appsLoadedAt > APPS_REFRESH_MS) {
+            loadApps()
+            viewModelScope.launch { refreshPackages() } // apt in the desktop's terminal
+        }
+    }
+
+    /** Sets the Home's quick launch (desktop ids, in order). */
+    fun setHomeApps(ids: List<String>) {
+        val list = ids.distinct()
+        _state.update { it.copy(homeApps = list) }
+        viewModelScope.launch(Dispatchers.IO) { writeLines(homeFile, list) }
+    }
+
+    private suspend fun refreshPackages() {
+        val packages = withContext(Dispatchers.IO) { runCatching { AppStore.installedPackages(rootfs) }.getOrDefault(emptySet()) }
+        _state.update { it.copy(packages = packages) }
+    }
+
+    /** The launcher that opens a store app's [packages] once installed ([launcher] if it names one). */
+    fun storeLauncher(packages: List<String>, launcher: String? = null): String? =
+        launcher ?: packages.firstNotNullOfOrNull { AppStore.desktopId(rootfs, it) }
+
+    /** Installs [packages] for the store entry [key], after the apt jobs before it. */
+    fun storeInstall(key: String, packages: List<String>) = startStoreJob(key, packages, remove = false)
+
+    /** Removes [packages] (and what only they needed) for the store entry [key]. */
+    fun storeRemove(key: String, packages: List<String>) = startStoreJob(key, packages, remove = true)
+
+    /** Stops a waiting or running job; a stopped apt is finished by the next job's dpkg --configure. */
+    fun storeCancel(key: String) {
+        storeJobs[key]?.cancel()
+        storeProcesses[key]?.destroy()
+    }
+
+    private fun startStoreJob(key: String, packages: List<String>, remove: Boolean) {
+        if (storeJobs[key]?.isActive == true) return
+        storeJobs[key] = viewModelScope.launch { runStoreJob(key, packages, remove) }
+    }
+
+    /** Runs one apt job; true when apt succeeded (a failure stays in the job's state). */
+    private suspend fun runStoreJob(key: String, packages: List<String>, remove: Boolean): Boolean {
+        fun set(job: StoreJob?) = _state.update { if (job == null) it.copy(storeJobs = it.storeJobs - key) else it.copy(storeJobs = it.storeJobs + (key to job)) }
+        set(StoreJob.Queued)
+        try {
+            val error = apt.withLock {
+                set(StoreJob.Running(remove))
+                withContext(Dispatchers.IO) { runApt(key, packages, remove) { done, total -> set(StoreJob.Running(remove, done, total)) } }
+            }
+            refreshPackages()
+            if (error != null) {
+                set(StoreJob.Failed(error))
+                return false
+            }
+            set(null)
+            // Search installs are listed with the installed apps; catalog ones are known already.
+            if (StoreCatalog.get(key) == null) {
+                val list = if (remove) _state.value.storePackages - key else (_state.value.storePackages + key).distinct()
+                _state.update { it.copy(storePackages = list) }
+                withContext(Dispatchers.IO) { writeLines(storeFile, list) }
+            }
+            appsJob?.join()
+            loadApps()
+            return true
+        } catch (e: CancellationException) {
+            set(null)
+            withContext(kotlinx.coroutines.NonCancellable) { refreshPackages() }
+            throw e
+        }
+    }
+
+    /** Runs apt in the container; null when it succeeded, else the reason. */
+    private fun runApt(key: String, packages: List<String>, remove: Boolean, progress: (Int, Int) -> Unit): String? {
+        val script = if (remove) {
+            AppStore.removeScript(packages, DesktopEnvironment.desktopPackages)
+        } else {
+            AppStore.installScript(packages, Locale.getDefault().language)
+        }
+        val process = container.spawnShell(_state.value.distro, script)
+        storeProcesses[key] = process
+        var ok = false
+        var kept: String? = null
+        var last = ""
+        var total = 0
+        var done = 0
+        try {
+            process.inputStream.bufferedReader().forEachLine { line ->
+                when {
+                    line == AppStore.DONE_MARKER -> ok = true
+                    line.startsWith(AppStore.KEEP_MARKER) -> kept = line.substringAfterLast(' ')
+                    // Each new package is downloaded, then set up: two steps.
+                    line.startsWith("Get:") || line.startsWith("Setting up ") || line.startsWith("Removing ") -> done++
+                }
+                APT_SUMMARY.find(line)?.let { total += 2 * (it.groupValues[1].toInt() + it.groupValues[2].toInt()) }
+                APT_REMOVE.find(line)?.let { if (remove) total = it.groupValues[1].toInt() }
+                if (line.isNotBlank()) last = line
+                progress(done.coerceAtMost(total), total)
+            }
+            process.waitFor()
+        } catch (e: java.io.IOException) {
+            last = e.toString() // destroyed by storeCancel
+        } finally {
+            storeProcesses.remove(key)
+            process.destroy()
+        }
+        return when {
+            ok -> null
+            kept != null -> getApplication<Application>().getString(R.string.store_keep, kept)
+            else -> last
+        }
+    }
+
+    /** Searches Debian for [query] (after a short pause, so typing does not start a search per key). */
+    fun storeSearch(query: String) {
+        searchJob?.cancel()
+        val command = AppStore.searchCommand(query)
+        if (command == null) {
+            _state.update { it.copy(storeSearch = if (query.isBlank()) null else StoreSearch(query, emptyList())) }
+            return
+        }
+        _state.update { it.copy(storeSearch = StoreSearch(query, it.storeSearch?.results)) }
+        searchJob = viewModelScope.launch {
+            delay(SEARCH_DELAY_MS)
+            val results = runCatching { AppStore.parseSearch(container.shell(_state.value.distro, command).output) }.getOrDefault(emptyList())
+            _state.update { it.copy(storeSearch = StoreSearch(query, results)) }
+        }
+    }
+
+    private fun readLines(file: File): List<String> =
+        runCatching { file.readLines().map { it.trim() }.filter { it.isNotEmpty() } }.getOrDefault(emptyList())
+
+    private fun writeLines(file: File, lines: List<String>) {
+        val temp = File(file.parentFile, "${file.name}.new")
+        temp.writeText(lines.joinToString("\n", postfix = "\n"))
+        temp.renameTo(file)
     }
 
     /** Lists the desktop's apps (and renders their icons) in the container. */
@@ -129,34 +317,66 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     DesktopEnvironment.prepare(rootfs, File(getApplication<Application>().applicationInfo.nativeLibraryDir))
                 }
                 val result = container.shell(_state.value.distro, DesktopEnvironment.appsCommand(Locale.getDefault().language))
-                DesktopEnvironment.parseApps(result.output)
+                DesktopEnvironment.parseApps(result.output).also { apps ->
+                    if (apps.isNotEmpty()) withContext(Dispatchers.IO) { appsCache.writeText(result.output) }
+                }
             }.getOrNull() ?: return@launch
             appsLoadedAt = SystemClock.elapsedRealtime()
+            icons.clear() // the script redraws the icons of updated apps
             _state.update { it.copy(apps = apps.sortedBy { app -> app.name.lowercase() }) }
         }
     }
 
-    fun iconFile(id: String): File? = DesktopEnvironment.iconFile(rootfs, id)
+    /** An app's icon if already decoded, for the first frame of its tile. */
+    fun cachedIcon(id: String): Bitmap? = icons[id]
+
+    /** Decodes an app's icon (off the main thread) and keeps it for the next time. */
+    fun icon(id: String): Bitmap? = icons[id] ?: DesktopEnvironment.iconFile(rootfs, id)
+        ?.let { BitmapFactory.decodeFile(it.path) }?.also { icons[id] = it }
+
+    /** Downloads the store's icons, once (again on the next call if it failed). */
+    fun loadStoreIcons() {
+        if (storeIconsJob != null) return
+        storeIconsJob = viewModelScope.launch {
+            val done = withContext(Dispatchers.IO) { runCatching { AppStore.downloadIcons(storeIconsDir) } }
+            if (done.isFailure) storeIconsJob = null
+            _state.update { it.copy(storeIcons = done.isSuccess) }
+        }
+    }
+
+    /** The store's icon called [name] (off the main thread), null until downloaded. */
+    fun storeIcon(name: String): Bitmap? = icons["store:$name"] ?: File(storeIconsDir, "$name.png").takeIf { it.isFile }
+        ?.let { BitmapFactory.decodeFile(it.path) }?.also { icons["store:$name"] = it }
 
     /** First run: installs whatever is missing, in order, and stops at the first failure. */
-    fun runSetup() {
+    fun runSetup(apps: List<String> = _state.value.setup?.apps.orEmpty()) {
         if (setupJob?.isActive == true) return
         setupJob = viewModelScope.launch {
-            _state.update { it.copy(setup = SetupState()) }
+            _state.update { it.copy(setup = SetupState(apps = apps)) }
             try {
                 if (!withContext(Dispatchers.IO) { container.installer.isInstalled(_state.value.distro) }) {
                     installRootfs()
                 }
-                _state.update { it.copy(setup = SetupState(SetupStep.DESKTOP)) }
+                _state.update { it.copy(setup = SetupState(SetupStep.DESKTOP, apps = apps)) }
                 if (!_state.value.desktopInstalled || !_state.value.desktopUpToDate) {
                     if (!installDesktopPackages()) throw IllegalStateException(_state.value.desktopLog.lines().lastOrNull().orEmpty())
                 }
-                _state.update { it.copy(setup = SetupState(SetupStep.COMPONENTS)) }
+                _state.update { it.copy(setup = SetupState(SetupStep.COMPONENTS, apps = apps)) }
                 for (component in Component.ALL) {
                     if (component.sha256.isEmpty() || _state.value.components[component.id] == InstallState.Installed) continue
                     installComponentNow(component)
                 }
-                _state.update { it.copy(setup = SetupState(SetupStep.COMPONENTS, done = true)) }
+                _state.update { it.copy(setup = SetupState(SetupStep.APPS, apps = apps)) }
+                refreshPackages()
+                // The desktop works without them: a failed app stays failed in the store, the setup goes on.
+                for (app in apps.mapNotNull(StoreCatalog::get)) {
+                    if (app.packages.first() in _state.value.packages) continue
+                    if (runStoreJob(app.id, app.packages, remove = false)) {
+                        withContext(Dispatchers.IO) { storeLauncher(app.packages, app.launcher) }
+                            ?.let { setHomeApps(_state.value.homeApps + it) }
+                    }
+                }
+                _state.update { it.copy(setup = SetupState(SetupStep.APPS, done = true, apps = apps)) }
             } catch (e: CancellationException) {
                 _state.update { it.copy(setup = null) }
                 throw e
@@ -176,7 +396,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         loadApps()
     }
 
-    /** Installs XFCE in the container with apt, streaming the log. */
+    /** Installs the desktop in the container with apt, streaming the log. */
     fun installDesktop() {
         if (_state.value.desktopInstalling) return
         viewModelScope.launch { installDesktopPackages() }
@@ -314,5 +534,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         const val APPS_REFRESH_MS = 30_000L
         val GPU_NAME = Regex("""Adreno \(TM\) (\d+)""")
         val APT_SUMMARY = Regex("""(\d+) upgraded, (\d+) newly installed""")
+        val APT_REMOVE = Regex("""(\d+) to remove""")
+        const val SEARCH_DELAY_MS = 350L
+
+        /** The quick launch until the user changes it (apps that are not installed are not shown). */
+        val HOME_DEFAULT = listOf("firefox-esr", "org.kde.dolphin", "org.kde.konsole", "systemsettings")
     }
 }

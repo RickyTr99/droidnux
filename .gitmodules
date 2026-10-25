@@ -1,6 +1,12 @@
-[submodule "third_party/proot"]
-	path = third_party/proot
-	url = https://github.com/termux/proot.git
-[submodule "third_party/termux-x11"]
-	path = third_party/termux-x11
-	url = https://github.com/termux/termux-x11.git
+[submodule "third_party/wayland"]
+	path = third_party/wayland
+	url = https://gitlab.freedesktop.org/wayland/wayland.git
+[submodule "third_party/libffi"]
+	path = third_party/libffi
+	url = https://github.com/libffi/libffi.git
+[submodule "third_party/wayland-protocols"]
+	path = third_party/wayland-protocols
+	url = https://gitlab.freedesktop.org/wayland/wayland-protocols.git
+[submodule "third_party/plasma-wayland-protocols"]
+	path = third_party/plasma-wayland-protocols
+	url = https://invent.kde.org/libraries/plasma-wayland-protocols.git
