@@ -2,6 +2,8 @@ package app.droidnux.ui
 
 import android.app.ActivityManager
 import android.app.Application
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -86,9 +88,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private var appsJob: Job? = null
     private var appsLoadedAt = 0L
 
+    /** The last list of apps, shown at once on the next start while the container lists them again. */
+    private val appsCache = File(application.filesDir, "apps.tsv")
+    private val icons = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
+
     private val rootfs get() = container.installer.rootfsDir(_state.value.distro)
 
     init {
+        viewModelScope.launch {
+            val cached = withContext(Dispatchers.IO) {
+                runCatching { DesktopEnvironment.parseApps(appsCache.readText()) }.getOrNull()
+            }
+            if (!cached.isNullOrEmpty()) _state.update { it.copy(apps = it.apps ?: cached.sortedBy { app -> app.name.lowercase() }) }
+        }
         viewModelScope.launch {
             val installed = withContext(Dispatchers.IO) { container.installer.isInstalled(_state.value.distro) }
             val display = withContext(Dispatchers.Default) {
@@ -126,14 +138,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     DesktopEnvironment.prepare(rootfs, File(getApplication<Application>().applicationInfo.nativeLibraryDir))
                 }
                 val result = container.shell(_state.value.distro, DesktopEnvironment.appsCommand(Locale.getDefault().language))
-                DesktopEnvironment.parseApps(result.output)
+                DesktopEnvironment.parseApps(result.output).also { apps ->
+                    if (apps.isNotEmpty()) withContext(Dispatchers.IO) { appsCache.writeText(result.output) }
+                }
             }.getOrNull() ?: return@launch
             appsLoadedAt = SystemClock.elapsedRealtime()
+            icons.clear() // the script redraws the icons of updated apps
             _state.update { it.copy(apps = apps.sortedBy { app -> app.name.lowercase() }) }
         }
     }
 
-    fun iconFile(id: String): File? = DesktopEnvironment.iconFile(rootfs, id)
+    /** An app's icon if already decoded, for the first frame of its tile. */
+    fun cachedIcon(id: String): Bitmap? = icons[id]
+
+    /** Decodes an app's icon (off the main thread) and keeps it for the next time. */
+    fun icon(id: String): Bitmap? = icons[id] ?: DesktopEnvironment.iconFile(rootfs, id)
+        ?.let { BitmapFactory.decodeFile(it.path) }?.also { icons[id] = it }
 
     /** First run: installs whatever is missing, in order, and stops at the first failure. */
     fun runSetup() {

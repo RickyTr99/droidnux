@@ -360,8 +360,8 @@ private fun AppsTab(state: AppState, viewModel: AppViewModel, padding: PaddingVa
 @Composable
 private fun AppTile(app: LinuxApp, viewModel: AppViewModel, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val icon by produceState<Bitmap?>(null, app.id) {
-        value = withContext(Dispatchers.IO) { viewModel.iconFile(app.id)?.let { BitmapFactory.decodeFile(it.path) } }
+    val icon by produceState(viewModel.cachedIcon(app.id), app.id) {
+        if (value == null) value = withContext(Dispatchers.IO) { viewModel.icon(app.id) }
     }
     var menu by remember { mutableStateOf(false) }
     Box(modifier) {

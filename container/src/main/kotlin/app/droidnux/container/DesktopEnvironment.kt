@@ -61,6 +61,15 @@ object DesktopEnvironment {
     /** Opens KDE's wallet with the password before and moves it to the new one (WALLET). */
     private const val WALLET_SCRIPT = "$GUEST_LIB_DIR/droidnux-wallet"
 
+    /**
+     * Android's battery for the desktop: the app writes it to BATTERY_FILE,
+     * UPOWER_SCRIPT serves it as UPower on a system bus of our own (SYSTEM_BUS).
+     */
+    private const val BATTERY_FILE = "/run/droidnux-battery/state"
+    private const val UPOWER_SCRIPT = "$GUEST_LIB_DIR/droidnux-upower"
+    private const val SYSTEM_BUS_CONF = "$GUEST_LIB_DIR/system-bus.conf"
+    private const val SYSTEM_BUS_SOCKET = "/run/dbus/system_bus_socket"
+
     /** Plasma on the app's Wayland compositor, with KDE's everyday apps. */
     private val PLASMA_PACKAGES = listOf(
         "plasma-workspace", "plasma-desktop", "kwin-wayland", "breeze", "xkb-data",
@@ -69,6 +78,8 @@ object DesktopEnvironment {
         // xkbcomp builds the keymap the compositor sends (SESSION).
         "x11-xkb-utils",
         "systemsettings", "kinfocenter", "plasma-systemmonitor", "plasma-pa", "xdg-desktop-portal-kde",
+        // The battery applet (Plasma 6.3 moved it here), fed by UPOWER.
+        "powerdevil",
         // Display settings: the scale, which the app's compositor follows.
         "kscreen",
         // The desktop's user administers with sudo (USER_SESSION).
@@ -165,11 +176,15 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PLASMA_DEFAULTS/kscreenlockerrc", PLASMA_SCREENLOCKER.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/kwalletrc", PLASMA_KWALLETRC.toByteArray())
         writeFile(rootfs, WALLET_SCRIPT, WALLET.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, UPOWER_SCRIPT, UPOWER.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, SYSTEM_BUS_CONF, SYSTEM_BUS.toByteArray())
+        writeFile(rootfs, "$PLASMA_DEFAULTS/powerdevilrc", PLASMA_POWERDEVILRC.toByteArray())
         writeFile(rootfs, IM_DESKTOP_FILE, IM_DESKTOP.toByteArray())
         writeFile(rootfs, IM_PROGRAM, File(nativeLibraryDir, IM_LIBRARY).readBytes(), mode = 0x1ED)
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/metadata.json", PLASMA_LNF_METADATA.toByteArray())
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/contents/defaults", PLASMA_LNF_DEFAULTS.toByteArray())
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/contents/layouts/org.kde.plasma.desktop-layout.js", PLASMA_LAYOUT.toByteArray())
+        writeFile(rootfs, PLASMA_BATTERY_UPDATE, PLASMA_BATTERY.toByteArray())
         writeFile(rootfs, FIREFOX_PREFS_PATH, FIREFOX_PREFS.toByteArray())
         OBSOLETE_FILES.forEach { removeFile(rootfs, it) }
     }
@@ -405,7 +420,8 @@ object DesktopEnvironment {
         (until p=${'$'}(pgrep -x plasmashell | head -1) && [ -n "${'$'}p" ]; do sleep 1; done
         sleep 2
         env=${'$'}XDG_RUNTIME_DIR/.droidnux-plasmashell-environ
-        cp /proc/${'$'}p/environ "${'$'}env" || exit
+        # The copy keeps environ's mode (0400): the last session's cannot be overwritten.
+        rm -f "${'$'}env" && cp /proc/${'$'}p/environ "${'$'}env" || exit
         n=0
         while [ ${'$'}n -lt 20 ]; do
             tail --pid="${'$'}p" -f /dev/null
@@ -494,6 +510,12 @@ object DesktopEnvironment {
             unset pass before
             if [ -d /etc/sudoers.d ]; then
                 echo "${'$'}user ${'$'}sudo" > /etc/sudoers.d/droidnux && chmod 440 /etc/sudoers.d/droidnux
+            fi
+            # A system bus with UPower on it, as root: Plasma shows Android's battery.
+            mkdir -p ${SYSTEM_BUS_SOCKET.substringBeforeLast('/')} && rm -f $SYSTEM_BUS_SOCKET
+            if dbus-daemon --config-file=$SYSTEM_BUS_CONF --fork --nopidfile; then
+                export DBUS_SYSTEM_BUS_ADDRESS=unix:path=$SYSTEM_BUS_SOCKET
+                $UPOWER_SCRIPT &
             fi
             exec perl -e '${'$'}u = shift; @g = split / /, shift; ${'$'}) = "${'$'}g[0] @g"; ${'$'}( = ${'$'}g[0]; ${'$'}< = ${'$'}> = ${'$'}u;
                 die "cannot become ${'$'}u\n" if ${'$'}> != ${'$'}u; exec @ARGV or die "exec: ${'$'}!\n"' \
@@ -710,6 +732,204 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         print(f"droidnux-wallet: {count} entries moved to the new password")
     """.trimIndent() + "\n"
 
+    /**
+     * Android's battery for the desktop's UPower ([UPOWER]): charge in percent,
+     * [charging], [plugged] in, seconds to full (0 = unknown), °C and volts.
+     * Written only when it changes; safe to call often.
+     */
+    fun writeBattery(rootfs: File, percent: Int, charging: Boolean, full: Boolean, plugged: Boolean, toFull: Long, celsius: Float, volts: Float) {
+        val state = when {
+            full -> "full"
+            charging -> "charging"
+            plugged -> "pending"
+            else -> "discharging"
+        }
+        writeFile(
+            rootfs, BATTERY_FILE,
+            "percent=$percent\nstate=$state\nplugged=${if (plugged) 1 else 0}\nto_full=$toFull\ncelsius=$celsius\nvolts=$volts\n".toByteArray(),
+        )
+    }
+
+    /** The system bus: no services started on demand, and everyone may talk to everyone (one user, in a container). */
+    private val SYSTEM_BUS = """
+        <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+         "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+        <!-- Written by DroidNux. -->
+        <busconfig>
+          <type>system</type>
+          <listen>unix:path=$SYSTEM_BUS_SOCKET</listen>
+          <auth>EXTERNAL</auth>
+          <auth>ANONYMOUS</auth>
+          <allow_anonymous/>
+          <policy context="default">
+            <allow user="*"/>
+            <allow own="*"/>
+            <allow send_destination="*" eavesdrop="true"/>
+            <allow receive_sender="*"/>
+          </policy>
+        </busconfig>
+    """.trimIndent() + "\n"
+
+    /**
+     * UPower with one battery and one charger, from [BATTERY_FILE]: what Plasma's
+     * battery applet and powerdevil read (Solid's UPower backend).
+     */
+    private val UPOWER = """
+        #!/usr/bin/python3
+        # Written by DroidNux: Android's battery as UPower (org.freedesktop.UPower)
+        # on the system bus, from the state the app writes to $BATTERY_FILE.
+        import time
+
+        from gi.repository import Gio, GLib
+
+        STATE = "$BATTERY_FILE"
+        BASE = "/org/freedesktop/UPower"
+        BATTERY = BASE + "/devices/battery_android"
+        CHARGER = BASE + "/devices/line_power_android"
+        DISPLAY = BASE + "/devices/DisplayDevice"
+        DEVICE_PROPS = {
+            "NativePath": "s", "Vendor": "s", "Model": "s", "Serial": "s", "UpdateTime": "t", "Type": "u",
+            "PowerSupply": "b", "HasHistory": "b", "HasStatistics": "b", "Online": "b", "Energy": "d",
+            "EnergyEmpty": "d", "EnergyFull": "d", "EnergyFullDesign": "d", "EnergyRate": "d", "Voltage": "d",
+            "ChargeCycles": "i", "Luminosity": "d", "TimeToEmpty": "x", "TimeToFull": "x", "Percentage": "d",
+            "Temperature": "d", "IsPresent": "b", "State": "u", "IsRechargeable": "b", "Capacity": "d",
+            "Technology": "u", "WarningLevel": "u", "BatteryLevel": "u", "IconName": "s",
+        }
+        DAEMON_PROPS = {"DaemonVersion": "s", "OnBattery": "b", "LidIsClosed": "b", "LidIsPresent": "b"}
+        # UPower's State values.
+        STATES = {"charging": 1, "discharging": 2, "full": 4, "pending": 5}
+
+        NODE = Gio.DBusNodeInfo.new_for_xml(
+            '<node><interface name="org.freedesktop.UPower">'
+            '<method name="EnumerateDevices"><arg type="ao" direction="out"/></method>'
+            '<method name="GetDisplayDevice"><arg type="o" direction="out"/></method>'
+            '<method name="GetCriticalAction"><arg type="s" direction="out"/></method>'
+            '<signal name="DeviceAdded"><arg type="o"/></signal><signal name="DeviceRemoved"><arg type="o"/></signal>'
+            + "".join(f'<property name="{n}" type="{t}" access="read"/>' for n, t in DAEMON_PROPS.items())
+            + '</interface><interface name="org.freedesktop.UPower.Device"><method name="Refresh"/>'
+            '<method name="GetHistory"><arg type="s" direction="in"/><arg type="u" direction="in"/>'
+            '<arg type="u" direction="in"/><arg type="a(udu)" direction="out"/></method>'
+            '<method name="GetStatistics"><arg type="s" direction="in"/><arg type="a(dd)" direction="out"/></method>'
+            + "".join(f'<property name="{n}" type="{t}" access="read"/>' for n, t in DEVICE_PROPS.items())
+            + "</interface></node>")
+        DAEMON, DEVICE = NODE.interfaces
+
+
+        def read_state():
+            state = {}
+            try:
+                with open(STATE) as f:
+                    for line in f:
+                        key, _, value = line.strip().partition("=")
+                        state[key] = value
+            except OSError:
+                pass
+            return state
+
+
+        def props(path, state):
+            percent = float(state.get("percent", 0))
+            plugged = state.get("plugged") == "1"
+            if path == DAEMON_PATH:
+                return {"DaemonVersion": "1.90.9", "OnBattery": not plugged, "LidIsClosed": False, "LidIsPresent": False}
+            p = {n: {"s": "", "b": False, "d": 0.0}.get(t, 0) for n, t in DEVICE_PROPS.items()}
+            p["UpdateTime"] = int(time.time())
+            p["PowerSupply"] = True
+            p["IsPresent"] = bool(state)
+            p["WarningLevel"] = 1
+            p["BatteryLevel"] = 1
+            if path == CHARGER:
+                p.update(NativePath="android-charger", Type=1, Online=plugged)
+                return p
+            charging = state.get("state") == "charging"
+            discharging = state.get("state") == "discharging"
+            p.update(NativePath="android-battery" if path == BATTERY else "", Type=2, Percentage=percent,
+                     State=STATES.get(state.get("state"), 0), IsRechargeable=True, Technology=1, Capacity=100.0,
+                     TimeToFull=int(state.get("to_full", 0)) if charging else 0,
+                     Temperature=float(state.get("celsius", 0)), Voltage=float(state.get("volts", 0)),
+                     WarningLevel=4 if discharging and percent <= 5 else 3 if discharging and percent <= 10 else 1,
+                     IconName="battery-level-%d%s-symbolic" % (int(percent) // 10 * 10, "-charging" if charging else ""))
+            return p
+
+
+        DAEMON_PATH = BASE
+        PATHS = [DAEMON_PATH, BATTERY, CHARGER, DISPLAY]
+        current = read_state()
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+
+
+        def get_property(connection, sender, path, interface, name):
+            props_of = DAEMON_PROPS if path == DAEMON_PATH else DEVICE_PROPS
+            return GLib.Variant(props_of[name], props(path, current)[name])
+
+
+        def method_call(connection, sender, path, interface, method, parameters, invocation):
+            replies = {
+                "EnumerateDevices": GLib.Variant("(ao)", ([BATTERY, CHARGER],)),
+                "GetDisplayDevice": GLib.Variant("(o)", (DISPLAY,)),
+                "GetCriticalAction": GLib.Variant("(s)", ("PowerOff",)),
+                "GetHistory": GLib.Variant("(a(udu))", ([],)),
+                "GetStatistics": GLib.Variant("(a(dd))", ([],)),
+            }
+            invocation.return_value(replies.get(method))
+
+
+        def reload(*_):
+            global current
+            state = read_state()
+            if state == current:
+                return True
+            before, current = current, state
+            for path in PATHS:
+                old, new = props(path, before), props(path, current)
+                changed = {n: v for n, v in new.items() if n != "UpdateTime" and old[n] != v}
+                if not changed:
+                    continue
+                types = DAEMON_PROPS if path == DAEMON_PATH else DEVICE_PROPS
+                changed["UpdateTime"] = new.get("UpdateTime", 0)
+                bus.emit_signal(None, path, "org.freedesktop.DBus.Properties", "PropertiesChanged", GLib.Variant(
+                    "(sa{sv}as)", (DAEMON.name if path == DAEMON_PATH else DEVICE.name,
+                                   {n: GLib.Variant(types[n], v) for n, v in changed.items() if n in types}, [])))
+            return True
+
+
+        for path in PATHS:
+            bus.register_object(path, DAEMON if path == DAEMON_PATH else DEVICE, method_call, get_property, None)
+        Gio.bus_own_name_on_connection(bus, "org.freedesktop.UPower", Gio.BusNameOwnerFlags.NONE, None, None)
+        monitor = Gio.File.new_for_path(STATE).monitor_file(Gio.FileMonitorFlags.WATCH_MOVES, None)
+        monitor.connect("changed", reload)
+        # In case a change was missed.
+        GLib.timeout_add_seconds(60, reload)
+        GLib.MainLoop().run()
+    """.trimIndent() + "\n"
+
+    /** Android dims, locks and sleeps the device: powerdevil does none of it. */
+    private val PLASMA_POWERDEVILRC = """
+        [General]
+        BatteryCriticalAction=0
+
+        [AC][Display]
+        DimDisplayWhenIdle=false
+        TurnOffDisplayWhenIdle=false
+
+        [AC][SuspendAndShutdown]
+        AutoSuspendAction=0
+
+        [Battery][Display]
+        DimDisplayWhenIdle=false
+        TurnOffDisplayWhenIdle=false
+
+        [Battery][SuspendAndShutdown]
+        AutoSuspendAction=0
+
+        [LowBattery][Display]
+        DimDisplayWhenIdle=false
+        TurnOffDisplayWhenIdle=false
+
+        [LowBattery][SuspendAndShutdown]
+        AutoSuspendAction=0
+    """.trimIndent() + "\n"
+
     /** No lock screen: Android locks the device. */
     private val PLASMA_SCREENLOCKER = """
         [Daemon]
@@ -785,6 +1005,26 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
                     "preferred://browser",
                     "applications:org.kde.konsole.desktop",
                 ])
+            }
+        }
+    """.trimIndent() + "\n"
+
+    /** Run once by plasmashell, on new and existing desktops alike. */
+    private const val PLASMA_BATTERY_UPDATE = "/usr/share/plasma/shells/org.kde.plasma.desktop/contents/updates/droidnux-battery.js"
+
+    // Plasma hides the battery while it is full and plugged in: always in the
+    // panel instead, with its percentage, as on Android's status bar.
+    private val PLASMA_BATTERY = """
+        for (const panel of panels()) {
+            for (const systray of panel.widgets("org.kde.plasma.systemtray")) {
+                const tray = desktopById(systray.readConfig("SystrayContainmentId"))
+                if (!tray) continue
+                tray.currentConfigGroup = ["General"]
+                const shown = tray.readConfig("shownItems", [])
+                if (shown.indexOf("org.kde.plasma.battery") < 0) tray.writeConfig("shownItems", shown.concat(["org.kde.plasma.battery"]))
+                const battery = tray.widgets("org.kde.plasma.battery")[0] || tray.addWidget("org.kde.plasma.battery")
+                battery.currentConfigGroup = ["General"]
+                battery.writeConfig("showPercentage", true)
             }
         }
     """.trimIndent() + "\n"

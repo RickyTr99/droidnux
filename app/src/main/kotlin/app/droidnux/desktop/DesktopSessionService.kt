@@ -5,9 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.os.BatteryManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -21,6 +24,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * Keeps the desktop session alive: a foreground service in the :desktop
@@ -32,6 +36,7 @@ class DesktopSessionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val handler = Handler(Looper.getMainLooper())
     private var session: Process? = null
+    private var battery: BroadcastReceiver? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -56,6 +61,7 @@ class DesktopSessionService : Service() {
     }
 
     override fun onDestroy() {
+        battery?.let { unregisterReceiver(it) }
         stopSession()
         scope.cancel()
         super.onDestroy()
@@ -66,6 +72,14 @@ class DesktopSessionService : Service() {
         val container = Container(this)
         val rootfs = container.installer.rootfsDir(distro)
         DesktopEnvironment.prepare(rootfs, java.io.File(applicationInfo.nativeLibraryDir))
+        // Android's battery in the desktop (sticky: the first call comes at once).
+        if (battery == null) {
+            battery = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    scope.launch { runCatching { writeBattery(rootfs, intent) }.onFailure { Log.w(TAG, "battery: $it") } }
+                }
+            }.also { registerReceiver(it, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
+        }
         val user = DesktopSettings.load(this).user
         val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, user))
         val password = Account.password(this).orEmpty()
@@ -105,6 +119,22 @@ class DesktopSessionService : Service() {
         stopSelf()
         // Let the activity close first; a restart then starts a new display server.
         handler.postDelayed({ android.os.Process.killProcess(android.os.Process.myPid()) }, EXIT_DELAY_MS)
+    }
+
+    // Volts to 0.1 and degrees to 1: the file (and Plasma) change only when something shows.
+    private fun writeBattery(rootfs: java.io.File, intent: Intent) {
+        val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+        val toFull = getSystemService(BatteryManager::class.java).computeChargeTimeRemaining()
+        DesktopEnvironment.writeBattery(
+            rootfs,
+            percent = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, 0) * 100 / intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100).coerceAtLeast(1),
+            charging = status == BatteryManager.BATTERY_STATUS_CHARGING,
+            full = status == BatteryManager.BATTERY_STATUS_FULL,
+            plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) != 0,
+            toFull = if (toFull > 0) toFull / 1000 else 0,
+            celsius = (intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) / 10f).roundToInt().toFloat(),
+            volts = (intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0) / 100f).roundToInt() / 10f,
+        )
     }
 
     private fun stopSession() {
