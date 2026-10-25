@@ -114,6 +114,9 @@ object DesktopEnvironment {
 
     private val PACKAGES = PLASMA_PACKAGES + COMMON_PACKAGES
 
+    /** The packages of the desktop itself: the store never removes them. */
+    val desktopPackages: List<String> get() = PACKAGES
+
     /** Written by [installScript]: the package list of the last successful install. */
     private const val PACKAGES_MARKER = "var/lib/droidnux/desktop-packages"
 

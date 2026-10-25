@@ -5,6 +5,11 @@ import android.os.StatFs
 import android.text.format.Formatter
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.Checkbox
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -14,7 +19,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -70,8 +77,9 @@ import app.droidnux.desktop.DesktopSettings
 @Composable
 fun WizardScreen(state: AppState, viewModel: AppViewModel) {
     var step by rememberSaveable { mutableStateOf(0) }
-    // Choice, account (Plasma runs as a Linux user), checks, install.
-    val pages = 4
+    var apps by rememberSaveable { mutableStateOf(StoreCatalog.WIZARD_DEFAULT) }
+    // Choice, account (Plasma runs as a Linux user), apps, checks, install.
+    val pages = 5
     // An installation already under way (the activity was recreated) shows its progress.
     val current = if (state.setup != null) pages - 1 else step
 
@@ -102,12 +110,13 @@ fun WizardScreen(state: AppState, viewModel: AppViewModel) {
                             }
                             StepDots(pages - 2, pages)
                         }
-                        Button(onClick = { viewModel.runSetup() }, modifier = Modifier.height(48.dp)) {
+                        Button(onClick = { viewModel.runSetup(apps) }, modifier = Modifier.height(48.dp)) {
                             Text(stringResource(R.string.action_install))
                         }
                     },
                 ) { SystemChecks(state.gpu) }
                 pages - 1 -> InstallPage(state, viewModel, pages)
+                2 -> AppsPage(apps, { apps = it }, back = { step = 1 }, pages = pages) { step = 3 }
                 else -> AccountPage(back = { step = 0 }, dot = 1, pages = pages) { step = 2 }
             }
         }
@@ -196,6 +205,69 @@ fun AccountPage(back: (() -> Unit)?, dot: Int, pages: Int, onDone: () -> Unit) {
                 modifier = Modifier.fillMaxWidth(),
             )
         }
+    }
+}
+
+/** The store's apps to install with the desktop: [chosen] ids, changed with [onChange]. */
+@Composable
+private fun AppsPage(chosen: List<String>, onChange: (List<String>) -> Unit, back: () -> Unit, pages: Int, onDone: () -> Unit) {
+    val context = LocalContext.current
+    val megabytes = chosen.mapNotNull(StoreCatalog::get).sumOf { it.sizeMb }
+    WizardPage(
+        title = stringResource(R.string.wizard_apps_title),
+        text = stringResource(R.string.wizard_apps_text),
+        aside = {
+            Column(Modifier.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SummaryLine(stringResource(R.string.wizard_apps_selected), chosen.size.toString())
+                SummaryLine(stringResource(R.string.wizard_apps_space), Formatter.formatShortFileSize(context, megabytes * 1_000_000L))
+            }
+        },
+        footer = {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                FilledTonalButton(onClick = back, modifier = Modifier.height(48.dp)) { Text(stringResource(R.string.action_back)) }
+                StepDots(2, pages)
+            }
+            Button(onClick = onDone, modifier = Modifier.height(48.dp)) { Text(stringResource(R.string.action_next)) }
+        },
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            for ((header, apps) in listOf(R.string.wizard_apps_popular to StoreCatalog.WIZARD_POPULAR, R.string.wizard_apps_more to StoreCatalog.WIZARD_MORE)) {
+                SectionHeader(stringResource(header), Modifier.padding(top = if (header == R.string.wizard_apps_more) 12.dp else 0.dp))
+                apps.chunked(2).forEach { pair ->
+                    Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        pair.forEach { app ->
+                            val selected = app.id in chosen
+                            AppChoice(app, selected, Modifier.weight(1f).fillMaxHeight()) { onChange(if (selected) chosen - app.id else chosen + app.id) }
+                        }
+                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppChoice(app: StoreApp, selected: Boolean, modifier: Modifier, onToggle: () -> Unit) {
+    val background by animateColorAsState(
+        if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
+        label = "app",
+    )
+    Row(
+        modifier.clip(CardShape).background(background)
+            .toggleable(selected, role = Role.Checkbox, onValueChange = { onToggle() })
+            .padding(horizontal = 20.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Color(app.color)), contentAlignment = Alignment.Center) {
+            Text(app.name.take(1), color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Medium)
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(app.name, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
+            Text(stringResource(app.summary), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+        }
+        Checkbox(checked = selected, onCheckedChange = null)
     }
 }
 
@@ -479,6 +551,25 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
                 stepStatus(plasma),
                 (plasma as? InstallState.Installing)?.progress?.fraction(),
             )
+            val apps = setup?.apps.orEmpty().mapNotNull(StoreCatalog::get)
+            if (apps.isNotEmpty()) {
+                val current = apps.indexOfFirst { state.storeJobs[it.id] is StoreJob.Running }
+                val failed = apps.filter { state.storeJobs[it.id] is StoreJob.Failed }
+                StepRow(
+                    stringResource(R.string.install_apps),
+                    when {
+                        current >= 0 -> stringResource(R.string.install_apps_now, apps[current].name, current + 1, apps.size)
+                        failed.isNotEmpty() && setup?.done == true -> stringResource(R.string.install_apps_failed, failed.joinToString { it.name })
+                        else -> stringResource(R.string.install_apps_text, apps.size)
+                    },
+                    when {
+                        current >= 0 -> StepStatus.RUNNING
+                        setup?.done == true -> if (failed.isEmpty()) StepStatus.DONE else StepStatus.FAILED
+                        else -> StepStatus.WAITING
+                    },
+                    appsProgress(state, apps).takeIf { current >= 0 },
+                )
+            }
             setup?.error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp)) }
             TextButton(onClick = { showLog = !showLog }) {
                 Text(stringResource(if (showLog) R.string.install_hide_log else R.string.install_show_log))
@@ -535,9 +626,21 @@ private fun overallProgress(state: AppState): Float {
         all > 0 -> done.toFloat() / all
         else -> 0f
     }
-    return 0.15f * part(state.rootfs) + 0.75f * desktop +
+    val system = 0.15f * part(state.rootfs) + 0.75f * desktop +
         0.08f * part(state.components[Component.MESA.id]) + 0.02f * part(state.components[Component.PLASMA.id])
+    val apps = state.setup?.apps.orEmpty().mapNotNull(StoreCatalog::get)
+    return if (apps.isEmpty()) system else 0.7f * system + 0.3f * appsProgress(state, apps)
 }
+
+/** Share of the chosen [apps] installed: the ones done, and the running one's steps. */
+private fun appsProgress(state: AppState, apps: List<StoreApp>): Float = apps.sumOf { app ->
+    val job = state.storeJobs[app.id]
+    when {
+        job is StoreJob.Running && job.total > 0 -> job.done.toDouble() / job.total
+        job == null && app.packages.first() in state.packages -> 1.0
+        else -> 0.0
+    }
+}.toFloat() / apps.size
 
 @Composable
 private fun StepRow(title: String, text: String, status: StepStatus, fraction: Float?) {
