@@ -74,61 +74,66 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
             text = stringResource(if (phantomOk) R.string.check_phantom_ok else R.string.check_phantom_text),
             icon = if (phantomOk) Icons.Check else Icons.Warning,
             iconTint = if (phantomOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-        ) {
-            if (!phantomOk) FilledTonalButton(onClick = { phantomHelp = true }) { Text(stringResource(R.string.check_how)) }
-        }
+            action = if (phantomOk) null else {
+                { FilledTonalButton(onClick = { phantomHelp = true }) { Text(stringResource(R.string.check_how)) } }
+            },
+        )
         InfoRow(
             title = stringResource(R.string.check_battery),
             text = stringResource(R.string.check_battery_text),
             icon = if (batteryOk) Icons.Check else Icons.Info,
             iconTint = if (batteryOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        ) {
-            if (!batteryOk) {
-                FilledTonalButton(onClick = {
-                    context.startActivity(
-                        Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.fromParts("package", context.packageName, null)),
-                    )
-                }) { Text(stringResource(R.string.check_allow)) }
-            }
-        }
+            action = if (batteryOk) null else {
+                {
+                    FilledTonalButton(onClick = {
+                        context.startActivity(
+                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.fromParts("package", context.packageName, null)),
+                        )
+                    }) { Text(stringResource(R.string.check_allow)) }
+                }
+            },
+        )
         InfoRow(
             title = stringResource(R.string.check_files),
             text = stringResource(R.string.check_files_text),
             icon = if (filesOk) Icons.Check else Icons.Info,
             iconTint = if (filesOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        ) {
-            if (!filesOk) {
-                FilledTonalButton(onClick = {
-                    context.startActivity(
-                        Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.fromParts("package", context.packageName, null)),
-                    )
-                }) { Text(stringResource(R.string.check_allow)) }
-            }
-        }
+            action = if (filesOk) null else {
+                {
+                    FilledTonalButton(onClick = {
+                        context.startActivity(
+                            Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.fromParts("package", context.packageName, null)),
+                        )
+                    }) { Text(stringResource(R.string.check_allow)) }
+                }
+            },
+        )
         InfoRow(
             title = stringResource(R.string.check_microphone),
             text = stringResource(R.string.check_microphone_text),
             icon = if (microphoneOk) Icons.Check else Icons.Info,
             iconTint = if (microphoneOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        ) {
-            if (!microphoneOk) {
-                FilledTonalButton(onClick = { microphone.launch(Manifest.permission.RECORD_AUDIO) }) {
-                    Text(stringResource(R.string.check_allow))
+            action = if (microphoneOk) null else {
+                {
+                    FilledTonalButton(onClick = { microphone.launch(Manifest.permission.RECORD_AUDIO) }) {
+                        Text(stringResource(R.string.check_allow))
+                    }
                 }
-            }
-        }
+            },
+        )
         InfoRow(
             title = stringResource(R.string.check_notifications),
             text = stringResource(R.string.check_notifications_text),
             icon = if (notificationsOk) Icons.Check else Icons.Info,
             iconTint = if (notificationsOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-        ) {
-            if (!notificationsOk && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                FilledTonalButton(onClick = { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
-                    Text(stringResource(R.string.check_allow))
+            action = if (notificationsOk || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) null else {
+                {
+                    FilledTonalButton(onClick = { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
+                        Text(stringResource(R.string.check_allow))
+                    }
                 }
-            }
-        }
+            },
+        )
     }
 
     if (phantomHelp) {

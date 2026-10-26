@@ -53,7 +53,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -61,6 +63,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -116,7 +122,7 @@ fun WizardScreen(state: AppState, viewModel: AppViewModel) {
                     },
                 ) { SystemChecks(state.gpu) }
                 pages - 1 -> InstallPage(state, viewModel, pages)
-                2 -> AppsPage(apps, { apps = it }, back = { step = 1 }, pages = pages) { step = 3 }
+                2 -> AppsPage(state, viewModel, apps, { apps = it }, back = { step = 1 }, pages = pages) { step = 3 }
                 else -> AccountPage(back = { step = 0 }, dot = 1, pages = pages) { step = 2 }
             }
         }
@@ -210,8 +216,18 @@ fun AccountPage(back: (() -> Unit)?, dot: Int, pages: Int, onDone: () -> Unit) {
 
 /** The store's apps to install with the desktop: [chosen] ids, changed with [onChange]. */
 @Composable
-private fun AppsPage(chosen: List<String>, onChange: (List<String>) -> Unit, back: () -> Unit, pages: Int, onDone: () -> Unit) {
+private fun AppsPage(
+    state: AppState,
+    viewModel: AppViewModel,
+    chosen: List<String>,
+    onChange: (List<String>) -> Unit,
+    back: () -> Unit,
+    pages: Int,
+    onDone: () -> Unit,
+) {
     val context = LocalContext.current
+    val columns = if (isCompact()) 1 else 2
+    LaunchedEffect(Unit) { viewModel.loadStoreIcons() }
     val megabytes = chosen.mapNotNull(StoreCatalog::get).sumOf { it.sizeMb }
     WizardPage(
         title = stringResource(R.string.wizard_apps_title),
@@ -233,13 +249,15 @@ private fun AppsPage(chosen: List<String>, onChange: (List<String>) -> Unit, bac
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             for ((header, apps) in listOf(R.string.wizard_apps_popular to StoreCatalog.WIZARD_POPULAR, R.string.wizard_apps_more to StoreCatalog.WIZARD_MORE)) {
                 SectionHeader(stringResource(header), Modifier.padding(top = if (header == R.string.wizard_apps_more) 12.dp else 0.dp))
-                apps.chunked(2).forEach { pair ->
+                apps.chunked(columns).forEach { pair ->
                     Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         pair.forEach { app ->
                             val selected = app.id in chosen
-                            AppChoice(app, selected, Modifier.weight(1f).fillMaxHeight()) { onChange(if (selected) chosen - app.id else chosen + app.id) }
+                            AppChoice(app, selected, state, viewModel, Modifier.weight(1f).fillMaxHeight()) {
+                                onChange(if (selected) chosen - app.id else chosen + app.id)
+                            }
                         }
-                        if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        if (pair.size < columns) Spacer(Modifier.weight(1f))
                     }
                 }
             }
@@ -248,7 +266,7 @@ private fun AppsPage(chosen: List<String>, onChange: (List<String>) -> Unit, bac
 }
 
 @Composable
-private fun AppChoice(app: StoreApp, selected: Boolean, modifier: Modifier, onToggle: () -> Unit) {
+private fun AppChoice(app: StoreApp, selected: Boolean, state: AppState, viewModel: AppViewModel, modifier: Modifier, onToggle: () -> Unit) {
     val background by animateColorAsState(
         if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
         label = "app",
@@ -260,8 +278,17 @@ private fun AppChoice(app: StoreApp, selected: Boolean, modifier: Modifier, onTo
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Color(app.color)), contentAlignment = Alignment.Center) {
-            Text(app.name.take(1), color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Medium)
+        // The store's icon (as in the Store), its initial on its color until downloaded.
+        val icon by produceState(viewModel.cachedIcon("store:${app.icon}"), state.storeIcons) {
+            value = withContext(Dispatchers.IO) { viewModel.storeIcon(app.icon) } ?: value
+        }
+        val bitmap = icon
+        if (bitmap != null) {
+            Image(bitmap.asImageBitmap(), null, Modifier.size(44.dp))
+        } else {
+            Box(Modifier.size(44.dp).clip(RoundedCornerShape(12.dp)).background(Color(app.color)), contentAlignment = Alignment.Center) {
+                Text(app.name.take(1), color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Medium)
+            }
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(app.name, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
@@ -280,13 +307,25 @@ private fun WizardPage(
     footer: @Composable () -> Unit,
     content: @Composable () -> Unit,
 ) {
-    BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 48.dp, vertical = 32.dp)) {
+    val compact = isCompact()
+    BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = if (compact) 20.dp else 48.dp, vertical = if (compact) 24.dp else 32.dp)) {
         val wide = maxWidth > 840.dp
         Column(Modifier.fillMaxSize()) {
             val intro = @Composable {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text(title, fontSize = 36.sp, lineHeight = 42.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
-                    Text(text, fontSize = 17.sp, lineHeight = 25.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        title,
+                        fontSize = if (compact) 28.sp else 36.sp,
+                        lineHeight = if (compact) 34.sp else 42.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Text(
+                        text,
+                        fontSize = if (compact) 15.sp else 17.sp,
+                        lineHeight = if (compact) 22.sp else 25.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     aside()
                 }
             }
@@ -302,7 +341,7 @@ private fun WizardPage(
                 }
             }
             Row(
-                Modifier.fillMaxWidth().padding(top = 24.dp),
+                Modifier.fillMaxWidth().padding(top = if (compact) 16.dp else 24.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) { footer() }
@@ -333,21 +372,35 @@ private fun ChoicePage() {
     val context = LocalContext.current
     var layout by remember { mutableStateOf(DesktopSettings.load(context).layout) }
     var choosingLayout by remember { mutableStateOf(false) }
+    // Side by side, or one above the other on a phone (the names would not fit).
+    val pair = @Composable { first: @Composable (Modifier) -> Unit, second: @Composable (Modifier) -> Unit ->
+        if (isCompact()) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                first(Modifier.fillMaxWidth())
+                second(Modifier.fillMaxWidth())
+            }
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                first(Modifier.weight(1f))
+                second(Modifier.weight(1f))
+            }
+        }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SectionHeader(stringResource(R.string.wizard_distro))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ChoiceCard(stringResource(R.string.distro_debian), stringResource(R.string.distro_debian_text), Icons.Debian, Modifier.weight(1f))
-                ChoiceCard(stringResource(R.string.distro_ubuntu), stringResource(R.string.coming_soon), null, Modifier.weight(1f))
-            }
+            pair(
+                { ChoiceCard(stringResource(R.string.distro_debian), stringResource(R.string.distro_debian_text), Icons.Debian, it) },
+                { ChoiceCard(stringResource(R.string.distro_ubuntu), stringResource(R.string.coming_soon), null, it) },
+            )
         }
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SectionHeader(stringResource(R.string.wizard_desktop))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                ChoiceCard(stringResource(R.string.desktop_name), stringResource(R.string.desktop_text), Icons.Desktop, Modifier.weight(1f))
-                ChoiceCard(stringResource(R.string.desktop_gnome), stringResource(R.string.coming_soon), null, Modifier.weight(1f))
-            }
+            pair(
+                { ChoiceCard(stringResource(R.string.desktop_name), stringResource(R.string.desktop_text), Icons.Desktop, it) },
+                { ChoiceCard(stringResource(R.string.desktop_gnome), stringResource(R.string.coming_soon), null, it) },
+            )
         }
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SectionHeader(stringResource(R.string.settings_keyboard))
@@ -522,6 +575,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
                 stepText(state.rootfs, stringResource(R.string.install_rootfs_text)),
                 stepStatus(state.rootfs),
                 (state.rootfs as? InstallState.Installing)?.progress?.fraction(),
+                stepDetail(state.rootfs),
             )
             val apt = state.desktopProgress
             StepRow(
@@ -529,12 +583,8 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
                 when {
                     !state.desktopInstalling -> stringResource(R.string.install_desktop_text)
                     apt.packages == 0 -> stringResource(R.string.status_package_list)
-                    apt.downloading && apt.totalBytes > 0 -> stringResource(
-                        R.string.status_downloading,
-                        Formatter.formatShortFileSize(context, apt.fetchedBytes),
-                        Formatter.formatShortFileSize(context, apt.totalBytes),
-                    )
-                    else -> stringResource(R.string.install_packages, apt.setUp, apt.packages)
+                    apt.downloading -> stringResource(R.string.status_download)
+                    else -> stringResource(R.string.status_installing)
                 },
                 when {
                     state.desktopInstalling -> StepStatus.RUNNING
@@ -543,18 +593,29 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
                     else -> StepStatus.WAITING
                 },
                 if (state.desktopInstalling) apt.fraction() else null,
+                when {
+                    apt.packages == 0 -> null
+                    apt.downloading -> stringResource(
+                        R.string.status_bytes,
+                        Formatter.formatShortFileSize(context, apt.fetchedBytes),
+                        Formatter.formatShortFileSize(context, apt.totalBytes),
+                    ).takeIf { apt.totalBytes > 0 }
+                    else -> stringResource(R.string.install_packages, apt.setUp, apt.packages)
+                },
             )
             StepRow(
                 stringResource(R.string.install_gpu),
                 stepText(mesa, stringResource(R.string.install_gpu_text)),
                 stepStatus(mesa),
                 (mesa as? InstallState.Installing)?.progress?.fraction(),
+                stepDetail(mesa),
             )
             StepRow(
                 stringResource(R.string.plasma_component),
                 stepText(plasma, stringResource(R.string.install_plasma_text)),
                 stepStatus(plasma),
                 (plasma as? InstallState.Installing)?.progress?.fraction(),
+                stepDetail(plasma),
             )
             val apps = setup?.apps.orEmpty().mapNotNull(StoreCatalog::get)
             if (apps.isNotEmpty()) {
@@ -602,14 +663,21 @@ private fun stepStatus(state: InstallState?) = when (state) {
 }
 
 @Composable
-private fun stepText(state: InstallState?, idle: String): String = when (val progress = (state as? InstallState.Installing)?.progress) {
+private fun stepText(state: InstallState?, idle: String): String = when ((state as? InstallState.Installing)?.progress) {
+    is InstallProgress.Downloading -> stringResource(R.string.status_download)
+    is InstallProgress.Extracting -> stringResource(R.string.status_extract)
+    else -> (state as? InstallState.Failed)?.message ?: idle
+}
+
+/** The amount downloaded, under the bar. */
+@Composable
+private fun stepDetail(state: InstallState?): String? = when (val progress = (state as? InstallState.Installing)?.progress) {
     is InstallProgress.Downloading -> stringResource(
-        R.string.status_downloading,
+        R.string.status_bytes,
         Formatter.formatShortFileSize(LocalContext.current, progress.bytes),
         Formatter.formatShortFileSize(LocalContext.current, progress.total),
     )
-    is InstallProgress.Extracting -> stringResource(R.string.status_extracting, ((progress.fraction() ?: 0f) * 100).toInt())
-    else -> (state as? InstallState.Failed)?.message ?: idle
+    else -> null
 }
 
 private fun InstallProgress.fraction(): Float? = when (this) {
@@ -645,8 +713,9 @@ private fun appsProgress(state: AppState, apps: List<StoreApp>): Float = apps.su
     }
 }.toFloat() / apps.size
 
+/** A step of the installation; while it runs, a bar with [detail] and the percentage under it. */
 @Composable
-private fun StepRow(title: String, text: String, status: StepStatus, fraction: Float?) {
+private fun StepRow(title: String, text: String, status: StepStatus, fraction: Float?, detail: String? = null) {
     val running = status == StepStatus.RUNNING
     Column(
         Modifier.fillMaxWidth().clip(RowShape)
@@ -666,14 +735,18 @@ private fun StepRow(title: String, text: String, status: StepStatus, fraction: F
                 Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
                 Text(text, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
             }
-            if (fraction != null) Text("${(fraction * 100).toInt()}%", fontSize = 15.sp, fontWeight = FontWeight.Medium)
         }
         if (running) {
-            Spacer(Modifier.size(0.dp))
-            if (fraction != null) {
-                LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth().padding(start = 42.dp))
-            } else {
-                LinearProgressIndicator(Modifier.fillMaxWidth().padding(start = 42.dp))
+            Column(Modifier.padding(start = 42.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (fraction != null) {
+                    LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(detail.orEmpty(), fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("${(fraction * 100).toInt()}%", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                }
             }
         }
     }

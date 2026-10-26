@@ -24,6 +24,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -31,6 +32,10 @@ import androidx.compose.ui.unit.sp
 // Shapes and sizes of MoonVibe (docs/DESIGN.md there): rows 12 dp, cards 20 dp, dialogs 28 dp.
 val RowShape = RoundedCornerShape(12.dp)
 val CardShape = RoundedCornerShape(20.dp)
+
+/** A phone held upright: tighter margins, one column, buttons under their text. */
+@Composable
+fun isCompact(): Boolean = LocalConfiguration.current.screenWidthDp < 600
 
 /** Section title: upper case, accent color, 12 sp. */
 @Composable
@@ -45,7 +50,10 @@ fun SectionHeader(text: String, modifier: Modifier = Modifier) {
     )
 }
 
-/** A list row: icon, title and text, then whatever [trailing] adds (a value, a button). */
+/**
+ * A list row: icon, title and text, then whatever [trailing] adds (a value, a button).
+ * [action] goes at the end too, or under the text on a phone, where it would squeeze it.
+ */
 @Composable
 fun InfoRow(
     title: String,
@@ -55,8 +63,10 @@ fun InfoRow(
     iconTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     selected: Boolean = false,
     onClick: (() -> Unit)? = null,
+    action: (@Composable () -> Unit)? = null,
     trailing: @Composable RowScope.() -> Unit = {},
 ) {
+    val compact = isCompact()
     val background by animateColorAsState(
         if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow,
         label = "row",
@@ -76,7 +86,9 @@ fun InfoRow(
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp, fontWeight = FontWeight.Medium)
             if (text != null) Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)
+            if (compact && action != null) Box(Modifier.padding(top = 8.dp)) { action() }
         }
+        if (!compact && action != null) action()
         trailing()
     }
 }

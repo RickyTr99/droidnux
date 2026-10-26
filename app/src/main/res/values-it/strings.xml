@@ -82,6 +82,9 @@
     <string name="status_installing">Installazione…</string>
     <string name="status_preparing">Preparazione…</string>
     <string name="status_package_list">Aggiorno l\'elenco dei pacchetti…</string>
+    <string name="status_download">Download</string>
+    <string name="status_extract">Estrazione</string>
+    <string name="status_bytes">%1$s di %2$s</string>
     <string name="action_next">Avanti</string>
     <string name="action_back">Indietro</string>
     <string name="action_retry">Riprova</string>
@@ -89,7 +92,7 @@
     <string name="chosen">Scelto</string>
     <string name="coming_soon">In arrivo</string>
     <string name="wizard_welcome_title">Benvenuto in DroidNux</string>
-    <string name="wizard_welcome_text">Un desktop Linux vero sul tablet, senza root. Scegli cosa installare: potrai aggiungere altro in seguito.</string>
+    <string name="wizard_welcome_text">Un desktop Linux vero sul telefono, senza root. Scegli cosa installare: potrai aggiungere altro in seguito.</string>
     <string name="wizard_space_needed">Spazio richiesto</string>
     <string name="wizard_space_needed_value">circa 2,1 GB</string>
     <string name="wizard_space_free">Spazio libero</string>
@@ -101,7 +104,7 @@
     <string name="desktop_name">KDE Plasma 6.3</string>
     <string name="desktop_text">Wayland, tema scuro, barra in basso</string>
     <string name="desktop_gnome">GNOME</string>
-    <string name="wizard_checks_title">Prepariamo il tablet</string>
+    <string name="wizard_checks_title">Prepariamo il telefono</string>
     <string name="wizard_checks_text">Alcune impostazioni di Android servono perché il desktop resti aperto e veloce. Ecco come sono.</string>
     <string name="wizard_account_title">Il tuo account</string>
     <string name="wizard_account_text">Nome e password del desktop Linux. La password la chiede sudo, e apre il portafoglio di KDE all’avvio del desktop.</string>
@@ -133,13 +136,13 @@
     <string name="check_phantom">Limite ai processi</string>
     <string name="check_phantom_text">Android chiude il desktop oltre 32 programmi aperti. Disattiva «Restrizioni sui processi figli» nelle opzioni sviluppatore.</string>
     <string name="check_phantom_ok">Nessun limite: Android lascia stare i programmi del desktop</string>
-    <string name="check_phantom_steps">1. Impostazioni › Info sul tablet (o telefono) › Informazioni software: tocca 7 volte «Numero build».\n2. Impostazioni › Opzioni sviluppatore: attiva «Disattiva restrizioni processi figli».\n3. Torna qui.</string>
+    <string name="check_phantom_steps">1. Impostazioni › Info sul telefono › Informazioni software: tocca 7 volte «Numero build».\n2. Impostazioni › Opzioni sviluppatore: attiva «Disattiva restrizioni processi figli».\n3. Torna qui.</string>
     <string name="check_open_developer">Apri le opzioni sviluppatore</string>
     <string name="check_how">Come fare</string>
     <string name="check_allow">Consenti</string>
     <string name="check_battery">Batteria</string>
     <string name="check_battery_text">Senza restrizioni, il desktop continua a funzionare in background.</string>
-    <string name="check_files">File del tablet</string>
+    <string name="check_files">File del telefono</string>
     <string name="check_files_text">Foto, download e documenti nella cartella Android del desktop.</string>
     <string name="check_notifications">Notifiche</string>
     <string name="check_notifications_text">Mostrano che il desktop è aperto e permettono di chiuderlo.</string>

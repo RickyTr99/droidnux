@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tablets: the wording of the device. Phones have it in values-it. -->
+<resources>
+    <string name="wizard_welcome_text">Un desktop Linux vero sul tablet, senza root. Scegli cosa installare: potrai aggiungere altro in seguito.</string>
+    <string name="wizard_checks_title">Prepariamo il tablet</string>
+    <string name="check_phantom_steps">1. Impostazioni › Info sul tablet › Informazioni software: tocca 7 volte «Numero build».\n2. Impostazioni › Opzioni sviluppatore: attiva «Disattiva restrizioni processi figli».\n3. Torna qui.</string>
+    <string name="check_files">File del tablet</string>
+</resources>

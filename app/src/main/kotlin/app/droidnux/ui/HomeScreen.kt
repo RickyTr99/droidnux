@@ -62,6 +62,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
@@ -108,6 +109,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.pm.ShortcutInfoCompat
@@ -156,7 +158,11 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
         // Short fades: the page follows the finger at once.
         AnimatedContent(tab, transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(90)) }, label = "tab") { page ->
             // Room for the bar floating over the bottom of every page.
-            val padding = PaddingValues(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 120.dp)
+            val padding = if (isCompact()) {
+                PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 100.dp)
+            } else {
+                PaddingValues(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 120.dp)
+            }
             when (page) {
                 Tab.DESKTOP -> DesktopTab(state, viewModel, padding, onAllApps = { tab = Tab.APPS }, onSystem = { tab = Tab.SYSTEM })
                 Tab.APPS -> AppsTab(state, viewModel, padding)
@@ -165,7 +171,7 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
                 Tab.SYSTEM -> SystemTab(state, viewModel, padding, onDiagnostics = { diagnostics = true })
             }
         }
-        BottomBar(tab, Modifier.align(Alignment.BottomCenter).padding(bottom = 24.dp)) { tab = it }
+        BottomBar(tab, Modifier.align(Alignment.BottomCenter).padding(bottom = if (isCompact()) 12.dp else 24.dp)) { tab = it }
     }
 }
 
@@ -185,12 +191,15 @@ private val TabColor = Color(0xFFA9ABB3)
  */
 @Composable
 private fun BottomBar(current: Tab, modifier: Modifier, onSelect: (Tab) -> Unit) {
-    BoxWithConstraints(modifier) {
+    // Smaller on a phone: the bar spans the screen but for 12 dp on each side.
+    val compact = isCompact()
+    val height = if (compact) 60.dp else 68.dp
+    BoxWithConstraints(modifier.padding(horizontal = if (compact) 12.dp else 0.dp)) {
         // 124 dp tabs, narrower on a phone.
-        val item = minOf(124.dp, (maxWidth - 44.dp) / Tab.entries.size)
+        val item = minOf(124.dp, (maxWidth - if (compact) 12.dp else 44.dp) / Tab.entries.size)
         val pillX by animateDpAsState(item * current.ordinal, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow), label = "pill")
         Box(Modifier.clip(RoundedCornerShape(40.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(6.dp)) {
-            Box(Modifier.offset(x = pillX).size(item, 68.dp).clip(RoundedCornerShape(34.dp)).background(PillBrush))
+            Box(Modifier.offset(x = pillX).size(item, height).clip(RoundedCornerShape(height / 2)).background(PillBrush))
             Row {
                 Tab.entries.forEach { tab ->
                     val selected = tab == current
@@ -198,19 +207,21 @@ private fun BottomBar(current: Tab, modifier: Modifier, onSelect: (Tab) -> Unit)
                     val interaction = remember { MutableInteractionSource() }
                     val focused by interaction.collectIsFocusedAsState()
                     Column(
-                        Modifier.size(item, 68.dp).clip(RoundedCornerShape(34.dp))
-                            .then(if (focused) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(34.dp)) else Modifier)
+                        Modifier.size(item, height).clip(RoundedCornerShape(height / 2))
+                            .then(if (focused) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(height / 2)) else Modifier)
                             .pointerInput(tab) { detectTapGestures(onPress = { onSelect(tab) }) }
                             // Keyboard, controller and accessibility (selecting again is harmless).
                             .selectable(selected, interactionSource = interaction, indication = null, onClick = { onSelect(tab) }),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterVertically),
+                        verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 4.dp, Alignment.CenterVertically),
                     ) {
-                        Icon(if (selected) tab.selectedIcon else tab.icon, null, tint = color, modifier = Modifier.size(26.dp))
+                        Icon(if (selected) tab.selectedIcon else tab.icon, null, tint = color, modifier = Modifier.size(if (compact) 24.dp else 26.dp))
                         Text(
                             stringResource(tab.label),
                             color = color,
-                            fontSize = 14.sp,
+                            fontSize = if (compact) 11.sp else 14.sp,
+                            // Without the default tracking "Impostazioni" fits a phone's tab.
+                            letterSpacing = if (compact) 0.sp else TextUnit.Unspecified,
                             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -234,9 +245,10 @@ private fun DesktopTab(
 ) {
     val context = LocalContext.current
     val missing = Component.ALL.filter { it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled }
+    val compact = isCompact()
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding),
-        verticalArrangement = Arrangement.spacedBy(24.dp),
+        verticalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 24.dp),
     ) {
         BoxWithConstraints {
             val wide = maxWidth > 760.dp
@@ -249,8 +261,9 @@ private fun DesktopTab(
             }
             val hero = @Composable { modifier: Modifier ->
                 Box(
-                    // The desktop's proportions, so that the whole picture shows.
-                    modifier.aspectRatio(thumbnail?.let { it.width.toFloat() / it.height } ?: 1.6f).clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                    // The desktop's proportions, so that the whole picture shows; on a phone 200 dp tall, cropped.
+                    (if (compact) modifier.height(200.dp) else modifier.aspectRatio(thumbnail?.let { it.width.toFloat() / it.height } ?: 1.6f))
+                        .clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surfaceContainerLowest)
                         .combinedClickable(onClick = { openDesktop(context) }),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -258,7 +271,7 @@ private fun DesktopTab(
                     if (picture != null) {
                         Image(
                             picture.asImageBitmap(), stringResource(R.string.home_last_session),
-                            Modifier.fillMaxSize(), contentScale = ContentScale.Fit,
+                            Modifier.fillMaxSize(), contentScale = if (compact) ContentScale.Crop else ContentScale.Fit,
                         )
                     } else {
                         Icon(Icons.Debian, null, tint = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(140.dp))
@@ -275,16 +288,29 @@ private fun DesktopTab(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Button(onClick = { openDesktop(context) }, modifier = Modifier.fillMaxWidth().height(56.dp)) {
-                        Icon(Icons.Play, null, modifier = Modifier.size(22.dp))
-                        Text(
-                            stringResource(if (state.sessionRunning) R.string.action_resume_desktop else R.string.action_open_desktop),
-                            fontSize = 18.sp,
-                            modifier = Modifier.padding(start = 10.dp),
-                        )
+                    val open = @Composable { modifier: Modifier ->
+                        Button(onClick = { openDesktop(context) }, modifier = modifier.height(56.dp)) {
+                            Icon(Icons.Play, null, modifier = Modifier.size(22.dp))
+                            Text(
+                                stringResource(if (state.sessionRunning) R.string.action_resume_desktop else R.string.action_open_desktop),
+                                fontSize = 18.sp,
+                                modifier = Modifier.padding(start = 10.dp),
+                            )
+                        }
                     }
-                    FilledTonalButton(onClick = { launchApp(context, TERMINAL, null) }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                        Text(stringResource(R.string.action_terminal), fontSize = 16.sp)
+                    if (compact) {
+                        // The terminal as a round button beside it.
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            open(Modifier.weight(1f))
+                            FilledTonalIconButton(onClick = { launchApp(context, TERMINAL, null) }, modifier = Modifier.size(56.dp)) {
+                                Icon(Icons.Terminal, stringResource(R.string.action_terminal))
+                            }
+                        }
+                    } else {
+                        open(Modifier.fillMaxWidth())
+                        FilledTonalButton(onClick = { launchApp(context, TERMINAL, null) }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                            Text(stringResource(R.string.action_terminal), fontSize = 16.sp)
+                        }
                     }
                 }
             }
@@ -299,7 +325,7 @@ private fun DesktopTab(
                     actions(Modifier.width(300.dp))
                 }
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 24.dp)) {
                     hero(Modifier.fillMaxWidth())
                     actions(Modifier.fillMaxWidth())
                 }
@@ -347,11 +373,13 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, onAllApps: () 
                 TextButton(onClick = { editing = true }) { Text(stringResource(R.string.home_edit)) }
             }
         }
+        val compact = isCompact()
         BoxWithConstraints(Modifier.fillMaxWidth()) {
-            val gap = 12.dp
-            val columns = ((maxWidth + gap) / (220.dp + gap)).toInt().coerceIn(2, 6)
+            // Four small tiles a row on a phone.
+            val gap = if (compact) 8.dp else 12.dp
+            val columns = if (compact) 4 else ((maxWidth + gap) / (220.dp + gap)).toInt().coerceIn(2, 6)
             val cell = (maxWidth - gap * (columns - 1)) / columns
-            val height = 120.dp
+            val height = if (compact) 92.dp else 120.dp
             val density = LocalDensity.current
             val stepX = with(density) { (cell + gap).toPx() }
             val stepY = with(density) { (height + gap).toPx() }
@@ -402,7 +430,7 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, onAllApps: () 
                                     },
                                 ),
                         ) {
-                            AppTile(app, viewModel, editing = editing, lifted = lifted)
+                            AppTile(app, viewModel, editing = editing, lifted = lifted, small = compact)
                             if (editing) {
                                 IconButton(
                                     onClick = { viewModel.setHomeApps(order - id) },
@@ -432,15 +460,17 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, onAllApps: () 
                     verticalArrangement = Arrangement.Center,
                 ) {
                     Box(
-                        Modifier.size(48.dp).clip(RoundedCornerShape(14.dp))
+                        Modifier.size(if (compact) 40.dp else 48.dp).clip(RoundedCornerShape(if (compact) 12.dp else 14.dp))
                             .background(if (editing) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerHigh),
                         contentAlignment = Alignment.Center,
                     ) { Icon(if (editing) Icons.Plus else Icons.Apps, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
                     Text(
                         stringResource(if (editing) R.string.home_add else R.string.home_all_apps),
-                        fontSize = 15.sp,
+                        fontSize = if (compact) 12.sp else 15.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 10.dp),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = if (compact) 6.dp else 10.dp),
                     )
                 }
             }
@@ -531,6 +561,7 @@ private fun AppsTab(state: AppState, viewModel: AppViewModel, padding: PaddingVa
 /**
  * An app: tap starts it in the desktop, long press offers the quick launch and a shortcut on Android's
  * home screen. While the quick launch is [editing] it only shows, outlined ([lifted] while dragged).
+ * [small] fits four in a row on a phone.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -540,6 +571,7 @@ private fun AppTile(
     modifier: Modifier = Modifier,
     editing: Boolean = false,
     lifted: Boolean = false,
+    small: Boolean = false,
 ) {
     val context = LocalContext.current
     val icon by produceState(viewModel.cachedIcon(app.id), app.id) {
@@ -549,7 +581,7 @@ private fun AppTile(
     val colors = MaterialTheme.colorScheme
     Box(modifier) {
         Column(
-            Modifier.fillMaxWidth().height(120.dp).clip(CardShape)
+            Modifier.fillMaxWidth().height(if (small) 92.dp else 120.dp).clip(CardShape)
                 .background(if (lifted) colors.surfaceContainerHigh else if (editing) colors.surfaceContainer else colors.surfaceContainerLow)
                 .then(
                     when {
@@ -558,23 +590,24 @@ private fun AppTile(
                         else -> Modifier.combinedClickable(onClick = { launchApp(context, app.id, app) }, onLongClick = { menu = true })
                     },
                 )
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = if (small) 4.dp else 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
+            val size = if (small) 40.dp else 48.dp
             val bitmap = icon
             if (bitmap != null) {
-                Image(bitmap.asImageBitmap(), null, Modifier.size(48.dp))
+                Image(bitmap.asImageBitmap(), null, Modifier.size(size))
             } else {
-                Box(Modifier.size(48.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest))
+                Box(Modifier.size(size).clip(RoundedCornerShape(size * 0.3f)).background(MaterialTheme.colorScheme.surfaceContainerHighest))
             }
             Text(
                 app.name,
-                fontSize = 14.sp,
+                fontSize = if (small) 12.sp else 14.sp,
                 textAlign = TextAlign.Center,
-                maxLines = 2,
+                maxLines = if (small) 1 else 2,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = 10.dp),
+                modifier = Modifier.padding(top = if (small) 6.dp else 10.dp),
             )
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -766,11 +799,10 @@ private fun SystemTab(state: AppState, viewModel: AppViewModel, padding: Padding
                 ),
                 icon = if (state.desktopUpToDate) Icons.Check else Icons.Info,
                 iconTint = MaterialTheme.colorScheme.primary,
-            ) {
-                if (!state.desktopUpToDate && !state.desktopInstalling) {
-                    FilledTonalButton(onClick = viewModel::installDesktop) { Text(stringResource(R.string.action_update_desktop)) }
-                }
-            }
+                action = if (state.desktopUpToDate || state.desktopInstalling) null else {
+                    { FilledTonalButton(onClick = viewModel::installDesktop) { Text(stringResource(R.string.action_update_desktop)) } }
+                },
+            )
             if (state.desktopInstalling) {
                 val fraction = state.desktopProgress.fraction()
                 if (fraction != null) {
@@ -822,15 +854,17 @@ private fun ComponentRow(component: Component, name: String, state: AppState, vi
         },
         icon = if (installed) Icons.Check else Icons.Info,
         iconTint = MaterialTheme.colorScheme.primary,
-    ) {
-        when {
-            component.sha256.isEmpty() -> Unit
-            install is InstallState.Installing -> TextButton(onClick = { viewModel.cancelComponent(component) }) {
-                Text(stringResource(R.string.action_cancel))
+        action = when {
+            component.sha256.isEmpty() -> null
+            install is InstallState.Installing -> {
+                { TextButton(onClick = { viewModel.cancelComponent(component) }) { Text(stringResource(R.string.action_cancel)) } }
             }
-            !installed -> FilledTonalButton(onClick = { viewModel.installComponent(component) }) { Text(stringResource(R.string.action_install)) }
-        }
-    }
+            !installed -> {
+                { FilledTonalButton(onClick = { viewModel.installComponent(component) }) { Text(stringResource(R.string.action_install)) } }
+            }
+            else -> null
+        },
+    )
 }
 
 /** An app's icon, decoded off the main thread; an empty tile until then. */
