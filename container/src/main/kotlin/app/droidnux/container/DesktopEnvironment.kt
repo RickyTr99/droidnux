@@ -34,6 +34,7 @@ object DesktopEnvironment {
     private const val PIPEWIRE_MODULE = "libpipewire-module-droidnux.so"
     private const val PIPEWIRE_MODULE_DIR = "/usr/lib/aarch64-linux-gnu/pipewire-0.3"
     private const val PIPEWIRE_CONF = "/etc/pipewire/pipewire.conf.d/50-droidnux.conf"
+    private const val PIPEWIRE_CLIENT_CONF = "/etc/pipewire/client.conf.d/50-droidnux.conf"
     private const val WIREPLUMBER_CONF = "/etc/wireplumber/wireplumber.conf.d/50-droidnux.conf"
 
     /** Where the Mesa component (guest/mesa) is unpacked. */
@@ -173,6 +174,7 @@ object DesktopEnvironment {
         )
         writeFile(rootfs, "$PIPEWIRE_MODULE_DIR/$PIPEWIRE_MODULE", File(nativeLibraryDir, PIPEWIRE_MODULE).readBytes())
         writeFile(rootfs, PIPEWIRE_CONF, PIPEWIRE_DEFAULTS.toByteArray())
+        writeFile(rootfs, PIPEWIRE_CLIENT_CONF, PIPEWIRE_CLIENT_DEFAULTS.toByteArray())
         writeFile(rootfs, WIREPLUMBER_CONF, WIREPLUMBER_DEFAULTS.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/kdeglobals", "[KDE]\nLookAndFeelPackage=org.droidnux.desktop\n".toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/kwinrc", PLASMA_KWINRC.toByteArray())
@@ -1073,6 +1075,17 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         context.modules = [
             { name = libpipewire-module-droidnux flags = [ nofail ] }
         ]
+    """.trimIndent() + "\n"
+
+    // No realtime for PipeWire clients (KWin, apps): apps get no RLIMIT_RTPRIO,
+    // and the realtime portal answers RTTimeUSecMax 0, which module-rt turns
+    // into RLIMIT_RTTIME 0. On the Galaxy S26 a thread then made realtime is
+    // SIGKILLed at its first tick: KWin died seconds after start.
+    private val PIPEWIRE_CLIENT_DEFAULTS = """
+        # Written by DroidNux.
+        context.properties = {
+            module.rt = false
+        }
     """.trimIndent() + "\n"
 
     private val WIREPLUMBER_DEFAULTS = """
