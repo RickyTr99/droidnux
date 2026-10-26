@@ -772,9 +772,9 @@ private fun SystemTab(state: AppState, viewModel: AppViewModel, padding: Padding
                 }
             }
             if (state.desktopInstalling) {
-                val (done, all) = state.desktopPackages
-                if (all > 0) {
-                    LinearProgressIndicator(progress = { done.toFloat() / all }, modifier = Modifier.fillMaxWidth())
+                val fraction = state.desktopProgress.fraction()
+                if (fraction != null) {
+                    LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
                 } else {
                     LinearProgressIndicator(Modifier.fillMaxWidth())
                 }

@@ -139,11 +139,11 @@ object DesktopEnvironment {
                 grep -E '^(libgtk-3|libglib2|libqt6|libkf6|plasma-|kwin-|konsole|dolphin|systemsettings)' || true)
             [ -z "${'$'}installed" ] || apt-get install -y --reinstall --no-install-recommends ${'$'}installed
         fi
-        apt-get install -y --no-install-recommends $packages
-        # Firefox's interface in that language, when Debian has it.
-        if apt-cache show firefox-esr-l10n-$language > /dev/null 2>&1; then
-            apt-get install -y --no-install-recommends firefox-esr-l10n-$language
-        fi
+        # Firefox's interface in that language, when Debian has it, in the same
+        # apt run: the app's progress follows one run.
+        l10n=
+        if apt-cache show firefox-esr-l10n-$language > /dev/null 2>&1; then l10n=firefox-esr-l10n-$language; fi
+        apt-get install -y --no-install-recommends $packages ${'$'}l10n
         apt-get clean
         mkdir -p /${PACKAGES_MARKER.substringBeforeLast('/')}
         echo '$packages' > /$PACKAGES_MARKER

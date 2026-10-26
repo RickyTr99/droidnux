@@ -87,6 +87,7 @@
     <string name="system_diagnostics">Diagnostics</string>
     <string name="status_installing">Installing…</string>
     <string name="status_preparing">Preparing…</string>
+    <string name="status_package_list">Updating the package list…</string>
     <string name="action_next">Next</string>
     <string name="action_back">Back</string>
     <string name="action_retry">Try again</string>

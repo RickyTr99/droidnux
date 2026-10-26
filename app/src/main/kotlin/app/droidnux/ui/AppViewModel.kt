@@ -49,6 +49,24 @@ data class SetupState(
 
 enum class SetupStep { ROOTFS, DESKTOP, COMPONENTS, APPS }
 
+/** apt installing the desktop: archives fetched, then packages unpacked and set up (all 0 until apt has a plan). */
+data class AptProgress(
+    val fetchedBytes: Long = 0,
+    val totalBytes: Long = 0,
+    val unpacked: Int = 0,
+    val setUp: Int = 0,
+    val packages: Int = 0,
+) {
+    val downloading get() = unpacked == 0 && setUp == 0
+
+    /** Fetching takes about as long as unpacking and setting up together; null before the plan. */
+    fun fraction(): Float? {
+        if (packages == 0) return null
+        val fetched = if (totalBytes > 0) fetchedBytes.coerceAtMost(totalBytes).toFloat() / totalBytes else 1f
+        return 0.5f * fetched + 0.25f * unpacked.coerceAtMost(packages) / packages + 0.25f * setUp.coerceAtMost(packages) / packages
+    }
+}
+
 /** An apt job of the store, waiting for the one before it, running, or failed. */
 sealed interface StoreJob {
     data object Queued : StoreJob
@@ -72,8 +90,7 @@ data class AppState(
     /** False when this app version needs packages the last desktop install did not have. */
     val desktopUpToDate: Boolean = true,
     val desktopInstalling: Boolean = false,
-    /** Packages set up so far and in all, while apt installs the desktop (0 of 0 until apt knows). */
-    val desktopPackages: Pair<Int, Int> = 0 to 0,
+    val desktopProgress: AptProgress = AptProgress(),
     /** Last lines of the desktop install log. */
     val desktopLog: String = "",
     /** Install state of each [Component], by id (missing = still checking). */
@@ -404,24 +421,38 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun installDesktopPackages(): Boolean {
         val distro = _state.value.distro
-        _state.update { it.copy(desktopInstalling = true, desktopLog = "", desktopPackages = 0 to 0) }
+        _state.update { it.copy(desktopInstalling = true, desktopLog = "", desktopProgress = AptProgress()) }
         val ok = withContext(Dispatchers.IO) {
             val lines = ArrayDeque<String>()
             var success = false
-            var total = 0
-            var done = 0
+            var progress = AptProgress()
+            fun log(line: String) {
+                lines.addLast(line)
+                if (lines.size > LOG_LINES) lines.removeFirst()
+                _state.update { it.copy(desktopLog = lines.joinToString("\n"), desktopProgress = progress) }
+            }
             runCatching {
                 val process = container.spawnShell(distro, DesktopEnvironment.installScript())
                 process.inputStream.bufferedReader().forEachLine { line ->
                     if (line == "DROIDNUX_INSTALL_OK") success = true
-                    APT_SUMMARY.find(line)?.let { total = it.groupValues[1].toInt() + it.groupValues[2].toInt() }
-                    if (line.startsWith("Setting up ")) done++
-                    lines.addLast(line)
-                    if (lines.size > LOG_LINES) lines.removeFirst()
-                    _state.update { it.copy(desktopLog = lines.joinToString("\n"), desktopPackages = done to total) }
+                    // A new apt run (the translations' reinstall, then the desktop) starts over.
+                    APT_SUMMARY.find(line)?.let {
+                        progress = AptProgress(packages = it.groupValues[1].toInt() + it.groupValues[2].toInt())
+                    }
+                    APT_NEED.find(line)?.let { progress = progress.copy(totalBytes = aptBytes(it)) }
+                    when {
+                        line.startsWith("Get:") -> APT_GET_SIZE.find(line)?.let {
+                            progress = progress.copy(fetchedBytes = progress.fetchedBytes + aptBytes(it))
+                        }
+                        line.startsWith("Unpacking ") -> progress = progress.copy(unpacked = progress.unpacked + 1)
+                        line.startsWith("Setting up ") -> progress = progress.copy(setUp = progress.setUp + 1)
+                    }
+                    log(line)
                 }
-                process.waitFor()
-            }.onFailure { e -> _state.update { it.copy(desktopLog = e.toString()) } }
+                // Without this, a shell that dies before printing anything fails with no reason shown.
+                val status = process.waitFor()
+                if (!success) log("exit status $status")
+            }.onFailure { e -> log(e.toString()) }
             (success && DesktopEnvironment.isInstalled(rootfs)) to DesktopEnvironment.isUpToDate(rootfs)
         }
         val (installed, upToDate) = ok
@@ -535,6 +566,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val GPU_NAME = Regex("""Adreno \(TM\) (\d+)""")
         val APT_SUMMARY = Regex("""(\d+) upgraded, (\d+) newly installed""")
         val APT_REMOVE = Regex("""(\d+) to remove""")
+        /** "Need to get 95.4 MB of archives." (or "12.3 MB/95.4 MB" when some are cached: the first is to fetch). */
+        val APT_NEED = Regex("""^Need to get ([\d.,]+) ([kMG]?)B""")
+        /** The size at the end of "Get:12 http://… libfoo arm64 1.2-3 [123 kB]". */
+        val APT_GET_SIZE = Regex("""\[([\d.,]+) ([kMG]?)B]$""")
+
+        /** apt's sizes are decimal (kB = 1000 B); "1,234 kB" has a thousands comma. */
+        fun aptBytes(match: MatchResult): Long {
+            val value = match.groupValues[1].replace(",", "").toDoubleOrNull() ?: return 0
+            val unit = when (match.groupValues[2]) { "k" -> 1e3; "M" -> 1e6; "G" -> 1e9; else -> 1.0 }
+            return (value * unit).toLong()
+        }
         const val SEARCH_DELAY_MS = 350L
 
         /** The quick launch until the user changes it (apps that are not installed are not shown). */

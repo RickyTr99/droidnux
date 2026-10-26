@@ -523,13 +523,18 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
                 stepStatus(state.rootfs),
                 (state.rootfs as? InstallState.Installing)?.progress?.fraction(),
             )
-            val (done, all) = state.desktopPackages
+            val apt = state.desktopProgress
             StepRow(
                 stringResource(R.string.desktop_name),
                 when {
-                    state.desktopInstalling && all > 0 -> stringResource(R.string.install_packages, done, all)
-                    state.desktopInstalling -> stringResource(R.string.status_preparing)
-                    else -> stringResource(R.string.install_desktop_text)
+                    !state.desktopInstalling -> stringResource(R.string.install_desktop_text)
+                    apt.packages == 0 -> stringResource(R.string.status_package_list)
+                    apt.downloading && apt.totalBytes > 0 -> stringResource(
+                        R.string.status_downloading,
+                        Formatter.formatShortFileSize(context, apt.fetchedBytes),
+                        Formatter.formatShortFileSize(context, apt.totalBytes),
+                    )
+                    else -> stringResource(R.string.install_packages, apt.setUp, apt.packages)
                 },
                 when {
                     state.desktopInstalling -> StepStatus.RUNNING
@@ -537,7 +542,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
                     step == SetupStep.DESKTOP && setup?.error != null -> StepStatus.FAILED
                     else -> StepStatus.WAITING
                 },
-                if (state.desktopInstalling && all > 0) done.toFloat() / all else null,
+                if (state.desktopInstalling) apt.fraction() else null,
             )
             StepRow(
                 stringResource(R.string.install_gpu),
@@ -620,11 +625,9 @@ private fun overallProgress(state: AppState): Float {
         is InstallState.Installing -> install.progress?.fraction() ?: 0f
         else -> 0f
     }
-    val (done, all) = state.desktopPackages
     val desktop = when {
         state.desktopInstalled && state.desktopUpToDate && !state.desktopInstalling -> 1f
-        all > 0 -> done.toFloat() / all
-        else -> 0f
+        else -> state.desktopProgress.fraction() ?: 0f
     }
     val system = 0.15f * part(state.rootfs) + 0.75f * desktop +
         0.08f * part(state.components[Component.MESA.id]) + 0.02f * part(state.components[Component.PLASMA.id])

@@ -81,6 +81,7 @@
     <string name="system_diagnostics">Diagnostica</string>
     <string name="status_installing">Installazione…</string>
     <string name="status_preparing">Preparazione…</string>
+    <string name="status_package_list">Aggiorno l\'elenco dei pacchetti…</string>
     <string name="action_next">Avanti</string>
     <string name="action_back">Indietro</string>
     <string name="action_retry">Riprova</string>
