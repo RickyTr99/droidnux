@@ -462,6 +462,9 @@ object DesktopEnvironment {
             # Qt temporary files and directories (name.XXXXXX) of the last session, emptied
             # but never removed: the session is killed, and /tmp is not cleared at boot.
             find /tmp -mindepth 1 -maxdepth 1 -empty -name '*.??????' -delete 2> /dev/null
+            # The slim image keeps no man pages, nor their directories: some packages'
+            # scripts copy theirs there (Gaia Sky's .deb into man6) and fail without them.
+            for n in 1 2 3 4 5 6 7 8 9; do mkdir -p /usr/share/man/man${'$'}n; done
             # The account made before this one, by DroidNux (its comment).
             old=${'$'}(getent passwd | awk -F: '${'$'}5 == "DroidNux" { print ${'$'}1; exit }')
             if ! id -u "${'$'}user" > /dev/null 2>&1 && [ -n "${'$'}old" ]; then
@@ -522,6 +525,8 @@ object DesktopEnvironment {
                 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=$SYSTEM_BUS_SOCKET
                 $UPOWER_SCRIPT &
             fi
+            # Burrow starts in /root: apps launched from Plasma (Konsole) inherit the directory.
+            cd "${'$'}home" || true
             exec perl -e '${'$'}u = shift; @g = split / /, shift; ${'$'}) = "${'$'}g[0] @g"; ${'$'}( = ${'$'}g[0]; ${'$'}< = ${'$'}> = ${'$'}u;
                 die "cannot become ${'$'}u\n" if ${'$'}> != ${'$'}u; exec @ARGV or die "exec: ${'$'}!\n"' \
                 "${'$'}(id -u "${'$'}user")" "${'$'}(id -G "${'$'}user")" \
