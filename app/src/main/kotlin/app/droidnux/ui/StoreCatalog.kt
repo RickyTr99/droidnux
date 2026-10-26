@@ -8,6 +8,7 @@ enum class StoreCategory(val label: Int) {
     GRAPHICS(R.string.store_graphics),
     MEDIA(R.string.store_media),
     INTERNET(R.string.store_internet),
+    TOOLS(R.string.store_tools),
 }
 
 /**
@@ -52,6 +53,28 @@ object StoreCatalog {
         StoreApp("chromium", "Chromium", R.string.store_chromium, StoreCategory.INTERNET, listOf("chromium"), 330, 0xFF4A7FCF),
         StoreApp("thunderbird", "Thunderbird", R.string.store_thunderbird, StoreCategory.INTERNET, listOf("thunderbird"), 280, 0xFF2A6CB0),
         StoreApp("qbittorrent", "qBittorrent", R.string.store_qbittorrent, StoreCategory.INTERNET, listOf("qbittorrent"), 40, 0xFF3D7DCA),
+        // Command line tools, for the terminal: no launcher, no icon.
+        StoreApp("ssh", "SSH", R.string.store_tool_ssh, StoreCategory.TOOLS, listOf("openssh-client"), 10, 0xFF4D5B6A),
+        StoreApp("curl", "curl", R.string.store_tool_curl, StoreCategory.TOOLS, listOf("curl"), 2, 0xFF0B6E8A),
+        StoreApp("wget", "Wget", R.string.store_tool_wget, StoreCategory.TOOLS, listOf("wget"), 4, 0xFF5A6E3A),
+        StoreApp("dig", "dig", R.string.store_tool_dig, StoreCategory.TOOLS, listOf("bind9-dnsutils"), 10, 0xFF6A4D8F),
+        StoreApp("rsync", "rsync", R.string.store_tool_rsync, StoreCategory.TOOLS, listOf("rsync"), 2, 0xFF3A6E8F),
+        StoreApp("git", "Git", R.string.store_tool_git, StoreCategory.TOOLS, listOf("git"), 50, 0xFFF05033),
+        StoreApp("build-essential", "build-essential", R.string.store_tool_build_essential, StoreCategory.TOOLS, listOf("build-essential"), 250, 0xFF5C6370),
+        StoreApp("pip", "pip", R.string.store_tool_pip, StoreCategory.TOOLS, listOf("python3-pip"), 60, 0xFF3776AB),
+        StoreApp("nodejs", "Node.js", R.string.store_tool_nodejs, StoreCategory.TOOLS, listOf("nodejs", "npm"), 120, 0xFF5FA04E),
+        StoreApp("golang", "Go", R.string.store_tool_golang, StoreCategory.TOOLS, listOf("golang-go"), 300, 0xFF00ADD8),
+        StoreApp("rust", "Rust", R.string.store_tool_rust, StoreCategory.TOOLS, listOf("rustc", "cargo"), 400, 0xFFB7410E),
+        StoreApp("java21", "Java 21", R.string.store_tool_java21, StoreCategory.TOOLS, listOf("default-jre"), 200, 0xFFE76F00),
+        StoreApp("java25", "Java 25", R.string.store_tool_java25, StoreCategory.TOOLS, listOf("openjdk-25-jre"), 200, 0xFFC75B00),
+        StoreApp("htop", "htop", R.string.store_tool_htop, StoreCategory.TOOLS, listOf("htop"), 1, 0xFF3A8F5E),
+        StoreApp("fastfetch", "fastfetch", R.string.store_tool_fastfetch, StoreCategory.TOOLS, listOf("fastfetch"), 2, 0xFF4A6FA5),
+        StoreApp("tmux", "tmux", R.string.store_tool_tmux, StoreCategory.TOOLS, listOf("tmux"), 2, 0xFF1BB91F),
+        StoreApp("vim", "Vim", R.string.store_tool_vim, StoreCategory.TOOLS, listOf("vim"), 40, 0xFF019733),
+        StoreApp("7zip", "7-Zip", R.string.store_tool_7zip, StoreCategory.TOOLS, listOf("7zip"), 6, 0xFF3B3B3B),
+        StoreApp("zip", "zip + unzip", R.string.store_tool_zip, StoreCategory.TOOLS, listOf("zip", "unzip"), 1, 0xFF6E6E3A),
+        StoreApp("ffmpeg", "FFmpeg", R.string.store_tool_ffmpeg, StoreCategory.TOOLS, listOf("ffmpeg"), 100, 0xFF007808),
+        StoreApp("yt-dlp", "yt-dlp", R.string.store_tool_yt_dlp, StoreCategory.TOOLS, listOf("yt-dlp"), 30, 0xFFC4302B),
     )
 
     private val BY_ID = APPS.associateBy { it.id }

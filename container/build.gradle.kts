@@ -43,6 +43,7 @@ dependencies {
     implementation(libs.commons.compress)
     implementation(libs.xz)
 
+    testImplementation(libs.junit)
     androidTestImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.runner)
 }

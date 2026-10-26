@@ -134,8 +134,8 @@ object AppStore {
     private val NOT_APPS = Regex("""^lib|-(dev|doc|dbg|dbgsym|data|common|l10n|help|locale|i18n)(-|$)|^(fonts|gir1\.2|golang|node|python3?|ruby|r-cran|texlive)-""")
     private const val MAX_FOUND = 60
 
-    /** Debian's AppStream icons, one "<package>_<icon>.png" for each app it has metadata for. */
-    private const val ICONS_URL = "https://deb.debian.org/debian/dists/trixie/main/dep11/icons-128x128.tar.gz"
+    /** Debian's AppStream icons, one "<package>_<icon>.png" for each app it has metadata for (AppCatalog's apps). */
+    private const val ICONS_URL = "https://appstream.debian.org/data/trixie/main/icons-128x128.tar.gz"
 
     /** Icons Debian's archive lacks (or has only for a part of the app), from Flathub, by store icon name. */
     private val FLATHUB_ICONS = mapOf(
@@ -169,7 +169,7 @@ object AppStore {
         File(dir, ICONS_DONE).createNewFile()
     }
 
-    private fun open(url: String): InputStream {
+    internal fun open(url: String): InputStream {
         val connection = URL(url).openConnection() as HttpURLConnection
         connection.connectTimeout = 15_000
         connection.readTimeout = 30_000
