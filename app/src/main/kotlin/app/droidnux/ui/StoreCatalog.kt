@@ -1,14 +1,89 @@
 package app.droidnux.ui
 
+import androidx.compose.ui.graphics.vector.ImageVector
 import app.droidnux.R
+import app.droidnux.container.AppCatalog
 
-enum class StoreCategory(val label: Int) {
-    DEVELOPMENT(R.string.store_development),
-    OFFICE(R.string.store_office),
-    GRAPHICS(R.string.store_graphics),
-    MEDIA(R.string.store_media),
-    INTERNET(R.string.store_internet),
-    TOOLS(R.string.store_tools),
+/**
+ * The store's categories, each with the freedesktop categories it shows as filters
+ * (by their name in .desktop files and AppStream).
+ */
+enum class StoreCategory(val label: Int, val icon: ImageVector, val filters: List<String> = emptyList()) {
+    DEVELOPMENT(R.string.store_development, Icons.Code, listOf("IDE", "TextEditor", "WebDevelopment", "Database", "RevisionControl")),
+    OFFICE(R.string.store_office, Icons.Document, listOf("WordProcessor", "Spreadsheet", "Presentation", "Finance", "Viewer", "Dictionary")),
+    GRAPHICS(R.string.store_graphics, Icons.Palette, listOf("RasterGraphics", "VectorGraphics", "Photography", "3DGraphics", "Viewer", "Scanning")),
+    MEDIA(R.string.store_media, Icons.Music, listOf("Audio", "Video", "Player", "AudioVideoEditing", "Music")),
+    INTERNET(R.string.store_internet, Icons.Globe, listOf("WebBrowser", "Email", "Chat", "FileTransfer", "RemoteAccess")),
+    GAMES(R.string.store_games, Icons.Gamepad, listOf("ActionGame", "ArcadeGame", "BoardGame", "CardGame", "LogicGame", "StrategyGame", "AdventureGame")),
+    SCIENCE(R.string.store_science, Icons.Flask, listOf("Education", "Math", "Physics", "Chemistry", "Biology", "Astronomy", "Geography", "Electronics")),
+    UTILITY(R.string.store_utility, Icons.Wrench, listOf("Archiving", "FileManager", "TerminalEmulator", "Monitor", "Settings", "Security", "TextEditor")),
+    TOOLS(R.string.store_tools, Icons.Terminal),
+    ;
+
+    companion object {
+        /** Where an app with these freedesktop [categories] goes: the first that matches, in this order. */
+        fun of(categories: List<String>): StoreCategory = when {
+            "Game" in categories -> GAMES
+            "Development" in categories -> DEVELOPMENT
+            "Office" in categories -> OFFICE
+            "Graphics" in categories -> GRAPHICS
+            categories.any { it == "AudioVideo" || it == "Audio" || it == "Video" } -> MEDIA
+            "Network" in categories -> INTERNET
+            "Education" in categories || "Science" in categories -> SCIENCE
+            else -> UTILITY
+        }
+
+        /** The label of a freedesktop category used as a filter. */
+        val FILTER_LABELS = mapOf(
+            "IDE" to R.string.store_filter_ide,
+            "TextEditor" to R.string.store_filter_editor,
+            "WebDevelopment" to R.string.store_filter_web,
+            "Database" to R.string.store_filter_database,
+            "RevisionControl" to R.string.store_filter_revision,
+            "WordProcessor" to R.string.store_filter_text,
+            "Spreadsheet" to R.string.store_filter_spreadsheet,
+            "Presentation" to R.string.store_filter_presentation,
+            "Finance" to R.string.store_filter_finance,
+            "Viewer" to R.string.store_filter_viewer,
+            "Dictionary" to R.string.store_filter_dictionary,
+            "RasterGraphics" to R.string.store_filter_raster,
+            "VectorGraphics" to R.string.store_filter_vector,
+            "Photography" to R.string.store_filter_photo,
+            "3DGraphics" to R.string.store_filter_3d,
+            "Scanning" to R.string.store_filter_scanning,
+            "Audio" to R.string.store_filter_audio,
+            "Video" to R.string.store_filter_video,
+            "Player" to R.string.store_filter_player,
+            "AudioVideoEditing" to R.string.store_filter_editing,
+            "Music" to R.string.store_filter_music,
+            "WebBrowser" to R.string.store_filter_browser,
+            "Email" to R.string.store_filter_email,
+            "Chat" to R.string.store_filter_chat,
+            "FileTransfer" to R.string.store_filter_transfer,
+            "RemoteAccess" to R.string.store_filter_remote,
+            "ActionGame" to R.string.store_filter_action,
+            "ArcadeGame" to R.string.store_filter_arcade,
+            "BoardGame" to R.string.store_filter_board,
+            "CardGame" to R.string.store_filter_card,
+            "LogicGame" to R.string.store_filter_logic,
+            "StrategyGame" to R.string.store_filter_strategy,
+            "AdventureGame" to R.string.store_filter_adventure,
+            "Education" to R.string.store_filter_education,
+            "Math" to R.string.store_filter_math,
+            "Physics" to R.string.store_filter_physics,
+            "Chemistry" to R.string.store_filter_chemistry,
+            "Biology" to R.string.store_filter_biology,
+            "Astronomy" to R.string.store_filter_astronomy,
+            "Geography" to R.string.store_filter_geography,
+            "Electronics" to R.string.store_filter_electronics,
+            "Archiving" to R.string.store_filter_archiving,
+            "FileManager" to R.string.store_filter_files,
+            "TerminalEmulator" to R.string.store_filter_terminal,
+            "Monitor" to R.string.store_filter_monitor,
+            "Settings" to R.string.store_filter_settings,
+            "Security" to R.string.store_filter_security,
+        )
+    }
 }
 
 /**
@@ -81,11 +156,73 @@ object StoreCatalog {
 
     fun get(id: String): StoreApp? = BY_ID[id]
 
-    /** At the top of the store. */
-    val FEATURED = listOf("code", "libreoffice", "gimp").mapNotNull(::get)
+    /** The store's banner. */
+    val FEATURED = listOf("code", "libreoffice", "gimp", "krita", "blender", "kdenlive").mapNotNull(::get)
 
     /** The first-run choice: the most used ones (the first three chosen), then other proposals. */
     val WIZARD_POPULAR = listOf("code", "libreoffice", "gimp", "chromium").mapNotNull(::get)
     val WIZARD_MORE = listOf("inkscape", "krita", "thunderbird", "kdenlive").mapNotNull(::get)
     val WIZARD_DEFAULT = listOf("code", "libreoffice", "gimp")
+}
+
+/**
+ * What the store shows: one of its own apps ([app]), with Debian's catalog entry for it when
+ * there is one ([catalog]), or an app of the catalog alone. [key] names its apt jobs: the
+ * store's id, or the package.
+ */
+data class StoreItem(
+    val key: String,
+    val name: String,
+    /** The catalog's summary; the store's own apps have theirs in [StoreApp.summary]. */
+    val summary: String?,
+    val packages: List<String>,
+    val category: StoreCategory,
+    val app: StoreApp? = null,
+    val catalog: AppCatalog.App? = null,
+) {
+    /** The store icon's name (see AppStore.downloadIcons). */
+    val icon: String get() = app?.icon ?: packages.first()
+
+    companion object {
+        fun curated(catalog: Map<String, AppCatalog.App>): List<StoreItem> = StoreCatalog.APPS.map { app ->
+            StoreItem(app.id, app.name, null, app.packages, app.category, app, catalog[app.icon] ?: catalog[app.packages.first()])
+        }
+
+        /** The store's apps, then the rest of the catalog: those with screenshots first, by name. */
+        fun all(catalog: List<AppCatalog.App>): List<StoreItem> {
+            val byPackage = LinkedHashMap<String, AppCatalog.App>()
+            for (app in catalog) byPackage.putIfAbsent(app.pkg, app)
+            val curated = curated(byPackage)
+            val taken = StoreCatalog.APPS.flatMapTo(HashSet()) { it.packages }
+            val rest = byPackage.values.filter { it.pkg !in taken }
+                .sortedWith(compareBy({ it.screenshots.isEmpty() }, { it.name.lowercase() }))
+                .map { StoreItem(it.pkg, it.name, it.summary, listOf(it.pkg), StoreCategory.of(it.categories), catalog = it) }
+            return curated + rest
+        }
+
+        /**
+         * The [items] that have every word of [query] in their name, summary, keywords or package:
+         * name matches first. [string] reads the store's own summaries.
+         */
+        fun search(items: List<StoreItem>, query: String, string: (Int) -> String): List<StoreItem> {
+            val words = query.lowercase().split(' ').filter { it.isNotBlank() }
+            if (words.isEmpty()) return emptyList()
+            return items.mapNotNull { item ->
+                val name = item.name.lowercase()
+                val text = listOf(
+                    name, (item.summary ?: item.app?.let { string(it.summary) }).orEmpty().lowercase(),
+                    item.catalog?.keywords.orEmpty(), item.packages.joinToString(" "),
+                ).joinToString(" ")
+                if (words.any { it !in text }) return@mapNotNull null
+                val rank = when {
+                    name.startsWith(words.first()) -> 0
+                    words.all { it in name } -> 1
+                    else -> 2
+                }
+                rank to item
+            }.sortedBy { it.first }.map { it.second }.take(MAX_RESULTS)
+        }
+
+        private const val MAX_RESULTS = 200
+    }
 }

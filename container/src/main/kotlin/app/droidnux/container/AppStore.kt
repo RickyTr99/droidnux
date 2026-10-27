@@ -177,6 +177,12 @@ object AppStore {
         return connection.inputStream
     }
 
+    /** Downloads [url] into [file] (blocking); throws if it fails. */
+    fun download(url: String, file: File) {
+        file.parentFile?.mkdirs()
+        open(url).use { save(it, file) }
+    }
+
     // Through a temporary file: a half-written icon is never read.
     private fun save(input: InputStream, file: File) {
         val temp = File(file.parentFile, "${file.name}.part")

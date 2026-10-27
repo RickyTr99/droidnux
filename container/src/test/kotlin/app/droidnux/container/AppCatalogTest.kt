@@ -10,9 +10,10 @@ import java.util.zip.GZIPInputStream
 class AppCatalogTest {
 
     private val sample = """
+        %YAML 1.2
         ---
         File: DEP-11
-        Version: '1.0'
+        Version: "1.0"
         ---
         Type: desktop-application
         ID: org.gimp.GIMP
@@ -26,6 +27,23 @@ class AppCatalogTest {
         Description:
           C: >-
             <p>Name: not this</p>
+          it: |-
+            <p>GIMP è un programma
+            di fotoritocco.</p>
+
+            <p>Funzioni:</p>
+            <ul>
+              <li>Livelli &amp; maschere</li>
+              <li><em>Pennelli</em></li>
+            </ul>
+        Developer:
+          id: org.gimp
+          name:
+            C: The GIMP team
+            it: Il gruppo di GIMP
+        Url:
+          bugtracker: https://example.org/bugs
+          homepage: https://www.gimp.org/
         Categories:
         - Graphics
         - RasterGraphics
@@ -34,6 +52,7 @@ class AppCatalogTest {
           - Photo
           it:
           - Foto
+          - photo
         Icon:
           cached:
           - name: gimp_gimp.png
@@ -60,9 +79,9 @@ class AppCatalogTest {
             width: 1920
             height: 1080
         - thumbnails:
-          - url: org/gimp/GIMP/abc/screenshots/image-2_752x423@1.png
-            width: 752
-            height: 423
+          - url: org/gimp/GIMP/abc/screenshots/image-2_624x351@1.png
+            width: 624
+            height: 351
         ---
         Type: addon
         ID: org.gimp.GIMP.data_extras
@@ -90,6 +109,8 @@ class AppCatalogTest {
         Summary:
           C: A summary that goes on
             over two lines
+        DeveloperName:
+          C: Someone
     """.trimIndent()
 
     @Test
@@ -102,17 +123,30 @@ class AppCatalogTest {
         assertEquals("Crea immagini e modifica fotografie, l'originale", gimp.summary)
         assertEquals(listOf("Graphics", "RasterGraphics"), gimp.categories)
         assertEquals("photo foto", gimp.keywords)
-        assertEquals("https://appstream.debian.org/media/trixie/org/gimp/GIMP/abc/screenshots/image-1_752x423@1.png", gimp.screenshot)
+        assertEquals("Il gruppo di GIMP", gimp.developer)
+        assertEquals("https://www.gimp.org/", gimp.homepage)
+        assertEquals("GIMP è un programma di fotoritocco.\nFunzioni:\n• Livelli & maschere\n• Pennelli", gimp.description)
+        assertEquals(
+            listOf(
+                "https://appstream.debian.org/media/trixie/org/gimp/GIMP/abc/screenshots/image-1_752x423@1.png",
+                "https://appstream.debian.org/media/trixie/org/gimp/GIMP/abc/screenshots/image-2_624x351@1.png",
+            ),
+            gimp.screenshots,
+        )
         val long = apps[1]
         assertEquals("Long & Co", long.name)
         assertEquals("A summary that goes on over two lines", long.summary)
-        assertNull(long.screenshot)
+        assertEquals("Someone", long.developer)
+        assertEquals(emptyList<String>(), long.screenshots)
+        assertNull(long.homepage)
     }
 
     @Test
     fun fallsBackToTheUntranslatedTexts() {
         val gimp = AppCatalog.parse(sample.byteInputStream(), "de").first()
         assertEquals("GNU Image Manipulation Program", gimp.name)
+        assertEquals("The GIMP team", gimp.developer)
+        assertEquals("Name: not this", gimp.description)
         assertEquals("photo", gimp.keywords)
     }
 
@@ -121,9 +155,14 @@ class AppCatalogTest {
     fun parsesDebiansCatalog() {
         val path = System.getenv("DN_DEP11") ?: return
         val apps = File(path).inputStream().use { AppCatalog.parse(GZIPInputStream(it), "it") }
-        println("apps: ${apps.size}, with screenshot: ${apps.count { it.screenshot != null }}")
-        apps.filter { it.pkg in setOf("gimp", "krita", "vlc", "firefox-esr", "freedv") }.forEach(::println)
+        println(
+            "apps: ${apps.size}, with screenshots: ${apps.count { it.screenshots.isNotEmpty() }}, " +
+                "with description: ${apps.count { it.description.isNotEmpty() }}, with developer: ${apps.count { it.developer.isNotEmpty() }}, " +
+                "description chars: ${apps.sumOf { it.description.length }}",
+        )
+        apps.filter { it.pkg in setOf("gimp", "krita", "vlc") }.forEach(::println)
         assertTrue(apps.size > 1500)
-        assertTrue(apps.all { '\t' !in it.name && '\t' !in it.summary && it.name.isNotBlank() })
+        assertTrue(apps.all { '\t' !in it.name && '\t' !in it.summary && '\t' !in it.description && it.name.isNotBlank() })
+        assertTrue(apps.none { '<' in it.description && "<p>" in it.description })
     }
 }
