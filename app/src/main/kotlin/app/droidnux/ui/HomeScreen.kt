@@ -1043,7 +1043,11 @@ private fun CategoryCard(category: Category, summary: String, badge: Boolean, mo
             ) { Icon(category.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp)) }
             Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(stringResource(category.title), fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(summary, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
+                // Two lines on every card, so a longer summary doesn't make its card taller than the others.
+                Text(
+                    summary, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp,
+                )
             }
         }
         if (badge) Badge(Modifier.align(Alignment.TopEnd).padding(18.dp))
