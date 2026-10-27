@@ -32,6 +32,7 @@
     <string name="tab_settings">Impostazioni</string>
     <string name="home_title">Debian 13 · Plasma</string>
     <string name="home_running">In esecuzione</string>
+    <string name="home_stopping">Arresto in corso…</string>
     <string name="home_ready">Pronto</string>
     <string name="action_resume_desktop">Torna al desktop</string>
     <string name="action_terminal">Terminale</string>

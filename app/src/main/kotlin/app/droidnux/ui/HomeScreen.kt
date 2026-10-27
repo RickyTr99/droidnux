@@ -1,5 +1,6 @@
 package app.droidnux.ui
 
+import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -7,30 +8,53 @@ import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.provider.Settings
+import android.view.View
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateValueAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -54,10 +78,12 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
@@ -94,6 +120,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -105,8 +132,11 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -160,10 +190,28 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
 
     BackHandler(enabled = tab != Tab.HOME) { tab = Tab.HOME }
     val updates = !state.desktopUpToDate || Component.ALL.any { it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled }
+    // Every return to the app (from the desktop too) brings the Home's sections in one after another.
+    val scope = rememberCoroutineScope()
+    val entrance = remember { Animatable(1f) }
+    LifecycleResumeEffect(Unit) {
+        val play = scope.launch {
+            entrance.snapTo(0f)
+            entrance.animateTo(1f, tween(ENTRANCE_MS, easing = LinearEasing))
+        }
+        onPauseOrDispose { play.cancel() }
+    }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        // Short fades: the page follows the finger at once.
-        AnimatedContent(tab, transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(90)) }, label = "tab") { page ->
+        AnimatedContent(
+            tab,
+            transitionSpec = {
+                // The next page comes in from its tab's side.
+                val towards = if (targetState > initialState) 1 else -1
+                slideInHorizontally(tween(320, easing = Emphasized)) { it * towards } togetherWith
+                    slideOutHorizontally(tween(320, easing = Emphasized)) { -it * towards }
+            },
+            label = "tab",
+        ) { page ->
             // Room for the bar floating over the bottom of every page.
             val padding = if (isCompact()) {
                 PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 100.dp)
@@ -172,7 +220,7 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
             }
             when (page) {
                 // The Home runs under the status bar: its picture reaches the top edge.
-                Tab.HOME -> HomeTab(state, viewModel, updates, onUpdates = { category = Category.COMPONENTS; tab = Tab.SETTINGS })
+                Tab.HOME -> HomeTab(state, viewModel, updates, entrance, onUpdates = { category = Category.COMPONENTS; tab = Tab.SETTINGS })
                 Tab.STORE -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) { StoreTab(state, viewModel, padding) }
                 Tab.SETTINGS -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     SettingsTab(
@@ -201,6 +249,43 @@ private val PillBrush = object : ShaderBrush() {
 }
 private val TabColor = Color(0xFFA9ABB3)
 private val UpdateColor = Color(0xFFF2C46D)
+private val RunningColor = Color(0xFF3DDC84)
+
+/** Material's emphasized easing: quick to leave, slow to settle. */
+private val Emphasized = CubicBezierEasing(0.2f, 0f, 0f, 1f)
+
+// The Home's entrance: each section takes ENTRANCE_ITEM_MS, ENTRANCE_STAGGER_MS after the one above.
+private const val ENTRANCE_ITEM_MS = 300
+private const val ENTRANCE_STAGGER_MS = 50
+private const val ENTRANCE_MS = ENTRANCE_ITEM_MS + 3 * ENTRANCE_STAGGER_MS
+
+/** Rises and fades in when [progress] reaches the [index]th section's turn. */
+private fun Modifier.entrance(progress: Animatable<Float, AnimationVector1D>, index: Int) = graphicsLayer {
+    val t = ((progress.value * ENTRANCE_MS - index * ENTRANCE_STAGGER_MS) / ENTRANCE_ITEM_MS).coerceIn(0f, 1f)
+    val eased = Emphasized.transform(t)
+    alpha = eased
+    translationY = (1 - eased) * 16.dp.toPx()
+}
+
+/** Shrinks to [scale] under the finger and springs back on release. */
+@Composable
+private fun Modifier.pressScale(interaction: InteractionSource, scale: Float = 0.94f): Modifier {
+    val pressed by interaction.collectIsPressedAsState()
+    val current by animateFloatAsState(
+        if (pressed) scale else 1f,
+        if (pressed) tween(100) else spring(dampingRatio = 0.4f, stiffness = Spring.StiffnessMedium),
+        label = "press",
+    )
+    return graphicsLayer {
+        scaleX = current
+        scaleY = current
+    }
+}
+
+/** A label changing: the old one leaves upwards, the new one rises in. */
+private fun <S> AnimatedContentTransitionScope<S>.textSwap(): ContentTransform =
+    (fadeIn(tween(210, 90)) + slideInVertically(tween(210, 90, Emphasized)) { it / 4 }) togetherWith
+        (fadeOut(tween(90)) + slideOutVertically(tween(90)) { -it / 4 })
 
 /** The yellow dot of an update waiting. */
 @Composable
@@ -226,6 +311,16 @@ private fun BottomBar(current: Tab, badge: Tab?, modifier: Modifier, onSelect: (
                 Tab.entries.forEach { tab ->
                     val selected = tab == current
                     val color by animateColorAsState(if (selected) Color.White else TabColor, tween(150), label = "tab")
+                    // The icon hops when its tab is chosen.
+                    val hop = remember { Animatable(1f) }
+                    var wasSelected by remember { mutableStateOf(selected) }
+                    LaunchedEffect(selected) {
+                        if (selected && !wasSelected) {
+                            hop.animateTo(1.18f, tween(110))
+                            hop.animateTo(1f, spring(dampingRatio = 0.5f))
+                        }
+                        wasSelected = selected
+                    }
                     val interaction = remember { MutableInteractionSource() }
                     val focused by interaction.collectIsFocusedAsState()
                     Box(
@@ -240,7 +335,13 @@ private fun BottomBar(current: Tab, badge: Tab?, modifier: Modifier, onSelect: (
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 4.dp, Alignment.CenterVertically),
                         ) {
-                            Icon(if (selected) tab.selectedIcon else tab.icon, null, tint = color, modifier = Modifier.size(if (compact) 24.dp else 26.dp))
+                            Icon(
+                                if (selected) tab.selectedIcon else tab.icon, null, tint = color,
+                                modifier = Modifier.size(if (compact) 24.dp else 26.dp).graphicsLayer {
+                                    scaleX = hop.value
+                                    scaleY = hop.value
+                                },
+                            )
                             Text(
                                 stringResource(tab.label),
                                 color = color,
@@ -252,7 +353,13 @@ private fun BottomBar(current: Tab, badge: Tab?, modifier: Modifier, onSelect: (
                                 overflow = TextOverflow.Ellipsis,
                             )
                         }
-                        if (tab == badge && !selected) Badge(Modifier.align(Alignment.TopCenter).padding(top = 10.dp).offset(x = 16.dp))
+                        // Not RowScope's: this one sits in the tab's Box.
+                        androidx.compose.animation.AnimatedVisibility(
+                            tab == badge && !selected,
+                            Modifier.align(Alignment.TopCenter).padding(top = 10.dp).offset(x = 16.dp),
+                            enter = scaleIn(spring(dampingRatio = 0.4f, stiffness = Spring.StiffnessMediumLow)),
+                            exit = scaleOut(),
+                        ) { Badge() }
                     }
                 }
             }
@@ -264,27 +371,30 @@ private fun BottomBar(current: Tab, badge: Tab?, modifier: Modifier, onSelect: (
 
 /** The desktop's picture with its state and buttons, then the favorites and every app. */
 @Composable
-private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, onUpdates: () -> Unit) {
+private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, entrance: Animatable<Float, AnimationVector1D>, onUpdates: () -> Unit) {
     val compact = isCompact()
     val side = if (compact) 16.dp else 48.dp
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Hero(state, viewModel, side)
+        Hero(state, viewModel, side, Modifier.entrance(entrance, 0))
         Column(
             Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                 .padding(start = side, end = side, top = 8.dp, bottom = if (compact) 100.dp else 120.dp),
             verticalArrangement = Arrangement.spacedBy(if (compact) 20.dp else 24.dp),
         ) {
             if (updates) {
-                InfoRow(
-                    title = stringResource(R.string.home_update_title),
-                    text = stringResource(R.string.home_update_text),
-                    icon = Icons.Info,
-                    iconTint = UpdateColor,
-                    onClick = onUpdates,
-                ) { Icon(Icons.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Box(Modifier.entrance(entrance, 1)) {
+                    InfoRow(
+                        title = stringResource(R.string.home_update_title),
+                        text = stringResource(R.string.home_update_text),
+                        icon = Icons.Info,
+                        iconTint = UpdateColor,
+                        onClick = onUpdates,
+                    ) { Icon(Icons.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                }
             }
-            QuickLaunch(state, viewModel)
-            AllApps(state, viewModel)
+            val next = if (updates) 2 else 1
+            QuickLaunch(state, viewModel, Modifier.entrance(entrance, next))
+            AllApps(state, viewModel, Modifier.entrance(entrance, next + 1))
         }
     }
 }
@@ -294,9 +404,13 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
  * buttons over its bottom. A dark band under the status bar keeps its icons readable on a light wallpaper.
  */
 @Composable
-private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp) {
+private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, modifier: Modifier) {
     val context = LocalContext.current
+    val view = LocalView.current
     val compact = isCompact()
+    // Where the picture is: the desktop opens out of it.
+    var bounds by remember { mutableStateOf<Rect?>(null) }
+    val open = { openDesktop(context, view, bounds) }
     var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
     // Reloaded whenever the screen comes back; decoding a screen-sized picture takes a few frames.
     val scope = rememberCoroutineScope()
@@ -308,8 +422,13 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp) {
         onPauseOrDispose { load.cancel() }
     }
     var confirmStop by remember { mutableStateOf(false) }
+    // From "Exit" until the session is gone.
+    var stopping by remember { mutableStateOf(false) }
     val page = MaterialTheme.colorScheme.background
-    Box(Modifier.fillMaxWidth().clickable(onClickLabel = stringResource(R.string.action_open_desktop)) { openDesktop(context) }) {
+    Box(
+        modifier.fillMaxWidth().onGloballyPositioned { bounds = it.boundsInRoot() }
+            .clickable(onClickLabel = stringResource(R.string.action_open_desktop), onClick = open),
+    ) {
         val picture = thumbnail
         if (picture != null) {
             Image(picture.asImageBitmap(), stringResource(R.string.home_last_session), Modifier.matchParentSize(), contentScale = ContentScale.Crop)
@@ -326,40 +445,69 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp) {
                 ),
             ),
         )
-        val running = state.sessionRunning
+        val live = state.sessionRunning || stopping
         val status = @Composable { modifier: Modifier ->
             Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(
-                    Modifier.size(10.dp).clip(RoundedCornerShape(5.dp))
-                        .background(if (running) Color(0xFF3DDC84) else MaterialTheme.colorScheme.surfaceContainerHighest),
+                val dot by animateColorAsState(
+                    when {
+                        stopping -> UpdateColor
+                        live -> RunningColor
+                        else -> MaterialTheme.colorScheme.surfaceContainerHighest
+                    },
+                    label = "dot",
                 )
+                Box(Modifier.size(10.dp)) {
+                    if (live) Halo(dot, period = if (stopping) 900 else 2400)
+                    Box(Modifier.matchParentSize().clip(CircleShape).background(dot))
+                }
                 Column {
-                    Text(
-                        stringResource(if (running) R.string.home_running else R.string.home_ready),
-                        fontSize = if (compact) 18.sp else 22.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
+                    AnimatedContent(
+                        when {
+                            stopping -> R.string.home_stopping
+                            live -> R.string.home_running
+                            else -> R.string.home_ready
+                        },
+                        transitionSpec = { textSwap() },
+                        label = "status",
+                    ) { Text(stringResource(it), fontSize = if (compact) 18.sp else 22.sp, fontWeight = FontWeight.Medium) }
                     Text(stringResource(R.string.home_title), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
-        val open = @Composable { modifier: Modifier ->
-            Button(onClick = { openDesktop(context) }, modifier = modifier.height(56.dp)) {
+        val openButton = @Composable { modifier: Modifier ->
+            val press = remember { MutableInteractionSource() }
+            Button(onClick = open, modifier = modifier.height(56.dp).pressScale(press), interactionSource = press) {
                 Icon(Icons.Play, null, modifier = Modifier.size(22.dp))
-                Text(
-                    stringResource(if (running) R.string.action_resume_desktop else R.string.action_open_desktop),
-                    fontSize = 18.sp,
-                    modifier = Modifier.padding(start = 10.dp),
-                )
+                AnimatedContent(live, transitionSpec = { textSwap() }, label = "open") { resume ->
+                    Text(
+                        stringResource(if (resume) R.string.action_resume_desktop else R.string.action_open_desktop),
+                        fontSize = 18.sp,
+                        modifier = Modifier.padding(start = 10.dp),
+                    )
+                }
             }
         }
+        // Grows in beside the button while the session runs; a wheel while it stops.
         val stop = @Composable {
-            if (running) {
+            AnimatedVisibility(
+                live,
+                enter = expandHorizontally(tween(350, easing = Emphasized)) + fadeIn() +
+                    scaleIn(spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMediumLow), initialScale = 0.6f),
+                exit = shrinkHorizontally(tween(350, easing = Emphasized)) + fadeOut(tween(200)) + scaleOut(tween(350), targetScale = 0.6f),
+            ) {
+                val press = remember { MutableInteractionSource() }
                 FilledTonalIconButton(
-                    onClick = { confirmStop = true },
-                    modifier = Modifier.size(56.dp),
+                    onClick = { if (!stopping) confirmStop = true },
+                    modifier = Modifier.size(56.dp).pressScale(press),
                     colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = Color.White.copy(alpha = 0.16f), contentColor = Color.White),
-                ) { Icon(Icons.Stop, stringResource(R.string.home_stop)) }
+                    interactionSource = press,
+                ) {
+                    if (stopping) {
+                        CircularProgressIndicator(Modifier.size(22.dp), color = Color.White, strokeWidth = 2.4.dp)
+                    } else {
+                        Icon(Icons.Stop, stringResource(R.string.home_stop))
+                    }
+                }
             }
         }
         Column(
@@ -370,14 +518,14 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp) {
             if (compact) {
                 status(Modifier)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    open(Modifier.weight(1f))
+                    openButton(Modifier.weight(1f))
                     stop()
                 }
             } else {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     status(Modifier.weight(1f))
                     stop()
-                    open(Modifier.width(280.dp))
+                    openButton(Modifier.width(280.dp))
                 }
             }
         }
@@ -390,20 +538,39 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp) {
             confirmButton = {
                 TextButton(onClick = {
                     confirmStop = false
+                    stopping = true
                     DesktopSessionService.stop(context)
                     // The desktop's process takes a moment to go.
                     scope.launch {
-                        repeat(10) {
+                        for (attempt in 1..10) {
                             delay(500)
                             viewModel.refresh()
-                            if (!viewModel.state.value.sessionRunning) return@launch
+                            if (!viewModel.state.value.sessionRunning) break
                         }
+                        stopping = false
                     }
                 }) { Text(stringResource(R.string.menu_exit_confirm), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmStop = false }) { Text(stringResource(R.string.action_cancel)) } },
         )
     }
+}
+
+/** A ring of [color] that swells and fades every [period] ms: the session is alive. */
+@Composable
+private fun Halo(color: Color, period: Int) {
+    val pulse by rememberInfiniteTransition(label = "halo").animateFloat(
+        0f, 1f, infiniteRepeatable(tween(period, easing = LinearEasing)), label = "pulse",
+    )
+    Box(
+        Modifier.size(10.dp).graphicsLayer {
+            // Swells over the first 70%, then rests.
+            val t = FastOutSlowInEasing.transform((pulse / 0.7f).coerceAtMost(1f))
+            scaleX = 1 + 1.8f * t
+            scaleY = scaleX
+            alpha = 0.55f * (1 - t)
+        }.clip(CircleShape).background(color),
+    )
 }
 
 /**
@@ -632,7 +799,13 @@ private fun appColumns(compact: Boolean, width: Dp): Int = if (compact) 4 else (
 private fun animateDpOffsetAsState(target: DpOffset, label: String): State<DpOffset> =
     animateValueAsState(target, DpOffset.VectorConverter, spring(stiffness = Spring.StiffnessMediumLow), label = label)
 
-private fun openDesktop(context: Context) = context.startActivity(Intent(context, DesktopActivity::class.java))
+/** Opens the desktop growing out of [from] in [view] (the Home's picture), as a launcher opens an app. */
+private fun openDesktop(context: Context, view: View, from: Rect?) {
+    val options = from?.let {
+        ActivityOptions.makeClipRevealAnimation(view, it.left.roundToInt(), it.top.roundToInt(), it.width.roundToInt(), it.height.roundToInt()).toBundle()
+    }
+    context.startActivity(Intent(context, DesktopActivity::class.java), options)
+}
 
 /** Starts a Linux app in the desktop (starting the desktop too when it is not running). */
 fun launchApp(context: Context, id: String, app: LinuxApp?) {
@@ -672,6 +845,7 @@ private fun AppTile(
     var menu by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
     val compact = isCompact()
+    val press = remember { MutableInteractionSource() }
     Box(modifier) {
         Column(
             Modifier.fillMaxWidth().height(height).clip(CardShape)
@@ -679,7 +853,12 @@ private fun AppTile(
                     when {
                         lifted -> Modifier.background(colors.surfaceContainerHigh).border(2.dp, colors.primary, CardShape)
                         editing -> Modifier
-                        else -> Modifier.combinedClickable(onClick = { launchApp(context, app.id, app) }, onLongClick = { menu = true })
+                        else -> Modifier.combinedClickable(
+                            interactionSource = press,
+                            indication = LocalIndication.current,
+                            onClick = { launchApp(context, app.id, app) },
+                            onLongClick = { menu = true },
+                        )
                     },
                 )
                 .padding(horizontal = 4.dp),
@@ -687,10 +866,11 @@ private fun AppTile(
             verticalArrangement = Arrangement.Center,
         ) {
             val bitmap = icon
+            val iconModifier = Modifier.size(iconSize).pressScale(press, 0.88f)
             if (bitmap != null) {
-                Image(bitmap.asImageBitmap(), null, Modifier.size(iconSize))
+                Image(bitmap.asImageBitmap(), null, iconModifier)
             } else {
-                Box(Modifier.size(iconSize).clip(RoundedCornerShape(iconSize * 0.3f)).background(colors.surfaceContainerHighest))
+                Box(iconModifier.clip(RoundedCornerShape(iconSize * 0.3f)).background(colors.surfaceContainerHighest))
             }
             Text(
                 app.name,
@@ -771,7 +951,16 @@ private fun SettingsTab(
 
     if (isCompact()) {
         BackHandler(enabled = category != null) { onCategory(null) }
-        AnimatedContent(category, transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(90)) }, label = "category") { page ->
+        AnimatedContent(
+            category,
+            transitionSpec = {
+                // Into a page from the right, back to the grid towards the right.
+                val towards = if (targetState != null) 1 else -1
+                (fadeIn(tween(210, 90)) + slideInHorizontally(tween(300, easing = Emphasized)) { towards * it / 10 }) togetherWith
+                    (fadeOut(tween(90)) + slideOutHorizontally(tween(300, easing = Emphasized)) { -towards * it / 10 })
+            },
+            label = "category",
+        ) { page ->
             Column(
                 Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -795,16 +984,38 @@ private fun SettingsTab(
     } else {
         val current = category ?: Category.SCREEN
         Row(Modifier.fillMaxSize().padding(padding), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
-            Column(Modifier.width(280.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(Modifier.width(280.dp).verticalScroll(rememberScrollState())) {
                 Text(
                     stringResource(R.string.tab_settings), fontSize = 28.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 16.dp, bottom = 16.dp),
+                    modifier = Modifier.padding(start = 16.dp, bottom = 20.dp),
                 )
-                Category.entries.forEach {
-                    CategoryRow(it, selected = it == current, badge = it == Category.COMPONENTS && updates) { onCategory(it) }
+                Box {
+                    // The chosen row's background slides to it, as the bar's pill does.
+                    val y by animateDpAsState(
+                        (CategoryRowHeight + 4.dp) * current.ordinal,
+                        spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow),
+                        label = "category",
+                    )
+                    Box(
+                        Modifier.offset(y = y).fillMaxWidth().height(CategoryRowHeight).clip(RoundedCornerShape(18.dp))
+                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Category.entries.forEach {
+                            CategoryRow(it, selected = it == current, badge = it == Category.COMPONENTS && updates) { onCategory(it) }
+                        }
+                    }
                 }
             }
-            AnimatedContent(current, transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(90)) }, label = "page", modifier = Modifier.weight(1f)) { page ->
+            AnimatedContent(
+                current,
+                transitionSpec = {
+                    (fadeIn(tween(240, 90)) + slideInVertically(tween(300, 90, Emphasized)) { it / 30 }) togetherWith
+                        (fadeOut(tween(90)) + slideOutVertically(tween(90)) { -it / 60 })
+                },
+                label = "page",
+                modifier = Modifier.weight(1f),
+            ) { page ->
                 Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(stringResource(page.title), fontSize = 22.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
                     Box(Modifier.widthIn(max = 760.dp)) { pageContent(page) }
@@ -817,7 +1028,11 @@ private fun SettingsTab(
 /** A category on a phone: its icon, its name and a line of its state. */
 @Composable
 private fun CategoryCard(category: Category, summary: String, badge: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    Box(modifier.heightIn(min = 120.dp).clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow).clickable(onClick = onClick)) {
+    val press = remember { MutableInteractionSource() }
+    Box(
+        modifier.pressScale(press).heightIn(min = 120.dp).clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .clickable(press, LocalIndication.current, onClick = onClick),
+    ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Box(
                 Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
@@ -832,12 +1047,13 @@ private fun CategoryCard(category: Category, summary: String, badge: Boolean, mo
     }
 }
 
-/** A category in the tablet's list. */
+private val CategoryRowHeight = 52.dp
+
+/** A category in the tablet's list (the chosen one's background is drawn under the list). */
 @Composable
 private fun CategoryRow(category: Category, selected: Boolean, badge: Boolean, onClick: () -> Unit) {
-    val background by animateColorAsState(if (selected) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent, label = "category")
     Row(
-        Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(18.dp)).background(background)
+        Modifier.fillMaxWidth().height(CategoryRowHeight).clip(RoundedCornerShape(18.dp))
             .selectable(selected, onClick = onClick).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
