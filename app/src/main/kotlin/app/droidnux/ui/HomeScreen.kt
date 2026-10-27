@@ -134,6 +134,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
@@ -512,7 +513,9 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, modifier: M
         }
         Column(
             Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
-                .height(if (compact) 300.dp else 260.dp).padding(start = side, end = side, bottom = 8.dp),
+                // Almost half the screen, never less than its old fixed size (a phone held sideways).
+                .height((LocalConfiguration.current.screenHeightDp * 0.45f).dp.coerceAtLeast(if (compact) 300.dp else 260.dp))
+                .padding(start = side, end = side, bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.Bottom),
         ) {
             if (compact) {
