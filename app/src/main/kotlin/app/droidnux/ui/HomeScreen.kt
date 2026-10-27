@@ -283,15 +283,8 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
                     onClick = onUpdates,
                 ) { Icon(Icons.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
-            if (compact) {
-                QuickLaunch(state, viewModel)
-                AllApps(state, viewModel)
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
-                    QuickLaunch(state, viewModel, Modifier.width(360.dp))
-                    AllApps(state, viewModel, Modifier.weight(1f))
-                }
-            }
+            QuickLaunch(state, viewModel)
+            AllApps(state, viewModel)
         }
     }
 }
@@ -444,7 +437,8 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
             Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow)
                 .padding(horizontal = 6.dp, vertical = 12.dp),
         ) {
-            val columns = 4
+            // As many as the apps' grid below, so the two line up.
+            val columns = appColumns(compact, maxWidth)
             val gap = 4.dp
             val cell = (maxWidth - gap * (columns - 1)) / columns
             val height = if (compact) 92.dp else 100.dp
@@ -609,9 +603,8 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
             return@Column
         }
         val compact = isCompact()
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            // Four a row on a phone, about 110 dp each on a tablet.
-            val columns = if (compact) 4 else (maxWidth / 110.dp).toInt().coerceIn(4, 8)
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) { // The dock's inset: columns line up.
+            val columns = appColumns(compact, maxWidth)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 shown.chunked(columns).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -627,6 +620,9 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
         }
     }
 }
+
+/** Apps a row: four on a phone, about 110 dp each on a tablet. */
+private fun appColumns(compact: Boolean, width: Dp): Int = if (compact) 4 else (width / 110.dp).toInt().coerceIn(4, 10)
 
 /** Animates a [DpOffset] (Compose has no shortcut for it). */
 @Composable
