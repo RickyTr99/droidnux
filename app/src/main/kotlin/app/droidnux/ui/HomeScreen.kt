@@ -12,6 +12,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateValueAsState
@@ -25,34 +26,32 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -63,10 +62,12 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -84,34 +85,38 @@ import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RadialGradientShader
 import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.ShaderBrush
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.DpOffset
-import androidx.compose.ui.zIndex
-import androidx.compose.animation.core.VectorConverter
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
@@ -122,26 +127,35 @@ import app.droidnux.container.Component
 import app.droidnux.container.DesktopEnvironment.LinuxApp
 import app.droidnux.desktop.DesktopActivity
 import app.droidnux.desktop.DesktopKeysService
+import app.droidnux.desktop.DesktopSessionService
 import app.droidnux.desktop.DesktopSettings
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 private enum class Tab(val label: Int, val icon: ImageVector, val selectedIcon: ImageVector) {
-    DESKTOP(R.string.tab_desktop, Icons.Desktop, Icons.DesktopFilled),
-    APPS(R.string.tab_apps, Icons.Apps, Icons.AppsFilled),
+    HOME(R.string.tab_home, Icons.Desktop, Icons.DesktopFilled),
     STORE(R.string.tab_store, Icons.Store, Icons.StoreFilled),
     SETTINGS(R.string.tab_settings, Icons.Settings, Icons.SettingsFilled),
-    SYSTEM(R.string.tab_system, Icons.System, Icons.SystemFilled),
 }
 
-private const val TERMINAL = "org.kde.konsole"
+/** The Settings tab's pages; Diagnostics opens its own screen. */
+private enum class Category(val title: Int, val icon: ImageVector) {
+    SCREEN(R.string.settings_screen, Icons.Desktop),
+    INPUT(R.string.settings_input, Icons.Keyboard),
+    ACCOUNT(R.string.settings_account, Icons.User),
+    COMPONENTS(R.string.settings_components, Icons.Package),
+    ANDROID(R.string.settings_android, Icons.Android),
+    DIAGNOSTICS(R.string.system_diagnostics, Icons.Pulse),
+}
 
 @Composable
 fun HomeScreen(state: AppState, viewModel: AppViewModel) {
-    var tab by rememberSaveable { mutableStateOf(Tab.DESKTOP) }
+    var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
+    var category by rememberSaveable { mutableStateOf<Category?>(null) }
     var diagnostics by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) { if (state.apps == null) viewModel.loadApps() }
 
@@ -150,11 +164,10 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
         DiagnosticsScreen(viewModel)
         return
     }
-    BackHandler(enabled = tab != Tab.DESKTOP) { tab = Tab.DESKTOP }
+    BackHandler(enabled = tab != Tab.HOME) { tab = Tab.HOME }
+    val updates = !state.desktopUpToDate || Component.ALL.any { it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled }
 
-    Box(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).windowInsetsPadding(WindowInsets.safeDrawing),
-    ) {
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         // Short fades: the page follows the finger at once.
         AnimatedContent(tab, transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(90)) }, label = "tab") { page ->
             // Room for the bar floating over the bottom of every page.
@@ -164,14 +177,23 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
                 PaddingValues(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 120.dp)
             }
             when (page) {
-                Tab.DESKTOP -> DesktopTab(state, viewModel, padding, onAllApps = { tab = Tab.APPS }, onSystem = { tab = Tab.SYSTEM })
-                Tab.APPS -> AppsTab(state, viewModel, padding)
-                Tab.STORE -> StoreTab(state, viewModel, padding)
-                Tab.SETTINGS -> SettingsTab(padding)
-                Tab.SYSTEM -> SystemTab(state, viewModel, padding, onDiagnostics = { diagnostics = true })
+                // The Home runs under the status bar: its picture reaches the top edge.
+                Tab.HOME -> HomeTab(state, viewModel, updates, onUpdates = { category = Category.COMPONENTS; tab = Tab.SETTINGS })
+                Tab.STORE -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) { StoreTab(state, viewModel, padding) }
+                Tab.SETTINGS -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
+                    SettingsTab(
+                        state, viewModel, padding, category, updates,
+                        onCategory = { if (it == Category.DIAGNOSTICS) diagnostics = true else category = it },
+                    )
+                }
             }
         }
-        BottomBar(tab, Modifier.align(Alignment.BottomCenter).padding(bottom = if (isCompact()) 12.dp else 24.dp)) { tab = it }
+        BottomBar(
+            tab,
+            badge = if (updates) Tab.SETTINGS else null,
+            modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.safeDrawing)
+                .padding(bottom = if (isCompact()) 12.dp else 24.dp),
+        ) { tab = it }
     }
 }
 
@@ -184,13 +206,19 @@ private val PillBrush = object : ShaderBrush() {
     }
 }
 private val TabColor = Color(0xFFA9ABB3)
+private val UpdateColor = Color(0xFFF2C46D)
+
+/** The yellow dot of an update waiting. */
+@Composable
+private fun Badge(modifier: Modifier = Modifier) = Box(modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(UpdateColor))
 
 /**
  * A floating rounded bar: each tab is its icon over its name, the current one on a pill that slides
- * to it. The tab changes on touch down, without waiting for the finger to lift.
+ * to it. The tab changes on touch down, without waiting for the finger to lift. [badge] marks a tab
+ * with something waiting.
  */
 @Composable
-private fun BottomBar(current: Tab, modifier: Modifier, onSelect: (Tab) -> Unit) {
+private fun BottomBar(current: Tab, badge: Tab?, modifier: Modifier, onSelect: (Tab) -> Unit) {
     // Smaller on a phone: the bar spans the screen but for 12 dp on each side.
     val compact = isCompact()
     val height = if (compact) 60.dp else 68.dp
@@ -206,26 +234,31 @@ private fun BottomBar(current: Tab, modifier: Modifier, onSelect: (Tab) -> Unit)
                     val color by animateColorAsState(if (selected) Color.White else TabColor, tween(150), label = "tab")
                     val interaction = remember { MutableInteractionSource() }
                     val focused by interaction.collectIsFocusedAsState()
-                    Column(
+                    Box(
                         Modifier.size(item, height).clip(RoundedCornerShape(height / 2))
                             .then(if (focused) Modifier.border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(height / 2)) else Modifier)
                             .pointerInput(tab) { detectTapGestures(onPress = { onSelect(tab) }) }
                             // Keyboard, controller and accessibility (selecting again is harmless).
                             .selectable(selected, interactionSource = interaction, indication = null, onClick = { onSelect(tab) }),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 4.dp, Alignment.CenterVertically),
                     ) {
-                        Icon(if (selected) tab.selectedIcon else tab.icon, null, tint = color, modifier = Modifier.size(if (compact) 24.dp else 26.dp))
-                        Text(
-                            stringResource(tab.label),
-                            color = color,
-                            fontSize = if (compact) 11.sp else 14.sp,
-                            // Without the default tracking "Impostazioni" fits a phone's tab.
-                            letterSpacing = if (compact) 0.sp else TextUnit.Unspecified,
-                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                        Column(
+                            Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(if (compact) 3.dp else 4.dp, Alignment.CenterVertically),
+                        ) {
+                            Icon(if (selected) tab.selectedIcon else tab.icon, null, tint = color, modifier = Modifier.size(if (compact) 24.dp else 26.dp))
+                            Text(
+                                stringResource(tab.label),
+                                color = color,
+                                fontSize = if (compact) 11.sp else 14.sp,
+                                // Without the default tracking "Impostazioni" fits a phone's tab.
+                                letterSpacing = if (compact) 0.sp else TextUnit.Unspecified,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (tab == badge && !selected) Badge(Modifier.align(Alignment.TopCenter).padding(top = 10.dp).offset(x = 16.dp))
                     }
                 }
             }
@@ -233,123 +266,162 @@ private fun BottomBar(current: Tab, modifier: Modifier, onSelect: (Tab) -> Unit)
     }
 }
 
-// -- Desktop -----------------------------------------------------------------
+// -- Home --------------------------------------------------------------------
 
+/** The desktop's picture with its state and buttons, then the favorites and every app. */
 @Composable
-private fun DesktopTab(
-    state: AppState,
-    viewModel: AppViewModel,
-    padding: PaddingValues,
-    onAllApps: () -> Unit,
-    onSystem: () -> Unit,
-) {
-    val context = LocalContext.current
-    val missing = Component.ALL.filter { it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled }
+private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, onUpdates: () -> Unit) {
     val compact = isCompact()
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding),
-        verticalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 24.dp),
-    ) {
-        BoxWithConstraints {
-            val wide = maxWidth > 760.dp
-            // The last picture of the desktop, reloaded whenever the screen comes back.
-            var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
-            LifecycleResumeEffect(Unit) {
-                val file = DesktopActivity.thumbnailFile(context)
-                thumbnail = if (file.isFile) BitmapFactory.decodeFile(file.path) else null
-                onPauseOrDispose { }
+    val side = if (compact) 16.dp else 48.dp
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Hero(state, viewModel, side)
+        Column(
+            Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                .padding(start = side, end = side, top = 8.dp, bottom = if (compact) 100.dp else 120.dp),
+            verticalArrangement = Arrangement.spacedBy(if (compact) 20.dp else 24.dp),
+        ) {
+            if (updates) {
+                InfoRow(
+                    title = stringResource(R.string.home_update_title),
+                    text = stringResource(R.string.home_update_text),
+                    icon = Icons.Info,
+                    iconTint = UpdateColor,
+                    onClick = onUpdates,
+                ) { Icon(Icons.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
-            val hero = @Composable { modifier: Modifier ->
-                Box(
-                    // The desktop's proportions, so that the whole picture shows; on a phone 200 dp tall, cropped.
-                    (if (compact) modifier.height(200.dp) else modifier.aspectRatio(thumbnail?.let { it.width.toFloat() / it.height } ?: 1.6f))
-                        .clip(RoundedCornerShape(24.dp)).background(MaterialTheme.colorScheme.surfaceContainerLowest)
-                        .combinedClickable(onClick = { openDesktop(context) }),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    val picture = thumbnail
-                    if (picture != null) {
-                        Image(
-                            picture.asImageBitmap(), stringResource(R.string.home_last_session),
-                            Modifier.fillMaxSize(), contentScale = if (compact) ContentScale.Crop else ContentScale.Fit,
-                        )
-                    } else {
-                        Icon(Icons.Debian, null, tint = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(140.dp))
-                    }
-                }
-            }
-            val actions = @Composable { modifier: Modifier ->
-                Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(stringResource(R.string.home_title), fontSize = 28.sp, fontWeight = FontWeight.Medium)
-                        Text(
-                            stringResource(if (state.sessionRunning) R.string.home_running else R.string.home_ready),
-                            fontSize = 15.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    val open = @Composable { modifier: Modifier ->
-                        Button(onClick = { openDesktop(context) }, modifier = modifier.height(56.dp)) {
-                            Icon(Icons.Play, null, modifier = Modifier.size(22.dp))
-                            Text(
-                                stringResource(if (state.sessionRunning) R.string.action_resume_desktop else R.string.action_open_desktop),
-                                fontSize = 18.sp,
-                                modifier = Modifier.padding(start = 10.dp),
-                            )
-                        }
-                    }
-                    if (compact) {
-                        // The terminal as a round button beside it.
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            open(Modifier.weight(1f))
-                            FilledTonalIconButton(onClick = { launchApp(context, TERMINAL, null) }, modifier = Modifier.size(56.dp)) {
-                                Icon(Icons.Terminal, stringResource(R.string.action_terminal))
-                            }
-                        }
-                    } else {
-                        open(Modifier.fillMaxWidth())
-                        FilledTonalButton(onClick = { launchApp(context, TERMINAL, null) }, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-                            Text(stringResource(R.string.action_terminal), fontSize = 16.sp)
-                        }
-                    }
-                }
-            }
-            if (wide) {
-                // The picture at most 420 dp tall, so the quick launch row stays above the bar.
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterHorizontally),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    hero(Modifier.weight(1f, fill = false).heightIn(max = 420.dp))
-                    actions(Modifier.width(300.dp))
-                }
+            if (compact) {
+                QuickLaunch(state, viewModel)
+                AllApps(state, viewModel)
             } else {
-                Column(verticalArrangement = Arrangement.spacedBy(if (compact) 16.dp else 24.dp)) {
-                    hero(Modifier.fillMaxWidth())
-                    actions(Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(40.dp)) {
+                    QuickLaunch(state, viewModel, Modifier.width(360.dp))
+                    AllApps(state, viewModel, Modifier.weight(1f))
                 }
             }
         }
-        if (!state.desktopUpToDate || missing.isNotEmpty()) {
-            InfoRow(
-                title = stringResource(R.string.home_update_title),
-                text = stringResource(R.string.home_update_text),
-                icon = Icons.Info,
-                iconTint = MaterialTheme.colorScheme.primary,
-                onClick = onSystem,
-            ) { Icon(Icons.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-        QuickLaunch(state, viewModel, onAllApps)
     }
 }
 
 /**
- * The Home's apps, in the user's order, then "All apps". In edit mode each
- * app has a remove badge and moves where it is dragged; "Add" picks more.
+ * The last picture of the desktop from edge to edge, fading into the page, with the session's state and
+ * buttons over its bottom. A dark band under the status bar keeps its icons readable on a light wallpaper.
  */
 @Composable
-private fun QuickLaunch(state: AppState, viewModel: AppViewModel, onAllApps: () -> Unit) {
+private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp) {
+    val context = LocalContext.current
+    val compact = isCompact()
+    var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
+    LifecycleResumeEffect(Unit) {
+        val file = DesktopActivity.thumbnailFile(context)
+        thumbnail = if (file.isFile) BitmapFactory.decodeFile(file.path) else null
+        onPauseOrDispose { }
+    }
+    var confirmStop by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    val page = MaterialTheme.colorScheme.background
+    Box(Modifier.fillMaxWidth().clickable(onClickLabel = stringResource(R.string.action_open_desktop)) { openDesktop(context) }) {
+        val picture = thumbnail
+        if (picture != null) {
+            Image(picture.asImageBitmap(), stringResource(R.string.home_last_session), Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+        } else {
+            Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surfaceContainer), contentAlignment = Alignment.Center) {
+                Icon(Icons.Debian, null, tint = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(140.dp))
+            }
+        }
+        Box(
+            Modifier.matchParentSize().background(
+                Brush.verticalGradient(
+                    0f to Color.Black.copy(alpha = 0.35f), 0.15f to Color.Transparent,
+                    0.4f to Color.Transparent, 0.65f to page.copy(alpha = 0.6f), 0.85f to page.copy(alpha = 0.92f), 1f to page,
+                ),
+            ),
+        )
+        val running = state.sessionRunning
+        val status = @Composable { modifier: Modifier ->
+            Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Box(
+                    Modifier.size(10.dp).clip(RoundedCornerShape(5.dp))
+                        .background(if (running) Color(0xFF3DDC84) else MaterialTheme.colorScheme.surfaceContainerHighest),
+                )
+                Column {
+                    Text(
+                        stringResource(if (running) R.string.home_running else R.string.home_ready),
+                        fontSize = if (compact) 18.sp else 22.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                    Text(stringResource(R.string.home_title), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+        val open = @Composable { modifier: Modifier ->
+            Button(onClick = { openDesktop(context) }, modifier = modifier.height(56.dp)) {
+                Icon(Icons.Play, null, modifier = Modifier.size(22.dp))
+                Text(
+                    stringResource(if (running) R.string.action_resume_desktop else R.string.action_open_desktop),
+                    fontSize = 18.sp,
+                    modifier = Modifier.padding(start = 10.dp),
+                )
+            }
+        }
+        val stop = @Composable {
+            if (running) {
+                FilledTonalIconButton(
+                    onClick = { confirmStop = true },
+                    modifier = Modifier.size(56.dp),
+                    colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = Color.White.copy(alpha = 0.16f), contentColor = Color.White),
+                ) { Icon(Icons.Stop, stringResource(R.string.home_stop)) }
+            }
+        }
+        Column(
+            Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                .height(if (compact) 300.dp else 260.dp).padding(start = side, end = side, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.Bottom),
+        ) {
+            if (compact) {
+                status(Modifier)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    open(Modifier.weight(1f))
+                    stop()
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    status(Modifier.weight(1f))
+                    stop()
+                    open(Modifier.width(280.dp))
+                }
+            }
+        }
+    }
+    if (confirmStop) {
+        AlertDialog(
+            onDismissRequest = { confirmStop = false },
+            title = { Text(stringResource(R.string.menu_exit_title)) },
+            text = { Text(stringResource(R.string.menu_exit_text)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmStop = false
+                    DesktopSessionService.stop(context)
+                    // The desktop's process takes a moment to go.
+                    scope.launch {
+                        repeat(10) {
+                            delay(500)
+                            viewModel.refresh()
+                            if (!viewModel.state.value.sessionRunning) return@launch
+                        }
+                    }
+                }) { Text(stringResource(R.string.menu_exit_confirm), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmStop = false }) { Text(stringResource(R.string.action_cancel)) } },
+        )
+    }
+}
+
+/**
+ * The favorites, in the user's order, in a dock. In edit mode each app has a remove badge and moves
+ * where it is dragged; "Add" picks more.
+ */
+@Composable
+private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier) {
     var editing by rememberSaveable { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
     val apps = state.apps.orEmpty().associateBy { it.id }
@@ -359,8 +431,8 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, onAllApps: () 
     var drag by remember { mutableStateOf(Offset.Zero) }
     BackHandler(enabled = editing) { editing = false }
 
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth().height(36.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
             SectionHeader(
                 stringResource(R.string.home_quick) + if (editing) " · " + stringResource(R.string.home_edit_hint) else "",
                 Modifier.weight(1f),
@@ -374,17 +446,21 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, onAllApps: () 
             }
         }
         val compact = isCompact()
-        BoxWithConstraints(Modifier.fillMaxWidth()) {
-            // Four small tiles a row on a phone.
-            val gap = if (compact) 8.dp else 12.dp
-            val columns = if (compact) 4 else ((maxWidth + gap) / (220.dp + gap)).toInt().coerceIn(2, 6)
+        BoxWithConstraints(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow)
+                .padding(horizontal = 6.dp, vertical = 12.dp),
+        ) {
+            val columns = 4
+            val gap = 4.dp
             val cell = (maxWidth - gap * (columns - 1)) / columns
-            val height = if (compact) 92.dp else 120.dp
+            val height = if (compact) 92.dp else 100.dp
             val density = LocalDensity.current
             val stepX = with(density) { (cell + gap).toPx() }
             val stepY = with(density) { (height + gap).toPx() }
             fun origin(index: Int) = DpOffset((cell + gap) * (index % columns), (height + gap) * (index / columns))
-            val count = order.size + 1
+            // "Add" while editing, or in place of an empty dock.
+            val add = editing || order.isEmpty()
+            val count = order.size + if (add) 1 else 0
             Box(Modifier.fillMaxWidth().height(height * ((count + columns - 1) / columns) + gap * ((count - 1) / columns))) {
                 order.forEach { id ->
                     val app = apps[id] ?: return@forEach
@@ -430,48 +506,40 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, onAllApps: () 
                                     },
                                 ),
                         ) {
-                            AppTile(app, viewModel, editing = editing, lifted = lifted, small = compact)
+                            AppTile(app, viewModel, height, iconSize = if (compact) 52.dp else 56.dp, editing = editing, lifted = lifted)
                             if (editing) {
                                 IconButton(
                                     onClick = { viewModel.setHomeApps(order - id) },
-                                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(36.dp),
+                                    modifier = Modifier.align(Alignment.TopEnd).size(36.dp),
                                 ) {
                                     Box(
-                                        Modifier.size(28.dp).clip(RoundedCornerShape(14.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest),
+                                        Modifier.size(24.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest),
                                         contentAlignment = Alignment.Center,
-                                    ) { Icon(Icons.Close, stringResource(R.string.home_remove, app.name), Modifier.size(14.dp)) }
+                                    ) { Icon(Icons.Close, stringResource(R.string.home_remove, app.name), Modifier.size(12.dp)) }
                                 }
                             }
                         }
                     }
                 }
-                val last by animateDpOffsetAsState(origin(order.size), label = "last")
-                Column(
-                    Modifier.offset(last.x, last.y).size(cell, height).clip(CardShape)
-                        .then(
-                            if (editing) {
-                                Modifier.border(2.dp, MaterialTheme.colorScheme.outlineVariant, CardShape)
-                            } else {
-                                Modifier.background(MaterialTheme.colorScheme.surfaceContainerLow)
-                            },
+                if (add) {
+                    val last by animateDpOffsetAsState(origin(order.size), label = "last")
+                    Column(
+                        Modifier.offset(last.x, last.y).size(cell, height).clip(CardShape).clickable { adding = true },
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center,
+                    ) {
+                        Box(
+                            Modifier.size(if (compact) 52.dp else 56.dp).border(2.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp)),
+                            contentAlignment = Alignment.Center,
+                        ) { Icon(Icons.Plus, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        Text(
+                            stringResource(R.string.home_add),
+                            fontSize = if (compact) 12.sp else 14.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            modifier = Modifier.padding(top = 8.dp),
                         )
-                        .combinedClickable(onClick = { if (editing) adding = true else onAllApps() }),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Box(
-                        Modifier.size(if (compact) 40.dp else 48.dp).clip(RoundedCornerShape(if (compact) 12.dp else 14.dp))
-                            .background(if (editing) Color.Transparent else MaterialTheme.colorScheme.surfaceContainerHigh),
-                        contentAlignment = Alignment.Center,
-                    ) { Icon(if (editing) Icons.Plus else Icons.Apps, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                    Text(
-                        stringResource(if (editing) R.string.home_add else R.string.home_all_apps),
-                        fontSize = if (compact) 12.sp else 15.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = if (compact) 6.dp else 10.dp),
-                    )
+                    }
                 }
             }
         }
@@ -505,6 +573,67 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, onAllApps: () 
     }
 }
 
+/** Every app, programs before the desktop's settings; the magnifier opens a filter. */
+@Composable
+private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier) {
+    var query by rememberSaveable { mutableStateOf<String?>(null) }
+    BackHandler(enabled = query != null) { query = null }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+            SectionHeader(stringResource(R.string.home_all_apps), Modifier.weight(1f))
+            IconButton(onClick = { query = if (query == null) "" else null }) {
+                Icon(if (query == null) Icons.Search else Icons.Close, stringResource(R.string.home_search), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        val text = query
+        if (text != null) {
+            val focus = remember { FocusRequester() }
+            LaunchedEffect(Unit) { focus.requestFocus() }
+            OutlinedTextField(
+                value = text,
+                onValueChange = { query = it },
+                placeholder = { Text(stringResource(R.string.home_search)) },
+                leadingIcon = { Icon(Icons.Search, null) },
+                singleLine = true,
+                shape = RoundedCornerShape(28.dp),
+                modifier = Modifier.fillMaxWidth().focusRequester(focus),
+            )
+        }
+        val apps = state.apps
+        if (apps == null) {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
+            return@Column
+        }
+        val (settings, programs) = apps.partition { "Settings" in it.categories }
+        val shown = (programs + settings).filter { text.isNullOrBlank() || it.name.contains(text.trim(), ignoreCase = true) }
+        if (shown.isEmpty()) {
+            Text(
+                stringResource(R.string.store_no_results, text.orEmpty().trim()),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(vertical = 16.dp),
+            )
+            return@Column
+        }
+        val compact = isCompact()
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            // Four a row on a phone, about 110 dp each on a tablet.
+            val columns = if (compact) 4 else (maxWidth / 110.dp).toInt().coerceIn(4, 8)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                shown.chunked(columns).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        row.forEach { app ->
+                            key(app.id) {
+                                AppTile(app, viewModel, if (compact) 92.dp else 104.dp, iconSize = if (compact) 48.dp else 52.dp, modifier = Modifier.weight(1f))
+                            }
+                        }
+                        repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /** Animates a [DpOffset] (Compose has no shortcut for it). */
 @Composable
 private fun animateDpOffsetAsState(target: DpOffset, label: String): State<DpOffset> =
@@ -528,50 +657,20 @@ private fun shortcut(context: Context, app: LinuxApp, icon: Bitmap?): ShortcutIn
         )
         .build()
 
-// -- Apps --------------------------------------------------------------------
-
-@Composable
-private fun AppsTab(state: AppState, viewModel: AppViewModel, padding: PaddingValues) {
-    val apps = state.apps
-    if (apps == null) {
-        Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-            LinearProgressIndicator(Modifier.width(200.dp))
-        }
-        return
-    }
-    val (settings, programs) = apps.partition { "Settings" in it.categories }
-    LazyVerticalGrid(
-        columns = GridCells.Adaptive(132.dp),
-        contentPadding = padding,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxSize(),
-    ) {
-        item(span = { GridItemSpan(maxLineSpan) }) { SectionHeader(stringResource(R.string.apps_programs)) }
-        items(programs, key = { it.id }) { AppTile(it, viewModel) }
-        if (settings.isNotEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                SectionHeader(stringResource(R.string.apps_settings), Modifier.padding(top = 16.dp))
-            }
-            items(settings, key = { it.id }) { AppTile(it, viewModel) }
-        }
-    }
-}
-
 /**
- * An app: tap starts it in the desktop, long press offers the quick launch and a shortcut on Android's
- * home screen. While the quick launch is [editing] it only shows, outlined ([lifted] while dragged).
- * [small] fits four in a row on a phone.
+ * An app, [height] tall: tap starts it in the desktop, long press offers the favorites and a shortcut on
+ * Android's home screen. While the favorites are [editing] it only shows, outlined ([lifted] while dragged).
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AppTile(
     app: LinuxApp,
     viewModel: AppViewModel,
+    height: Dp,
+    iconSize: Dp,
     modifier: Modifier = Modifier,
     editing: Boolean = false,
     lifted: Boolean = false,
-    small: Boolean = false,
 ) {
     val context = LocalContext.current
     val icon by produceState(viewModel.cachedIcon(app.id), app.id) {
@@ -579,35 +678,34 @@ private fun AppTile(
     }
     var menu by remember { mutableStateOf(false) }
     val colors = MaterialTheme.colorScheme
+    val compact = isCompact()
     Box(modifier) {
         Column(
-            Modifier.fillMaxWidth().height(if (small) 92.dp else 120.dp).clip(CardShape)
-                .background(if (lifted) colors.surfaceContainerHigh else if (editing) colors.surfaceContainer else colors.surfaceContainerLow)
+            Modifier.fillMaxWidth().height(height).clip(CardShape)
                 .then(
                     when {
-                        lifted -> Modifier.border(2.dp, colors.primary, CardShape)
-                        editing -> Modifier.border(1.dp, colors.outlineVariant, CardShape)
+                        lifted -> Modifier.background(colors.surfaceContainerHigh).border(2.dp, colors.primary, CardShape)
+                        editing -> Modifier
                         else -> Modifier.combinedClickable(onClick = { launchApp(context, app.id, app) }, onLongClick = { menu = true })
                     },
                 )
-                .padding(horizontal = if (small) 4.dp else 8.dp),
+                .padding(horizontal = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
-            val size = if (small) 40.dp else 48.dp
             val bitmap = icon
             if (bitmap != null) {
-                Image(bitmap.asImageBitmap(), null, Modifier.size(size))
+                Image(bitmap.asImageBitmap(), null, Modifier.size(iconSize))
             } else {
-                Box(Modifier.size(size).clip(RoundedCornerShape(size * 0.3f)).background(MaterialTheme.colorScheme.surfaceContainerHighest))
+                Box(Modifier.size(iconSize).clip(RoundedCornerShape(iconSize * 0.3f)).background(colors.surfaceContainerHighest))
             }
             Text(
                 app.name,
-                fontSize = if (small) 12.sp else 14.sp,
+                fontSize = if (compact) 12.sp else 14.sp,
                 textAlign = TextAlign.Center,
-                maxLines = if (small) 1 else 2,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(top = if (small) 6.dp else 10.dp),
+                modifier = Modifier.padding(top = 8.dp),
             )
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -634,84 +732,204 @@ private fun AppTile(
 
 // -- Settings ----------------------------------------------------------------
 
+/**
+ * The categories and the chosen one's page: on a phone a grid of categories, each opening its page
+ * (Back returns); on a tablet the list beside the page.
+ */
 @Composable
-private fun SettingsTab(padding: PaddingValues) {
+private fun SettingsTab(
+    state: AppState,
+    viewModel: AppViewModel,
+    padding: PaddingValues,
+    category: Category?,
+    updates: Boolean,
+    onCategory: (Category?) -> Unit,
+) {
     val context = LocalContext.current
     var settings by remember { mutableStateOf(DesktopSettings.load(context)) }
     fun save(change: (DesktopSettings) -> DesktopSettings) {
         settings = DesktopSettings.update(context, change)
     }
-    var choosingLayout by remember { mutableStateOf(false) }
-    var changingPassword by remember { mutableStateOf(false) }
     val screen = remember { context.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds }
+    val summary = @Composable { it: Category ->
+        when (it) {
+            Category.SCREEN -> "${(screen.width() * settings.scale).toInt() and 1.inv()} × ${(screen.height() * settings.scale).toInt() and 1.inv()} · " +
+                "${(settings.uiScale * 100).roundToInt()}%"
+            Category.INPUT -> layoutName(settings.layout) + " · " +
+                stringResource(if (settings.trackpad) R.string.menu_mode_trackpad else R.string.menu_mode_touch)
+            Category.ACCOUNT -> settings.user
+            Category.COMPONENTS -> stringResource(if (updates) R.string.settings_components_update else R.string.settings_components_ok)
+            Category.ANDROID -> stringResource(R.string.settings_android_text)
+            Category.DIAGNOSTICS -> stringResource(R.string.settings_diagnostics_text)
+        }
+    }
+    val pageContent = @Composable { it: Category ->
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            when (it) {
+                Category.SCREEN -> ScreenPage(settings, screen, ::save)
+                Category.INPUT -> InputPage(settings, ::save)
+                Category.ACCOUNT -> AccountPage(settings)
+                Category.COMPONENTS -> ComponentsPage(state, viewModel)
+                Category.ANDROID -> SystemChecks(state.gpu)
+                Category.DIAGNOSTICS -> {}
+            }
+        }
+    }
 
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            SectionHeader(stringResource(R.string.settings_screen), Modifier.padding(bottom = 4.dp))
-            var scale by remember { mutableFloatStateOf(settings.scale) }
-            SliderRow(
-                stringResource(R.string.menu_resolution),
-                "${(screen.width() * scale).toInt() and 1.inv()} × ${(screen.height() * scale).toInt() and 1.inv()}",
-                scale, DesktopActivity.MIN_SCALE..DesktopActivity.MAX_SCALE,
-                onChange = { scale = it }, onDone = { save { it.copy(scale = scale) } },
-            )
-            var uiScale by remember { mutableFloatStateOf(settings.uiScale) }
-            SliderRow(
-                stringResource(R.string.menu_ui_scale),
-                "${(uiScale * 100).roundToInt()}%",
-                uiScale, DesktopSettings.MIN_UI_SCALE..DesktopSettings.MAX_UI_SCALE,
-                onChange = { uiScale = it }, onDone = { save { it.copy(uiScale = uiScale) } },
-            )
-            SectionHeader(stringResource(R.string.settings_input), Modifier.padding(top = 20.dp, bottom = 4.dp))
-            InfoRow(stringResource(R.string.settings_touch)) {
-                SingleChoiceSegmentedButtonRow {
-                    listOf(false to R.string.menu_mode_touch, true to R.string.menu_mode_trackpad).forEachIndexed { index, (trackpad, label) ->
-                        SegmentedButton(
-                            selected = settings.trackpad == trackpad,
-                            onClick = { save { it.copy(trackpad = trackpad) } },
-                            shape = SegmentedButtonDefaults.itemShape(index, 2),
-                            icon = {},
-                        ) { Text(stringResource(label)) }
+    if (isCompact()) {
+        BackHandler(enabled = category != null) { onCategory(null) }
+        AnimatedContent(category, transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(90)) }, label = "category") { page ->
+            Column(
+                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+                if (page == null) {
+                    Text(stringResource(R.string.tab_settings), fontSize = 24.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp))
+                    Category.entries.chunked(2).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            row.forEach { CategoryCard(it, summary(it), badge = it == Category.COMPONENTS && updates, Modifier.weight(1f)) { onCategory(it) } }
+                        }
                     }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilledTonalIconButton(onClick = { onCategory(null) }) { Icon(Icons.Back, stringResource(R.string.action_back)) }
+                        Text(stringResource(page.title), fontSize = 22.sp, fontWeight = FontWeight.Medium)
+                    }
+                    pageContent(page)
                 }
             }
-            InfoRow(stringResource(R.string.settings_layout), onClick = { choosingLayout = true }) {
-                Text(layoutName(settings.layout), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
+        }
+    } else {
+        val current = category?.takeIf { it != Category.DIAGNOSTICS } ?: Category.SCREEN
+        Row(Modifier.fillMaxSize().padding(padding), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
+            Column(Modifier.width(280.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    stringResource(R.string.tab_settings), fontSize = 28.sp, fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(start = 16.dp, bottom = 16.dp),
+                )
+                Category.entries.forEach {
+                    CategoryRow(it, selected = it == current, badge = it == Category.COMPONENTS && updates) { onCategory(it) }
+                }
             }
-            SystemKeysRow()
-            Text(
-                stringResource(R.string.settings_next_session),
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(start = 4.dp, top = 4.dp),
-            )
-            SectionHeader(stringResource(R.string.settings_account), Modifier.padding(top = 20.dp, bottom = 4.dp))
-            InfoRow(
-                stringResource(R.string.wizard_account_password),
-                text = stringResource(R.string.settings_password_summary, settings.user),
-            ) {
-                FilledTonalButton(onClick = { changingPassword = true }) { Text(stringResource(R.string.action_change)) }
-            }
-            if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
-                SectionHeader(stringResource(R.string.settings_debug), Modifier.padding(top = 20.dp, bottom = 4.dp))
-                InfoRow(
-                    stringResource(R.string.settings_stats),
-                    text = stringResource(R.string.settings_stats_text),
-                    onClick = { save { it.copy(stats = !it.stats) } },
-                ) {
-                    Switch(checked = settings.stats, onCheckedChange = { checked -> save { it.copy(stats = checked) } })
+            AnimatedContent(current, transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(90)) }, label = "page", modifier = Modifier.weight(1f)) { page ->
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Text(stringResource(page.title), fontSize = 22.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
+                    Box(Modifier.widthIn(max = 760.dp)) { pageContent(page) }
                 }
             }
         }
     }
+}
+
+/** A category on a phone: its icon, its name and a line of its state. */
+@Composable
+private fun CategoryCard(category: Category, summary: String, badge: Boolean, modifier: Modifier, onClick: () -> Unit) {
+    Box(modifier.heightIn(min = 120.dp).clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow).clickable(onClick = onClick)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Box(
+                Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                contentAlignment = Alignment.Center,
+            ) { Icon(category.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp)) }
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(stringResource(category.title), fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(summary, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp)
+            }
+        }
+        if (badge) Badge(Modifier.align(Alignment.TopEnd).padding(18.dp))
+    }
+}
+
+/** A category in the tablet's list. */
+@Composable
+private fun CategoryRow(category: Category, selected: Boolean, badge: Boolean, onClick: () -> Unit) {
+    val background by animateColorAsState(if (selected) MaterialTheme.colorScheme.surfaceContainerHigh else Color.Transparent, label = "category")
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 52.dp).clip(RoundedCornerShape(18.dp)).background(background)
+            .selectable(selected, onClick = onClick).padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+    ) {
+        Icon(category.icon, null, tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
+        Text(
+            stringResource(category.title),
+            fontSize = 15.sp,
+            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        if (badge) Badge()
+    }
+}
+
+@Composable
+private fun ScreenPage(settings: DesktopSettings, screen: android.graphics.Rect, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    val context = LocalContext.current
+    var scale by remember { mutableFloatStateOf(settings.scale) }
+    SliderRow(
+        stringResource(R.string.menu_resolution),
+        "${(screen.width() * scale).toInt() and 1.inv()} × ${(screen.height() * scale).toInt() and 1.inv()}",
+        scale, DesktopActivity.MIN_SCALE..DesktopActivity.MAX_SCALE,
+        onChange = { scale = it }, onDone = { save { it.copy(scale = scale) } },
+    )
+    var uiScale by remember { mutableFloatStateOf(settings.uiScale) }
+    SliderRow(
+        stringResource(R.string.menu_ui_scale),
+        "${(uiScale * 100).roundToInt()}%",
+        uiScale, DesktopSettings.MIN_UI_SCALE..DesktopSettings.MAX_UI_SCALE,
+        onChange = { uiScale = it }, onDone = { save { it.copy(uiScale = uiScale) } },
+    )
+    if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
+        InfoRow(
+            stringResource(R.string.settings_stats),
+            text = stringResource(R.string.settings_stats_text),
+            onClick = { save { it.copy(stats = !it.stats) } },
+        ) {
+            Switch(checked = settings.stats, onCheckedChange = { checked -> save { it.copy(stats = checked) } })
+        }
+    }
+}
+
+@Composable
+private fun InputPage(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    var choosingLayout by remember { mutableStateOf(false) }
+    InfoRow(stringResource(R.string.settings_touch)) {
+        SingleChoiceSegmentedButtonRow {
+            listOf(false to R.string.menu_mode_touch, true to R.string.menu_mode_trackpad).forEachIndexed { index, (trackpad, label) ->
+                SegmentedButton(
+                    selected = settings.trackpad == trackpad,
+                    onClick = { save { it.copy(trackpad = trackpad) } },
+                    shape = SegmentedButtonDefaults.itemShape(index, 2),
+                    icon = {},
+                ) { Text(stringResource(label)) }
+            }
+        }
+    }
+    InfoRow(stringResource(R.string.settings_layout), onClick = { choosingLayout = true }) {
+        Text(layoutName(settings.layout), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
+    }
+    SystemKeysRow()
+    Text(
+        stringResource(R.string.settings_next_session),
+        fontSize = 13.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+    )
     if (choosingLayout) {
         LayoutDialog(settings.layout, onDismiss = { choosingLayout = false }) { layout ->
             save { it.copy(layout = layout) }
             choosingLayout = false
         }
+    }
+}
+
+@Composable
+private fun AccountPage(settings: DesktopSettings) {
+    var changingPassword by remember { mutableStateOf(false) }
+    InfoRow(
+        stringResource(R.string.wizard_account_password),
+        text = stringResource(R.string.settings_password_summary, settings.user),
+    ) {
+        FilledTonalButton(onClick = { changingPassword = true }) { Text(stringResource(R.string.action_change)) }
     }
     if (changingPassword) PasswordDialog(onDismiss = { changingPassword = false })
 }
@@ -769,60 +987,43 @@ private fun SliderRow(
     }
 }
 
-// -- System ------------------------------------------------------------------
-
+/** The distribution, the desktop's packages and the components. */
 @Composable
-private fun SystemTab(state: AppState, viewModel: AppViewModel, padding: PaddingValues, onDiagnostics: () -> Unit) {
+private fun ComponentsPage(state: AppState, viewModel: AppViewModel) {
     var confirmReinstall by remember { mutableStateOf(false) }
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    InfoRow(
+        stringResource(R.string.distro_debian),
+        text = stringResource(R.string.install_rootfs_text),
+        icon = Icons.Check,
+        iconTint = MaterialTheme.colorScheme.primary,
     ) {
-        Column(Modifier.widthIn(max = 760.dp).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            SectionHeader(stringResource(R.string.system_installed), Modifier.padding(bottom = 4.dp))
-            InfoRow(
-                stringResource(R.string.distro_debian),
-                text = stringResource(R.string.install_rootfs_text),
-                icon = Icons.Check,
-                iconTint = MaterialTheme.colorScheme.primary,
-            ) {
-                TextButton(onClick = { confirmReinstall = true }) { Text(stringResource(R.string.action_reinstall)) }
-            }
-            InfoRow(
-                stringResource(R.string.desktop_name),
-                text = stringResource(
-                    when {
-                        state.desktopInstalling -> R.string.desktop_installing
-                        state.desktopUpToDate -> R.string.system_desktop_ok
-                        else -> R.string.system_desktop_update
-                    },
-                ),
-                icon = if (state.desktopUpToDate) Icons.Check else Icons.Info,
-                iconTint = MaterialTheme.colorScheme.primary,
-                action = if (state.desktopUpToDate || state.desktopInstalling) null else {
-                    { FilledTonalButton(onClick = viewModel::installDesktop) { Text(stringResource(R.string.action_update_desktop)) } }
-                },
-            )
-            if (state.desktopInstalling) {
-                val fraction = state.desktopProgress.fraction()
-                if (fraction != null) {
-                    LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
-                } else {
-                    LinearProgressIndicator(Modifier.fillMaxWidth())
-                }
-            }
-            ComponentRow(Component.MESA, stringResource(R.string.install_gpu), state, viewModel)
-            ComponentRow(Component.PLASMA, stringResource(R.string.plasma_component), state, viewModel)
-
-            SectionHeader(stringResource(R.string.system_checks), Modifier.padding(top = 20.dp, bottom = 4.dp))
-            SystemChecks(state.gpu)
-
-            SectionHeader(stringResource(R.string.system_advanced), Modifier.padding(top = 20.dp, bottom = 4.dp))
-            InfoRow(stringResource(R.string.system_diagnostics), onClick = onDiagnostics) {
-                Icon(Icons.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+        TextButton(onClick = { confirmReinstall = true }) { Text(stringResource(R.string.action_reinstall)) }
+    }
+    InfoRow(
+        stringResource(R.string.desktop_name),
+        text = stringResource(
+            when {
+                state.desktopInstalling -> R.string.desktop_installing
+                state.desktopUpToDate -> R.string.system_desktop_ok
+                else -> R.string.system_desktop_update
+            },
+        ),
+        icon = if (state.desktopUpToDate) Icons.Check else Icons.Info,
+        iconTint = if (state.desktopUpToDate) MaterialTheme.colorScheme.primary else UpdateColor,
+        action = if (state.desktopUpToDate || state.desktopInstalling) null else {
+            { FilledTonalButton(onClick = viewModel::installDesktop) { Text(stringResource(R.string.action_update_desktop)) } }
+        },
+    )
+    if (state.desktopInstalling) {
+        val fraction = state.desktopProgress.fraction()
+        if (fraction != null) {
+            LinearProgressIndicator(progress = { fraction }, modifier = Modifier.fillMaxWidth())
+        } else {
+            LinearProgressIndicator(Modifier.fillMaxWidth())
         }
     }
+    ComponentRow(Component.MESA, stringResource(R.string.install_gpu), state, viewModel)
+    ComponentRow(Component.PLASMA, stringResource(R.string.plasma_component), state, viewModel)
     if (confirmReinstall) {
         AlertDialog(
             onDismissRequest = { confirmReinstall = false },
@@ -853,7 +1054,7 @@ private fun ComponentRow(component: Component, name: String, state: AppState, vi
                 ?: stringResource(R.string.system_component_missing)
         },
         icon = if (installed) Icons.Check else Icons.Info,
-        iconTint = MaterialTheme.colorScheme.primary,
+        iconTint = if (installed) MaterialTheme.colorScheme.primary else UpdateColor,
         action = when {
             component.sha256.isEmpty() -> null
             install is InstallState.Installing -> {
@@ -869,7 +1070,7 @@ private fun ComponentRow(component: Component, name: String, state: AppState, vi
 
 /** An app's icon, decoded off the main thread; an empty tile until then. */
 @Composable
-private fun AppIcon(id: String, viewModel: AppViewModel, size: androidx.compose.ui.unit.Dp) {
+private fun AppIcon(id: String, viewModel: AppViewModel, size: Dp) {
     val icon by produceState(viewModel.cachedIcon(id), id) {
         if (value == null) value = withContext(Dispatchers.IO) { viewModel.icon(id) }
     }
