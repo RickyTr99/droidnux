@@ -1,8 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="phase0_title">Diagnostica</string>
-    <string name="phase0_subtitle">Fase 0 · fondamenta</string>
-    <string name="section_rootfs">File system della distro</string>
     <string name="section_display">Core di presentazione</string>
     <string name="action_install">Installa</string>
     <string name="action_reinstall">Reinstalla</string>
@@ -11,26 +8,10 @@
     <string name="rootfs_reinstall_text">Tutto quello che c\'è nella distro viene cancellato: pacchetti installati, desktop, driver della GPU e file in /root.</string>
     <string name="action_run">Esegui uname -a</string>
     <string name="status_checking">Controllo…</string>
-    <string name="status_not_installed">Non installato · %1$s</string>
-    <string name="status_installed">Installato</string>
-    <string name="status_downloading">Download %1$s / %2$s</string>
-    <string name="status_verifying">Verifica del checksum…</string>
-    <string name="status_extracting">Estrazione… %1$d%%</string>
-    <string name="status_failed">Errore: %1$s</string>
-    <string name="component_unreleased">%1$s: non ancora pubblicato.</string>
-    <string name="component_installed_version">Versione installata: %1$s</string>
-    <string name="plasma_component_version">Ottimizzazioni di Plasma %1$s</string>
     <string name="container_hint">Prima installa il file system della distro.</string>
     <string name="exit_code">Codice di uscita %1$d</string>
-    <string name="desktop_not_installed">Plasma non è ancora installato.</string>
-    <string name="desktop_installed">Plasma è installato.</string>
-    <string name="action_install_desktop">Installa Plasma</string>
-    <string name="desktop_update">Plasma è installato; questa versione dell\'app aggiunge dei pacchetti.</string>
     <string name="action_update_desktop">Aggiorna</string>
     <string name="action_open_desktop">Apri il desktop</string>
-    <string name="storage_granted">Memoria del dispositivo: in /sdcard e nella cartella Android della home.</string>
-    <string name="storage_denied">Memoria del dispositivo: consenti l’accesso a tutti i file per vederla in Linux.</string>
-    <string name="action_allow_storage">Consenti l’accesso</string>
     <string name="desktop_installing">Installazione…</string>
     <string name="session_channel">Sessione desktop</string>
     <string name="session_running">Desktop Linux in esecuzione</string>
@@ -319,4 +300,7 @@
     <string name="settings_android">Android</string>
     <string name="settings_android_text">Permessi, batteria e GPU</string>
     <string name="settings_diagnostics_text">Prove del sistema e log</string>
+    <string name="section_container">Container</string>
+    <string name="diagnostics_spike_text">Prova dei buffer condivisi con la GPU</string>
+    <string name="diagnostics_desktop_log">Log dell’installazione del desktop</string>
 </resources>

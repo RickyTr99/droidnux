@@ -142,7 +142,7 @@ private enum class Tab(val label: Int, val icon: ImageVector, val selectedIcon: 
     SETTINGS(R.string.tab_settings, Icons.Settings, Icons.SettingsFilled),
 }
 
-/** The Settings tab's pages; Diagnostics opens its own screen. */
+/** The Settings tab's pages. */
 private enum class Category(val title: Int, val icon: ImageVector) {
     SCREEN(R.string.settings_screen, Icons.Desktop),
     INPUT(R.string.settings_input, Icons.Keyboard),
@@ -156,14 +156,8 @@ private enum class Category(val title: Int, val icon: ImageVector) {
 fun HomeScreen(state: AppState, viewModel: AppViewModel) {
     var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
     var category by rememberSaveable { mutableStateOf<Category?>(null) }
-    var diagnostics by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) { if (state.apps == null) viewModel.loadApps() }
 
-    if (diagnostics) {
-        BackHandler { diagnostics = false }
-        DiagnosticsScreen(viewModel)
-        return
-    }
     BackHandler(enabled = tab != Tab.HOME) { tab = Tab.HOME }
     val updates = !state.desktopUpToDate || Component.ALL.any { it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled }
 
@@ -183,7 +177,7 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
                 Tab.SETTINGS -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     SettingsTab(
                         state, viewModel, padding, category, updates,
-                        onCategory = { if (it == Category.DIAGNOSTICS) diagnostics = true else category = it },
+                        onCategory = { category = it },
                     )
                 }
             }
@@ -771,7 +765,7 @@ private fun SettingsTab(
                 Category.ACCOUNT -> AccountPage(settings)
                 Category.COMPONENTS -> ComponentsPage(state, viewModel)
                 Category.ANDROID -> SystemChecks(state.gpu)
-                Category.DIAGNOSTICS -> {}
+                Category.DIAGNOSTICS -> DiagnosticsPage(state, viewModel)
             }
         }
     }
@@ -800,7 +794,7 @@ private fun SettingsTab(
             }
         }
     } else {
-        val current = category?.takeIf { it != Category.DIAGNOSTICS } ?: Category.SCREEN
+        val current = category ?: Category.SCREEN
         Row(Modifier.fillMaxSize().padding(padding), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
             Column(Modifier.width(280.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(

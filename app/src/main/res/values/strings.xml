@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">DroidNux</string>
-    <string name="phase0_title">Diagnostics</string>
-    <string name="phase0_subtitle">Phase 0 · foundations</string>
-    <string name="section_rootfs">Root filesystem</string>
     <string name="section_container">Container</string>
     <string name="section_display">Display core</string>
     <string name="action_install">Install</string>
@@ -13,30 +10,11 @@
     <string name="rootfs_reinstall_text">Everything in the distro is deleted: installed packages, the desktop, the GPU drivers and the files in /root.</string>
     <string name="action_run">Run uname -a</string>
     <string name="status_checking">Checking…</string>
-    <string name="status_not_installed">Not installed · %1$s</string>
-    <string name="status_installed">Installed</string>
-    <string name="status_downloading">Downloading %1$s / %2$s</string>
-    <string name="status_verifying">Verifying checksum…</string>
-    <string name="status_extracting">Extracting… %1$d%%</string>
-    <string name="status_failed">Failed: %1$s</string>
     <string name="container_hint">Install the root filesystem first.</string>
     <string name="exit_code">Exit code %1$d</string>
     <string name="action_buffer_spike">Buffer spike</string>
-    <string name="section_desktop">Desktop</string>
-    <string name="section_gpu">GPU</string>
-    <string name="gpu_mesa">Mesa %1$s (Turnip + Zink)</string>
-    <string name="component_unreleased">%1$s is not published yet.</string>
-    <string name="component_installed_version">Installed: %1$s</string>
-    <string name="plasma_component_version">Plasma speed-ups %1$s</string>
-    <string name="desktop_not_installed">Plasma is not installed yet.</string>
-    <string name="desktop_installed">Plasma is installed.</string>
-    <string name="action_install_desktop">Install Plasma</string>
-    <string name="desktop_update">Plasma is installed; this version of the app adds packages.</string>
     <string name="action_update_desktop">Update</string>
     <string name="action_open_desktop">Open desktop</string>
-    <string name="storage_granted">Device storage: in /sdcard and in the Android folder of the home.</string>
-    <string name="storage_denied">Device storage: allow access to all files to see it in Linux.</string>
-    <string name="action_allow_storage">Allow access</string>
     <string name="desktop_installing">Installing…</string>
     <string name="session_channel">Desktop session</string>
     <string name="session_running">Linux desktop running</string>
@@ -325,4 +303,6 @@
     <string name="settings_android">Android</string>
     <string name="settings_android_text">Permissions, battery and GPU</string>
     <string name="settings_diagnostics_text">System checks and logs</string>
+    <string name="diagnostics_spike_text">Test of the buffers shared with the GPU</string>
+    <string name="diagnostics_desktop_log">Desktop install log</string>
 </resources>
