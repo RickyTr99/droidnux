@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: a launcher name that tells them apart from the release. -->
+<resources>
+    <string name="app_name" translatable="false">DroidNux (debug)</string>
+</resources>
