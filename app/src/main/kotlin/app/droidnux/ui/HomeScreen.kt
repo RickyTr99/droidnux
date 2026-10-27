@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.os.Build
 import android.provider.Settings
 import android.view.View
 import android.view.WindowManager
@@ -122,19 +121,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RadialGradientShader
 import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.ShaderBrush
@@ -401,19 +396,13 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
     LifecycleResumeEffect(Unit) {
         val load = scope.launch {
             val file = DesktopActivity.thumbnailFile(context)
-            thumbnail = withContext(Dispatchers.IO) { if (file.isFile) BitmapFactory.decodeFile(file.path) else null }
+            thumbnail = withContext(Dispatchers.IO) { if (file.isFile) blurred(file.path) else null }
         }
         onPauseOrDispose { load.cancel() }
     }
-    // Behind the whole page, the same picture blurred and dimmed (blur needs Android 12).
-    val picture = thumbnail
     Box(Modifier.fillMaxSize()) {
-        if (picture != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            Image(picture.asImageBitmap(), null, Modifier.fillMaxSize().blur(48.dp), contentScale = ContentScale.Crop)
-            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background.copy(alpha = 0.6f)))
-        }
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-            Hero(state, viewModel, side, picture, Modifier.entrance(entrance, 0))
+            Hero(state, viewModel, side, thumbnail, Modifier.entrance(entrance, 0))
             Column(
                 Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                     .padding(start = side, end = side, top = 8.dp, bottom = if (compact) 100.dp else 120.dp),
@@ -459,15 +448,7 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, picture: Bi
             .clickable(onClickLabel = stringResource(R.string.action_open_desktop), onClick = open),
     ) {
         if (picture != null) {
-            // Sharp at the top, dissolving into the blurred copy behind the page.
-            Image(
-                picture.asImageBitmap(), stringResource(R.string.home_last_session),
-                Modifier.matchParentSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.drawWithContent {
-                    drawContent()
-                    drawRect(Brush.verticalGradient(0.45f to Color.Black, 1f to Color.Transparent), blendMode = BlendMode.DstIn)
-                },
-                contentScale = ContentScale.Crop,
-            )
+            Image(picture.asImageBitmap(), stringResource(R.string.home_last_session), Modifier.matchParentSize(), contentScale = ContentScale.Crop)
         } else {
             Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surfaceContainer), contentAlignment = Alignment.Center) {
                 Icon(Icons.Debian, null, tint = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(140.dp))
@@ -478,8 +459,7 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, picture: Bi
             Modifier.matchParentSize().background(
                 Brush.verticalGradient(
                     0f to Color.Black.copy(alpha = 0.35f), 0.15f to Color.Transparent,
-                    // With a picture, the bottom is the dimmed blur behind: nothing to add, or a seam shows.
-                    0.45f to Color.Transparent, 1f to if (picture != null) Color.Transparent else page,
+                    0.4f to Color.Transparent, 0.65f to page.copy(alpha = 0.6f), 0.85f to page.copy(alpha = 0.92f), 1f to page,
                 ),
             ),
         )
@@ -644,8 +624,7 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
         }
         val compact = isCompact()
         BoxWithConstraints(
-            // A little see-through over the blurred picture.
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.75f))
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow)
                 .padding(horizontal = 6.dp, vertical = 12.dp),
         ) {
             // As many as the apps' grid below, so the two line up.
@@ -834,6 +813,52 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
 
 /** Apps a row: four on a phone, about 110 dp each on a tablet. */
 private fun appColumns(compact: Boolean, width: Dp): Int = if (compact) 4 else (width / 110.dp).toInt().coerceIn(4, 10)
+
+/**
+ * The desktop's last picture, blurred: decoded at a quarter of its size, halved three times, blurred there
+ * and grown back. Done once per load, so it costs nothing per frame and works on every Android version.
+ */
+private fun blurred(path: String): Bitmap? {
+    var bitmap = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = 4 }) ?: return null
+    val width = bitmap.width
+    // One halving at a time averages every pixel; one big step would skip most of them and streak.
+    repeat(3) { bitmap = Bitmap.createScaledBitmap(bitmap, (bitmap.width / 2).coerceAtLeast(1), (bitmap.height / 2).coerceAtLeast(1), true) }
+    bitmap = boxBlur(bitmap, radius = 3, passes = 3)
+    // Grown back the same way: a single big stretch shows the pixels as blocks.
+    while (bitmap.width * 2 <= width) bitmap = Bitmap.createScaledBitmap(bitmap, bitmap.width * 2, bitmap.height * 2, true)
+    return bitmap
+}
+
+/** [passes] box blurs of [radius] pixels, across then down (three passes come close to a Gaussian). */
+private fun boxBlur(source: Bitmap, radius: Int, passes: Int): Bitmap {
+    val w = source.width
+    val h = source.height
+    var pixels = IntArray(w * h).also { source.getPixels(it, 0, w, 0, 0, w, h) }
+    var out = IntArray(w * h)
+    // One line of [count] pixels from [start], [step] apart, averaged over the window around each (edges repeat).
+    fun line(start: Int, step: Int, count: Int) {
+        for (i in 0 until count) {
+            var r = 0
+            var g = 0
+            var b = 0
+            for (k in -radius..radius) {
+                val p = pixels[start + (i + k).coerceIn(0, count - 1) * step]
+                r += p shr 16 and 0xFF
+                g += p shr 8 and 0xFF
+                b += p and 0xFF
+            }
+            val n = 2 * radius + 1
+            out[start + i * step] = (0xFF shl 24) or (r / n shl 16) or (g / n shl 8) or (b / n)
+        }
+    }
+    repeat(passes) {
+        for (y in 0 until h) line(y * w, 1, w)
+        pixels = out.also { out = pixels }
+        for (x in 0 until w) line(x, w, h)
+        pixels = out.also { out = pixels }
+    }
+    return Bitmap.createBitmap(pixels, w, h, Bitmap.Config.ARGB_8888)
+}
 
 /** Animates a [DpOffset] (Compose has no shortcut for it). */
 @Composable
@@ -1073,8 +1098,8 @@ private fun SettingsTab(
 
 /**
  * A Settings page on a phone, usable with one hand: pulled down at its top, it slides down to where the
- * thumb reaches, under an empty band; scrolling up closes the band before the page scrolls. [reach] is
- * how far it is pulled, in pixels. [content] gets how open the band is (0 to 1), for [reachTitle].
+ * thumb reaches; scrolling up brings it back before the page scrolls. [reach] is
+ * how far it is pulled, in pixels. [content] gets how far down it is (0 to 1), for [reachTitle].
  */
 @Composable
 private fun ReachPage(
@@ -1117,17 +1142,15 @@ private fun ReachPage(
             }
         }
     }
-    Column(Modifier.fillMaxSize().nestedScroll(connection)) {
-        // The band: as tall as the pull.
-        Box(Modifier.fillMaxWidth().layout { _, constraints -> layout(constraints.maxWidth, reach.floatValue.roundToInt()) {} })
-        Column(
-            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(padding),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) { content(::open) }
-    }
+    // The page moves down by the pull: placed again each frame, never measured again.
+    Column(
+        Modifier.fillMaxSize().nestedScroll(connection).offset { IntOffset(0, reach.floatValue.roundToInt()) }
+            .verticalScroll(rememberScrollState()).padding(padding),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) { content(::open) }
 }
 
-/** A page's title growing to big type, upwards from its bottom left, as the band above it opens. */
+/** A page's title growing to big type, upwards from its bottom left, as the page is pulled down. */
 private fun Modifier.reachTitle(open: () -> Float) = graphicsLayer {
     val scale = 1 + 0.45f * open()
     scaleX = scale
