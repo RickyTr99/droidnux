@@ -14,16 +14,16 @@ endif()
 # A freestanding static binary linked at a fixed address, since its SIGSYS
 # handler and syscall gadget stay mapped in every guest process.
 add_executable(burrow
-    burrow/start.S
-    burrow/config.c
-    burrow/elf.c
-    burrow/l2s.c
-    burrow/main.c
-    burrow/path.c
-    burrow/procfs.c
-    burrow/sysv.c
-    burrow/trap.c
-    burrow/util.c)
+    burrow/src/start.S
+    burrow/src/config.c
+    burrow/src/elf.c
+    burrow/src/l2s.c
+    burrow/src/main.c
+    burrow/src/path.c
+    burrow/src/procfs.c
+    burrow/src/sysv.c
+    burrow/src/trap.c
+    burrow/src/util.c)
 set_target_properties(burrow PROPERTIES OUTPUT_NAME "libburrow.so")
 target_compile_options(burrow PRIVATE
     -O2 -Wall -Wextra

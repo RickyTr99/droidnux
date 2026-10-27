@@ -18,4 +18,3 @@ desktop.ini
 dist/
 *.keystore
 *.jks
-container/src/main/cpp/burrow/tests/go/burrowtest

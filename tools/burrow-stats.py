@@ -27,7 +27,7 @@ def adb(command, **kw):
 
 
 def names():
-    header = os.path.join(os.path.dirname(__file__), "../container/src/main/cpp/burrow/burrow.h")
+    header = os.path.join(os.path.dirname(__file__), "../container/src/main/cpp/burrow/src/burrow.h")
     found = {int(n): name for name, n in re.findall(r"NR_(\w+) = (\d+)", open(header).read())}
     found.update({61: "getdents64", 46: "ftruncate", 98: "futex", 500: "(path probe)", 501: "(path walk)", 502: "(direct open)"})
     return found

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs Burrow's test suite (container/src/main/cpp/burrow/tests) in the debug
+# Runs Burrow's test suite (container/src/main/cpp/burrow/tests, a submodule) in the debug
 # app's rootfs over adb, through tools/dn-guest.sh:
 #
 #   tools/burrow-test.sh            # all tests
