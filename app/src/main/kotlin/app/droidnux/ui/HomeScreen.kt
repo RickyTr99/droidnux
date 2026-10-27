@@ -459,7 +459,7 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, picture: Bi
             Modifier.matchParentSize().background(
                 Brush.verticalGradient(
                     0f to Color.Black.copy(alpha = 0.35f), 0.15f to Color.Transparent,
-                    0.4f to Color.Transparent, 0.65f to page.copy(alpha = 0.6f), 0.85f to page.copy(alpha = 0.92f), 1f to page,
+                    0.6f to Color.Transparent, 0.8f to page.copy(alpha = 0.6f), 0.93f to page.copy(alpha = 0.92f), 1f to page,
                 ),
             ),
         )
