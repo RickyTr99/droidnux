@@ -815,18 +815,13 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
 private fun appColumns(compact: Boolean, width: Dp): Int = if (compact) 4 else (width / 110.dp).toInt().coerceIn(4, 10)
 
 /**
- * The desktop's last picture, blurred: decoded at a quarter of its size, halved three times, blurred there
- * and grown back. Done once per load, so it costs nothing per frame and works on every Android version.
+ * The desktop's last picture, lightly blurred, at a quarter of its size. Done once per load, so it costs
+ * nothing per frame and works on every Android version.
  */
 private fun blurred(path: String): Bitmap? {
-    var bitmap = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = 4 }) ?: return null
-    val width = bitmap.width
-    // One halving at a time averages every pixel; one big step would skip most of them and streak.
-    repeat(3) { bitmap = Bitmap.createScaledBitmap(bitmap, (bitmap.width / 2).coerceAtLeast(1), (bitmap.height / 2).coerceAtLeast(1), true) }
-    bitmap = boxBlur(bitmap, radius = 3, passes = 3)
-    // Grown back the same way: a single big stretch shows the pixels as blocks.
-    while (bitmap.width * 2 <= width) bitmap = Bitmap.createScaledBitmap(bitmap, bitmap.width * 2, bitmap.height * 2, true)
-    return bitmap
+    // A light blur: a few pixels at a quarter of the size, the screen stretches it smoothly.
+    val quarter = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = 4 }) ?: return null
+    return boxBlur(quarter, radius = 3, passes = 2)
 }
 
 /** [passes] box blurs of [radius] pixels, across then down (three passes come close to a Gaussian). */
