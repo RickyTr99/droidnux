@@ -23,6 +23,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -59,6 +60,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -106,6 +108,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableFloatState
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -119,6 +122,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -132,9 +136,13 @@ import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -144,10 +152,12 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -957,6 +967,8 @@ private fun SettingsTab(
 
     if (isCompact()) {
         BackHandler(enabled = category != null) { onCategory(null) }
+        // How far the pages are pulled down, the same for every page.
+        val reach = remember { mutableFloatStateOf(0f) }
         AnimatedContent(
             category,
             transitionSpec = {
@@ -967,12 +979,17 @@ private fun SettingsTab(
             },
             label = "category",
         ) { page ->
-            Column(
-                Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(padding),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
+            ReachPage(
+                reach,
+                title = stringResource(page?.title ?: R.string.tab_settings),
+                subtitle = page?.let { summary(it) },
+                padding = padding,
+            ) { smallTitle ->
                 if (page == null) {
-                    Text(stringResource(R.string.tab_settings), fontSize = 24.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp))
+                    Text(
+                        stringResource(R.string.tab_settings), fontSize = 24.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(start = 4.dp).graphicsLayer { alpha = smallTitle() },
+                    )
                     Category.entries.chunked(2).forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             row.forEach { CategoryCard(it, summary(it), badge = it == Category.COMPONENTS && updates, Modifier.weight(1f)) { onCategory(it) } }
@@ -981,7 +998,7 @@ private fun SettingsTab(
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalIconButton(onClick = { onCategory(null) }) { Icon(Icons.Back, stringResource(R.string.action_back)) }
-                        Text(stringResource(page.title), fontSize = 22.sp, fontWeight = FontWeight.Medium)
+                        Text(stringResource(page.title), fontSize = 22.sp, fontWeight = FontWeight.Medium, modifier = Modifier.graphicsLayer { alpha = smallTitle() })
                     }
                     pageContent(page)
                 }
@@ -1030,6 +1047,85 @@ private fun SettingsTab(
         }
     }
 }
+
+/**
+ * A Settings page on a phone, usable with one hand: pulled down at its top, it slides under a tall header
+ * with its [title] (and [subtitle]) in big type, down to where the thumb reaches; scrolling up closes the
+ * header before the page scrolls. [reach] is how far it is pulled, in pixels. [content] gets the opacity
+ * for its own small title, which gives way to the big one.
+ */
+@Composable
+private fun ReachPage(
+    reach: MutableFloatState,
+    title: String,
+    subtitle: String?,
+    padding: PaddingValues,
+    content: @Composable ColumnScope.(smallTitle: () -> Float) -> Unit,
+) {
+    val max = with(LocalDensity.current) { (LocalConfiguration.current.screenHeightDp * 0.35f).dp.toPx() }
+    fun open() = (reach.floatValue / max).coerceIn(0f, 1f)
+    val connection = remember(max) {
+        object : NestedScrollConnection {
+            // Up: the header closes first.
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (available.y >= 0 || reach.floatValue <= 0f) return Offset.Zero
+                val take = minOf(-available.y, reach.floatValue)
+                reach.floatValue -= take
+                return Offset(0f, -take)
+            }
+
+            // Down past the top, by the finger only (not a fling): the header opens.
+            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset {
+                if (available.y <= 0 || source != NestedScrollSource.UserInput) return Offset.Zero
+                val take = minOf(available.y, max - reach.floatValue)
+                reach.floatValue += take
+                return Offset(0f, take)
+            }
+
+            // Let go half way: open or closed, whichever the flick or the nearer end says.
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                val now = reach.floatValue
+                if (now <= 0f || now >= max) return Velocity.Zero
+                val target = when {
+                    available.y > REACH_FLICK -> max
+                    available.y < -REACH_FLICK -> 0f
+                    now > max / 2 -> max
+                    else -> 0f
+                }
+                animate(now, target, animationSpec = tween(280, easing = Emphasized)) { value, _ -> reach.floatValue = value }
+                return if (target == max) available else Velocity.Zero
+            }
+        }
+    }
+    Column(Modifier.fillMaxSize().nestedScroll(connection)) {
+        // The header: as tall as the pull, its big title at the bottom.
+        Box(
+            Modifier.fillMaxWidth().clipToBounds().layout { measurable, constraints ->
+                val height = reach.floatValue.roundToInt()
+                val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
+                layout(constraints.maxWidth, height) { placeable.place(0, height - placeable.height) }
+            },
+        ) {
+            Column(
+                Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp).graphicsLayer {
+                    alpha = (open() * 1.6f - 0.6f).coerceIn(0f, 1f)
+                    translationY = (1 - open()) * 16.dp.toPx()
+                },
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(title, fontSize = 34.sp, fontWeight = FontWeight.Medium, lineHeight = 40.sp)
+                if (subtitle != null) Text(subtitle, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Column(
+            Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(padding),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) { content { (1 - open() * 2.2f).coerceIn(0f, 1f) } }
+    }
+}
+
+/** Pixels a second: a flick at least this fast opens or closes the reach header. */
+private const val REACH_FLICK = 300f
 
 /** A category on a phone: its icon, its name and a line of its state. */
 @Composable
