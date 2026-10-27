@@ -26,6 +26,9 @@ object DesktopEnvironment {
     private const val LAUNCH_FIFO = "/tmp/.droidnux-launch"
     const val DISPLAY = 0
 
+    /** The shadow hash the app's password got last (USER_SESSION), root's only. */
+    private const val PASSWORD_STAMP = "/var/lib/droidnux/password-hash"
+
     /** KWin's render time prediction (guest/kwin-pacing), preloaded into Plasma. */
     private const val KWIN_LIBRARY = "libdroidnux-guest-kwin.so"
     private const val GUEST_LIB_DIR = "/usr/local/lib/droidnux"
@@ -34,6 +37,7 @@ object DesktopEnvironment {
     private const val PIPEWIRE_MODULE = "libpipewire-module-droidnux.so"
     private const val PIPEWIRE_MODULE_DIR = "/usr/lib/aarch64-linux-gnu/pipewire-0.3"
     private const val PIPEWIRE_CONF = "/etc/pipewire/pipewire.conf.d/50-droidnux.conf"
+    private const val PIPEWIRE_CLIENT_CONF = "/etc/pipewire/client.conf.d/50-droidnux.conf"
     private const val WIREPLUMBER_CONF = "/etc/wireplumber/wireplumber.conf.d/50-droidnux.conf"
 
     /** Where the Mesa component (guest/mesa) is unpacked. */
@@ -128,6 +132,9 @@ object DesktopEnvironment {
         set -e
         export DEBIAN_FRONTEND=noninteractive
         apt-get update
+        # The slim image keeps no man pages, nor their directories: some packages'
+        # scripts copy theirs there (Gaia Sky's .deb into man6) and fail without them.
+        for n in 1 2 3 4 5 6 7 8 9; do mkdir -p /usr/share/man/man${'$'}n; done
         # The slim Debian image drops every translation (/usr/share/locale/*):
         # let Android's language back in. Packages installed before this was
         # here are reinstalled once to get theirs.
@@ -138,11 +145,11 @@ object DesktopEnvironment {
                 grep -E '^(libgtk-3|libglib2|libqt6|libkf6|plasma-|kwin-|konsole|dolphin|systemsettings)' || true)
             [ -z "${'$'}installed" ] || apt-get install -y --reinstall --no-install-recommends ${'$'}installed
         fi
-        apt-get install -y --no-install-recommends $packages
-        # Firefox's interface in that language, when Debian has it.
-        if apt-cache show firefox-esr-l10n-$language > /dev/null 2>&1; then
-            apt-get install -y --no-install-recommends firefox-esr-l10n-$language
-        fi
+        # Firefox's interface in that language, when Debian has it, in the same
+        # apt run: the app's progress follows one run.
+        l10n=
+        if apt-cache show firefox-esr-l10n-$language > /dev/null 2>&1; then l10n=firefox-esr-l10n-$language; fi
+        apt-get install -y --no-install-recommends $packages ${'$'}l10n
         apt-get clean
         mkdir -p /${PACKAGES_MARKER.substringBeforeLast('/')}
         echo '$packages' > /$PACKAGES_MARKER
@@ -173,6 +180,7 @@ object DesktopEnvironment {
         )
         writeFile(rootfs, "$PIPEWIRE_MODULE_DIR/$PIPEWIRE_MODULE", File(nativeLibraryDir, PIPEWIRE_MODULE).readBytes())
         writeFile(rootfs, PIPEWIRE_CONF, PIPEWIRE_DEFAULTS.toByteArray())
+        writeFile(rootfs, PIPEWIRE_CLIENT_CONF, PIPEWIRE_CLIENT_DEFAULTS.toByteArray())
         writeFile(rootfs, WIREPLUMBER_CONF, WIREPLUMBER_DEFAULTS.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/kdeglobals", "[KDE]\nLookAndFeelPackage=org.droidnux.desktop\n".toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/kwinrc", PLASMA_KWINRC.toByteArray())
@@ -446,7 +454,7 @@ object DesktopEnvironment {
      * (some apps refuse root, VLC among them), DROIDNUX_USER, made on first use
      * with the settings root had (or renamed from the account made before);
      * the password the app sends on the input line becomes its password and
-     * sudo's, and the key of KDE's wallet, opened in --in-dbus as pam_kwallet
+     * sudo's (when new to the account: one changed in Linux stays), and the key of KDE's wallet, opened in --in-dbus as pam_kwallet
      * would at login (DROIDNUX_WALLET; DROIDNUX_WALLET_BEFORE when the app
      * also sends the password before, on a second line). Then the script again with the user's
      * ids (perl: setpriv needs capabilities Android refuses).
@@ -488,7 +496,17 @@ object DesktopEnvironment {
             home=${'$'}(getent passwd "${'$'}user" | cut -d: -f6)
             unset DROIDNUX_WALLET DROIDNUX_WALLET_BEFORE
             if [ -n "${'$'}pass" ]; then
-                printf '%s:%s\n' "${'$'}user" "${'$'}pass" | chpasswd || echo "chpasswd failed"
+                # The app's password becomes the account's when it is new to it (first start, changed in the
+                # app): one changed in Linux (passwd, Plasma's settings) stays. The stamp is the hash the
+                # app's password got last; the password goes on perl's input, not its command line.
+                stamp=$PASSWORD_STAMP
+                last=${'$'}(cat "${'$'}stamp" 2> /dev/null) || last=${'$'}(getent shadow "${'$'}user" | cut -d: -f2)
+                if ! printf '%s\n%s' "${'$'}last" "${'$'}pass" | perl -e 'chomp(my ${'$'}h = <STDIN>); local ${'$'}/; my ${'$'}p = <STDIN>;
+                        exit(${'$'}h ne "" && crypt(${'$'}p, ${'$'}h) eq ${'$'}h ? 0 : 1)'; then
+                    printf '%s:%s\n' "${'$'}user" "${'$'}pass" | chpasswd || echo "chpasswd failed"
+                    last=${'$'}(getent shadow "${'$'}user" | cut -d: -f2)
+                fi
+                mkdir -p "${'$'}{stamp%/*}" && (umask 077 && printf '%s\n' "${'$'}last" > "${'$'}stamp")
                 sudo="ALL=(ALL:ALL) ALL"
                 # pam_kwallet's key: PBKDF2-HMAC-SHA512 of the password, 50000 rounds, the wallet's salt.
                 wallets=${'$'}home/.local/share/kwalletd
@@ -520,6 +538,8 @@ object DesktopEnvironment {
                 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=$SYSTEM_BUS_SOCKET
                 $UPOWER_SCRIPT &
             fi
+            # Burrow starts in /root: apps launched from Plasma (Konsole) inherit the directory.
+            cd "${'$'}home" || true
             exec perl -e '${'$'}u = shift; @g = split / /, shift; ${'$'}) = "${'$'}g[0] @g"; ${'$'}( = ${'$'}g[0]; ${'$'}< = ${'$'}> = ${'$'}u;
                 die "cannot become ${'$'}u\n" if ${'$'}> != ${'$'}u; exec @ARGV or die "exec: ${'$'}!\n"' \
                 "${'$'}(id -u "${'$'}user")" "${'$'}(id -G "${'$'}user")" \
@@ -1073,6 +1093,17 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         context.modules = [
             { name = libpipewire-module-droidnux flags = [ nofail ] }
         ]
+    """.trimIndent() + "\n"
+
+    // No realtime for PipeWire clients (KWin, apps): apps get no RLIMIT_RTPRIO,
+    // and the realtime portal answers RTTimeUSecMax 0, which module-rt turns
+    // into RLIMIT_RTTIME 0. On the Galaxy S26 a thread then made realtime is
+    // SIGKILLed at its first tick: KWin died seconds after start.
+    private val PIPEWIRE_CLIENT_DEFAULTS = """
+        # Written by DroidNux.
+        context.properties = {
+            module.rt = false
+        }
     """.trimIndent() + "\n"
 
     private val WIREPLUMBER_DEFAULTS = """

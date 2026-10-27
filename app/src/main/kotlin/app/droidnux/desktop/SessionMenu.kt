@@ -80,7 +80,9 @@ class SessionMenu(
     private val modeIcon = icon(R.drawable.ic_menu_touch, ON_SURFACE)
     private val modeLabel = label("")
     private val sizeLabel = label("")
+    private val modeButton: LinearLayout
     private val sizeButton: LinearLayout
+    private val column: LinearLayout
     private val lightButton: LinearLayout
     private val panelView = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -102,11 +104,12 @@ class SessionMenu(
             close()
             listener.onToggleKeyboard()
         })
-        pill.addView(textButton(modeIcon, modeLabel) {
+        modeButton = textButton(modeIcon, modeLabel) {
             trackpad = !trackpad
             updateLabels()
             listener.onTrackpadChanged(trackpad)
-        })
+        }
+        pill.addView(modeButton)
         sizeButton = textButton(icon(R.drawable.ic_menu_display, ON_SURFACE), sizeLabel) {
             show(if (panel == Panel.SIZE) Panel.NONE else Panel.SIZE)
         }
@@ -127,7 +130,7 @@ class SessionMenu(
             show(if (panel == Panel.EXIT) Panel.NONE else Panel.EXIT)
         })
 
-        val column = LinearLayout(context).apply {
+        column = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
             addView(pill, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(56)))
@@ -146,6 +149,9 @@ class SessionMenu(
         this.scale = scale
         this.uiScale = uiScale
         updateLabels()
+        // Below the camera hole of a phone held upright.
+        val cutout = view.rootWindowInsets?.displayCutout?.safeInsetTop ?: 0
+        (column.layoutParams as FrameLayout.LayoutParams).topMargin = maxOf(dp(24), cutout + dp(8))
         show(Panel.NONE, animate = false)
         opened = true
         fade(view, true)
@@ -169,6 +175,11 @@ class SessionMenu(
     private fun updateLabels() {
         modeIcon.setImageResource(if (trackpad) R.drawable.ic_menu_trackpad else R.drawable.ic_menu_touch)
         modeLabel.setText(if (trackpad) R.string.menu_mode_trackpad else R.string.menu_mode_touch)
+        // On a phone the mode is its icon alone, or the pill is wider than the screen.
+        val compact = context.resources.configuration.screenWidthDp < 600
+        modeLabel.visibility = if (compact) View.GONE else View.VISIBLE
+        (modeIcon.layoutParams as LinearLayout.LayoutParams).marginEnd = if (compact) 0 else dp(8)
+        modeButton.contentDescription = modeLabel.text
         sizeLabel.text = percent(scale)
     }
 

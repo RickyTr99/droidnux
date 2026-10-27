@@ -10,3 +10,6 @@
 [submodule "third_party/plasma-wayland-protocols"]
 	path = third_party/plasma-wayland-protocols
 	url = https://invent.kde.org/libraries/plasma-wayland-protocols.git
+[submodule "container/src/main/cpp/burrow"]
+	path = container/src/main/cpp/burrow
+	url = https://github.com/RickyTr99/burrow.git

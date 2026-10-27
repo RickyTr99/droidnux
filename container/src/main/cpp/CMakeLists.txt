@@ -14,21 +14,24 @@ endif()
 # A freestanding static binary linked at a fixed address, since its SIGSYS
 # handler and syscall gadget stay mapped in every guest process.
 add_executable(burrow
-    burrow/start.S
-    burrow/config.c
-    burrow/elf.c
-    burrow/l2s.c
-    burrow/main.c
-    burrow/path.c
-    burrow/procfs.c
-    burrow/sysv.c
-    burrow/trap.c
-    burrow/util.c)
+    burrow/src/start.S
+    burrow/src/config.c
+    burrow/src/elf.c
+    burrow/src/l2s.c
+    burrow/src/main.c
+    burrow/src/path.c
+    burrow/src/procfs.c
+    burrow/src/sysv.c
+    burrow/src/trap.c
+    burrow/src/util.c)
 set_target_properties(burrow PROPERTIES OUTPUT_NAME "libburrow.so")
 target_compile_options(burrow PRIVATE
     -O2 -Wall -Wextra
     -ffreestanding -fno-stack-protector -U_FORTIFY_SOURCE
-    -fno-pic -fno-pie -fno-asynchronous-unwind-tables -mno-outline-atomics)
+    -fno-pic -fno-pie -fno-asynchronous-unwind-tables -mno-outline-atomics
+    # Go keeps its g in x28 and its signal handlers trust it: a signal that
+    # comes while the SIGSYS handler runs must find the guest's.
+    -ffixed-x28)
 target_link_options(burrow PRIVATE
     -static -nostdlib -no-pie
     -Wl,--image-base=0x5600000000

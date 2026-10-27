@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Tablets: the wording of the device. Phones have it in values. -->
+<resources>
+    <string name="wizard_welcome_text">A real Linux desktop on your tablet, without root. Choose what to install: you can add more later.</string>
+    <string name="wizard_checks_title">Getting the tablet ready</string>
+    <string name="check_phantom_steps">1. Settings › About tablet › Software information: tap “Build number” 7 times.\n2. Settings › Developer options: turn on “Disable child process restrictions”.\n3. Come back here.</string>
+    <string name="check_files">Tablet files</string>
+</resources>

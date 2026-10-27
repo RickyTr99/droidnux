@@ -48,10 +48,29 @@ object Icons {
     val Plus = stroke("M12 5v14M5 12h14")
     val Visibility = stroke("M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z", "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0")
     val VisibilityOff = stroke("M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z", "M9 12a3 3 0 1 0 6 0a3 3 0 1 0-6 0", "M4 4l16 16")
+    val Keyboard = stroke("M4 6h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z", "M6 10h.01M10 10h.01M14 10h.01M18 10h.01M8 14h8")
+    val User = stroke("M8 8a4 4 0 1 0 8 0a4 4 0 1 0-8 0", "M4 20c1.5-4 4.5-5 8-5s6.5 1 8 5")
+    val Package = stroke("M12 3l8 4.5v9L12 21l-8-4.5v-9z", "M4 7.5l8 4.5 8-4.5M12 12v9")
+    val Android = stroke("M5 16a7 7 0 0 1 14 0z", "M8 8.5L6.5 6M16 8.5L17.5 6")
+    val Pulse = stroke("M3 12h4l2-6 4 12 2-6h6")
+    val Stop = solid("M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z")
     val Back = stroke("M15 5l-7 7 7 7")
     val Chevron = stroke("M9 5l7 7-7 7")
     val Selected = stroke("M5 12.5l4.5 4.5L19 7.5", width = 2.2f)
     val Debian = stroke("M14 4.5a7.5 7.5 0 1 0 5 9.5", "M14.5 9a3 3 0 1 0 0 6")
+
+    // The store's categories.
+    val Code = stroke("M8.5 7l-5 5 5 5M15.5 7l5 5-5 5")
+    val Document = stroke("M7 3h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z", "M14 3v5h5M9 13h6M9 17h6")
+    val Palette = stroke(
+        "M12 3a9 9 0 0 0 0 18c1.2 0 2-.8 2-1.8 0-1.3-1-1.7-1-2.7 0-.9.7-1.5 1.6-1.5H17a4 4 0 0 0 4-4c0-4.4-4-8-9-8z",
+        "M7.5 11.5v.01M10 7.5v.01M15 7.5v.01",
+    )
+    val Music = stroke("M9 18V5l11-2v13", "M3.5 18a2.75 2.75 0 1 0 5.5 0a2.75 2.75 0 1 0-5.5 0", "M14.5 16a2.75 2.75 0 1 0 5.5 0a2.75 2.75 0 1 0-5.5 0")
+    val Globe = stroke("M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0", "M3.5 9h17M3.5 15h17", "M12 3c2.5 2.7 3.5 5.7 3.5 9s-1 6.3-3.5 9c-2.5-2.7-3.5-5.7-3.5-9s1-6.3 3.5-9z")
+    val Gamepad = stroke("M7 7h10a5 5 0 0 1 0 10c-1.6 0-2.5-1-3.3-2h-3.4c-.8 1-1.7 2-3.3 2a5 5 0 0 1 0-10z", "M7 10.5v3M5.5 12h3M16 11v.01M18 13v.01")
+    val Flask = stroke("M9 3h6M10 3v6l-5.5 9.5A1.7 1.7 0 0 0 6 21h12a1.7 1.7 0 0 0 1.5-2.5L14 9V3", "M7.5 15h9")
+    val Wrench = stroke("M14.7 6.3a4 4 0 0 0-5.4 5l-6 6a1.8 1.8 0 0 0 2.6 2.6l6-6a4 4 0 0 0 5-5.4l-2.6 2.6-2.2-.4-.4-2.2z")
     val Play = ImageVector.Builder("play", 24.dp, 24.dp, 24f, 24f)
         .addPath(PathParser().parsePathString("M8 5v14l11-7z").toNodes(), fill = SolidColor(Color.White))
         .build()

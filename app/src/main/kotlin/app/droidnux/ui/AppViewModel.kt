@@ -8,6 +8,7 @@ import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.droidnux.R
+import app.droidnux.container.AppCatalog
 import app.droidnux.container.AppStore
 import app.droidnux.container.CommandResult
 import app.droidnux.container.Component
@@ -26,6 +27,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -49,6 +51,24 @@ data class SetupState(
 
 enum class SetupStep { ROOTFS, DESKTOP, COMPONENTS, APPS }
 
+/** apt installing the desktop: archives fetched, then packages unpacked and set up (all 0 until apt has a plan). */
+data class AptProgress(
+    val fetchedBytes: Long = 0,
+    val totalBytes: Long = 0,
+    val unpacked: Int = 0,
+    val setUp: Int = 0,
+    val packages: Int = 0,
+) {
+    val downloading get() = unpacked == 0 && setUp == 0
+
+    /** Fetching takes about as long as unpacking and setting up together; null before the plan. */
+    fun fraction(): Float? {
+        if (packages == 0) return null
+        val fetched = if (totalBytes > 0) fetchedBytes.coerceAtMost(totalBytes).toFloat() / totalBytes else 1f
+        return 0.5f * fetched + 0.25f * unpacked.coerceAtMost(packages) / packages + 0.25f * setUp.coerceAtMost(packages) / packages
+    }
+}
+
 /** An apt job of the store, waiting for the one before it, running, or failed. */
 sealed interface StoreJob {
     data object Queued : StoreJob
@@ -57,8 +77,14 @@ sealed interface StoreJob {
     data class Failed(val message: String) : StoreJob
 }
 
-/** Packages found by the store's search, for [query]; null results while searching. */
-data class StoreSearch(val query: String, val results: List<AppStore.Found>? = null)
+/**
+ * The store's search for [query]: the store's apps and Debian's catalog ([results], at once), then
+ * the other Debian packages apt finds ([more], null while apt searches).
+ */
+data class StoreSearch(val query: String, val results: List<StoreItem> = emptyList(), val more: List<AppStore.Found>? = null)
+
+/** Debian's AppStream catalog in the store: being read, there, or not loaded (the store's own apps only). */
+enum class CatalogState { LOADING, READY, FAILED }
 
 data class AppState(
     val distro: Distro = Distro.DEBIAN_TRIXIE,
@@ -72,8 +98,7 @@ data class AppState(
     /** False when this app version needs packages the last desktop install did not have. */
     val desktopUpToDate: Boolean = true,
     val desktopInstalling: Boolean = false,
-    /** Packages set up so far and in all, while apt installs the desktop (0 of 0 until apt knows). */
-    val desktopPackages: Pair<Int, Int> = 0 to 0,
+    val desktopProgress: AptProgress = AptProgress(),
     /** Last lines of the desktop install log. */
     val desktopLog: String = "",
     /** Install state of each [Component], by id (missing = still checking). */
@@ -97,6 +122,9 @@ data class AppState(
     val storeSearch: StoreSearch? = null,
     /** The store's icons are downloaded: tiles look for theirs again. */
     val storeIcons: Boolean = false,
+    /** Everything the store shows: its own apps first, then Debian's catalog once loaded. */
+    val storeItems: List<StoreItem> = StoreItem.curated(emptyMap()),
+    val storeCatalog: CatalogState = CatalogState.LOADING,
 ) {
     /** Everything the desktop needs is there: the home screen instead of the first-run wizard. */
     val ready: Boolean get() = rootfs == InstallState.Installed && desktopInstalled && setup == null
@@ -128,8 +156,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val storeJobs = mutableMapOf<String, Job>()
     private val storeProcesses = java.util.concurrent.ConcurrentHashMap<String, Process>()
     private var searchJob: Job? = null
-    private val storeIconsDir = File(application.cacheDir, "store-icons")
+    // "-2": the icons of appstream.debian.org's catalog, not the archive's older ones.
+    private val storeIconsDir = File(application.cacheDir, "store-icons-2")
     private var storeIconsJob: Job? = null
+    private var catalogJob: Job? = null
+    private val storeShotsDir = File(application.cacheDir, "store-shots")
+
+    // Icons and screenshots the store has decoded, within a memory budget: it can list thousands.
+    private val storeBitmaps = object : android.util.LruCache<String, Bitmap>(STORE_BITMAPS_BYTES) {
+        override fun sizeOf(key: String, value: Bitmap) = value.allocationByteCount
+    }
+    private val shotDownloads = kotlinx.coroutines.sync.Semaphore(3)
 
     private val rootfs get() = container.installer.rootfsDir(_state.value.distro)
 
@@ -283,20 +320,70 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Searches Debian for [query] (after a short pause, so typing does not start a search per key). */
+    /**
+     * Searches the store for [query]: the store's apps and Debian's catalog at once, then (after a
+     * short pause, so typing does not start one per key) the rest of Debian with apt.
+     */
     fun storeSearch(query: String) {
         searchJob?.cancel()
-        val command = AppStore.searchCommand(query)
-        if (command == null) {
-            _state.update { it.copy(storeSearch = if (query.isBlank()) null else StoreSearch(query, emptyList())) }
+        if (query.isBlank()) {
+            _state.update { it.copy(storeSearch = null) }
             return
         }
-        _state.update { it.copy(storeSearch = StoreSearch(query, it.storeSearch?.results)) }
+        val app = getApplication<Application>()
         searchJob = viewModelScope.launch {
-            delay(SEARCH_DELAY_MS)
-            val results = runCatching { AppStore.parseSearch(container.shell(_state.value.distro, command).output) }.getOrDefault(emptyList())
+            val results = withContext(Dispatchers.Default) { StoreItem.search(_state.value.storeItems, query) { app.getString(it) } }
             _state.update { it.copy(storeSearch = StoreSearch(query, results)) }
+            val command = AppStore.searchCommand(query)
+            if (command == null) {
+                _state.update { it.copy(storeSearch = StoreSearch(query, results, emptyList())) }
+                return@launch
+            }
+            delay(SEARCH_DELAY_MS)
+            val shown = _state.value.storeItems.flatMapTo(HashSet()) { it.packages }
+            val more = runCatching { AppStore.parseSearch(container.shell(_state.value.distro, command).output) }.getOrDefault(emptyList())
+                .filter { it.name !in shown }
+            _state.update { it.copy(storeSearch = StoreSearch(query, results, more)) }
         }
+    }
+
+    /** Reads Debian's catalog into the store (downloading it when needed), once; again if it failed. */
+    fun loadStoreCatalog() {
+        if (catalogJob?.isActive == true || _state.value.storeCatalog == CatalogState.READY) return
+        _state.update { it.copy(storeCatalog = CatalogState.LOADING) }
+        catalogJob = viewModelScope.launch {
+            val dir = File(getApplication<Application>().filesDir, "store")
+            val catalog = withContext(Dispatchers.IO) { runCatching { AppCatalog.load(dir, Locale.getDefault().language) } }.getOrNull()
+            if (catalog == null) {
+                _state.update { it.copy(storeCatalog = CatalogState.FAILED) }
+                return@launch
+            }
+            val items = withContext(Dispatchers.Default) { StoreItem.all(catalog) }
+            _state.update { it.copy(storeItems = items, storeCatalog = CatalogState.READY) }
+        }
+    }
+
+    /**
+     * A screenshot of the store (blocking): from the memory cache, the disk cache, or downloaded,
+     * scaled down to about [width] pixels. Null when it cannot be had.
+     */
+    suspend fun storeShot(url: String, width: Int): Bitmap? {
+        storeBitmaps.get(url)?.let { return it }
+        val file = File(storeShotsDir, java.security.MessageDigest.getInstance("SHA-1").digest(url.toByteArray())
+            .joinToString("") { "%02x".format(it) })
+        if (!file.isFile) {
+            shotDownloads.withPermit {
+                if (!file.isFile) runCatching { AppStore.download(url, file) }
+            }
+        }
+        if (!file.isFile) return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= width) sample *= 2
+        val bitmap = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
+        storeBitmaps.put(url, bitmap)
+        return bitmap
     }
 
     private fun readLines(file: File): List<String> =
@@ -327,8 +414,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** An app's icon if already decoded, for the first frame of its tile. */
-    fun cachedIcon(id: String): Bitmap? = icons[id]
+    /** An app's icon (or the store's, "store:<name>") if already decoded, for the first frame of its tile. */
+    fun cachedIcon(id: String): Bitmap? = if (id.startsWith("store:")) storeBitmaps.get(id) else icons[id]
 
     /** Decodes an app's icon (off the main thread) and keeps it for the next time. */
     fun icon(id: String): Bitmap? = icons[id] ?: DesktopEnvironment.iconFile(rootfs, id)
@@ -345,8 +432,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** The store's icon called [name] (off the main thread), null until downloaded. */
-    fun storeIcon(name: String): Bitmap? = icons["store:$name"] ?: File(storeIconsDir, "$name.png").takeIf { it.isFile }
-        ?.let { BitmapFactory.decodeFile(it.path) }?.also { icons["store:$name"] = it }
+    fun storeIcon(name: String): Bitmap? = storeBitmaps.get("store:$name") ?: File(storeIconsDir, "$name.png").takeIf { it.isFile }
+        ?.let { BitmapFactory.decodeFile(it.path) }?.also { storeBitmaps.put("store:$name", it) }
 
     /** First run: installs whatever is missing, in order, and stops at the first failure. */
     fun runSetup(apps: List<String> = _state.value.setup?.apps.orEmpty()) {
@@ -404,24 +491,38 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun installDesktopPackages(): Boolean {
         val distro = _state.value.distro
-        _state.update { it.copy(desktopInstalling = true, desktopLog = "", desktopPackages = 0 to 0) }
+        _state.update { it.copy(desktopInstalling = true, desktopLog = "", desktopProgress = AptProgress()) }
         val ok = withContext(Dispatchers.IO) {
             val lines = ArrayDeque<String>()
             var success = false
-            var total = 0
-            var done = 0
+            var progress = AptProgress()
+            fun log(line: String) {
+                lines.addLast(line)
+                if (lines.size > LOG_LINES) lines.removeFirst()
+                _state.update { it.copy(desktopLog = lines.joinToString("\n"), desktopProgress = progress) }
+            }
             runCatching {
                 val process = container.spawnShell(distro, DesktopEnvironment.installScript())
                 process.inputStream.bufferedReader().forEachLine { line ->
                     if (line == "DROIDNUX_INSTALL_OK") success = true
-                    APT_SUMMARY.find(line)?.let { total = it.groupValues[1].toInt() + it.groupValues[2].toInt() }
-                    if (line.startsWith("Setting up ")) done++
-                    lines.addLast(line)
-                    if (lines.size > LOG_LINES) lines.removeFirst()
-                    _state.update { it.copy(desktopLog = lines.joinToString("\n"), desktopPackages = done to total) }
+                    // A new apt run (the translations' reinstall, then the desktop) starts over.
+                    APT_SUMMARY.find(line)?.let {
+                        progress = AptProgress(packages = it.groupValues[1].toInt() + it.groupValues[2].toInt())
+                    }
+                    APT_NEED.find(line)?.let { progress = progress.copy(totalBytes = aptBytes(it)) }
+                    when {
+                        line.startsWith("Get:") -> APT_GET_SIZE.find(line)?.let {
+                            progress = progress.copy(fetchedBytes = progress.fetchedBytes + aptBytes(it))
+                        }
+                        line.startsWith("Unpacking ") -> progress = progress.copy(unpacked = progress.unpacked + 1)
+                        line.startsWith("Setting up ") -> progress = progress.copy(setUp = progress.setUp + 1)
+                    }
+                    log(line)
                 }
-                process.waitFor()
-            }.onFailure { e -> _state.update { it.copy(desktopLog = e.toString()) } }
+                // Without this, a shell that dies before printing anything fails with no reason shown.
+                val status = process.waitFor()
+                if (!success) log("exit status $status")
+            }.onFailure { e -> log(e.toString()) }
             (success && DesktopEnvironment.isInstalled(rootfs)) to DesktopEnvironment.isUpToDate(rootfs)
         }
         val (installed, upToDate) = ok
@@ -535,7 +636,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val GPU_NAME = Regex("""Adreno \(TM\) (\d+)""")
         val APT_SUMMARY = Regex("""(\d+) upgraded, (\d+) newly installed""")
         val APT_REMOVE = Regex("""(\d+) to remove""")
+        /** "Need to get 95.4 MB of archives." (or "12.3 MB/95.4 MB" when some are cached: the first is to fetch). */
+        val APT_NEED = Regex("""^Need to get ([\d.,]+) ([kMG]?)B""")
+        /** The size at the end of "Get:12 http://… libfoo arm64 1.2-3 [123 kB]". */
+        val APT_GET_SIZE = Regex("""\[([\d.,]+) ([kMG]?)B]$""")
+
+        /** apt's sizes are decimal (kB = 1000 B); "1,234 kB" has a thousands comma. */
+        fun aptBytes(match: MatchResult): Long {
+            val value = match.groupValues[1].replace(",", "").toDoubleOrNull() ?: return 0
+            val unit = when (match.groupValues[2]) { "k" -> 1e3; "M" -> 1e6; "G" -> 1e9; else -> 1.0 }
+            return (value * unit).toLong()
+        }
         const val SEARCH_DELAY_MS = 350L
+        const val STORE_BITMAPS_BYTES = 48 * 1024 * 1024
 
         /** The quick launch until the user changes it (apps that are not installed are not shown). */
         val HOME_DEFAULT = listOf("firefox-esr", "org.kde.dolphin", "org.kde.konsole", "systemsettings")
