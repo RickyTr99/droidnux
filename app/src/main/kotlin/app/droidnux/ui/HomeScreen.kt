@@ -299,12 +299,12 @@ private fun Badge(modifier: Modifier = Modifier) = Box(modifier.size(8.dp).clip(
  */
 @Composable
 private fun BottomBar(current: Tab, badge: Tab?, modifier: Modifier, onSelect: (Tab) -> Unit) {
-    // Smaller on a phone: the bar spans the screen but for 12 dp on each side.
+    // Smaller on a phone, never closer than 12 dp to the screen's sides.
     val compact = isCompact()
     val height = if (compact) 60.dp else 68.dp
     BoxWithConstraints(modifier.padding(horizontal = if (compact) 12.dp else 0.dp)) {
-        // 124 dp tabs, narrower on a phone.
-        val item = minOf(124.dp, (maxWidth - if (compact) 12.dp else 44.dp) / Tab.entries.size)
+        // Tabs just wide enough for "Impostazioni": the bar stays a pill in the middle, also on a phone.
+        val item = minOf(if (compact) 88.dp else 108.dp, (maxWidth - if (compact) 12.dp else 44.dp) / Tab.entries.size)
         val pillX by animateDpAsState(item * current.ordinal, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow), label = "pill")
         Box(Modifier.clip(RoundedCornerShape(40.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(6.dp)) {
             Box(Modifier.offset(x = pillX).size(item, height).clip(RoundedCornerShape(height / 2)).background(PillBrush))
