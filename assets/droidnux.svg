@@ -2,9 +2,11 @@
   <!-- DroidNux's launcher icon (app/src/main/res/drawable/ic_launcher_foreground.xml) on its background.
        The Android robot is modified from work created and shared by Google (CC BY 3.0). -->
   <circle cx="54" cy="54" r="54" fill="#1A1B20"/>
-  <path fill="#3DDC84" fill-rule="evenodd" d="M35,48a19,19 0,0 1,38 0z M43.4,41a2.6,2.6 0,1 0,5.2 0a2.6,2.6 0,1 0,-5.2 0z M59.4,41a2.6,2.6 0,1 0,5.2 0a2.6,2.6 0,1 0,-5.2 0z"/>
-  <path fill="none" stroke="#3DDC84" stroke-width="3.5" stroke-linecap="round" d="M40,36l-5,-8M68,36l5,-8"/>
-  <path fill="none" stroke="#82A6E8" stroke-width="4" d="M38,52h32a5,5 0,0 1,5 5v18a5,5 0,0 1,-5 5h-32a5,5 0,0 1,-5 -5v-18a5,5 0,0 1,5 -5z"/>
-  <path fill="#82A6E8" fill-opacity="0.5" d="M41,58h14a2,2 0,0 1,2 2v7a2,2 0,0 1,-2 2h-14a2,2 0,0 1,-2 -2v-7a2,2 0,0 1,2 -2z"/>
-  <path fill="none" stroke="#82A6E8" stroke-width="3" stroke-linecap="round" d="M39,74h30"/>
+  <g transform="translate(54 55) scale(0.78) translate(-54 -55)">
+    <path fill="#3DDC84" fill-rule="evenodd" d="M35,48a19,19 0,0 1,38 0z M43.4,41a2.6,2.6 0,1 0,5.2 0a2.6,2.6 0,1 0,-5.2 0z M59.4,41a2.6,2.6 0,1 0,5.2 0a2.6,2.6 0,1 0,-5.2 0z"/>
+    <path fill="none" stroke="#3DDC84" stroke-width="3.5" stroke-linecap="round" d="M40,36l-5,-8M68,36l5,-8"/>
+    <path fill="none" stroke="#82A6E8" stroke-width="4" d="M38,52h32a5,5 0,0 1,5 5v18a5,5 0,0 1,-5 5h-32a5,5 0,0 1,-5 -5v-18a5,5 0,0 1,5 -5z"/>
+    <path fill="#82A6E8" fill-opacity="0.5" d="M41,58h14a2,2 0,0 1,2 2v7a2,2 0,0 1,-2 2h-14a2,2 0,0 1,-2 -2v-7a2,2 0,0 1,2 -2z"/>
+    <path fill="none" stroke="#82A6E8" stroke-width="3" stroke-linecap="round" d="M39,74h30"/>
+  </g>
 </svg>
