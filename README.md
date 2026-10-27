@@ -1,4 +1,4 @@
-# DroidNux
+# <img src="assets/droidnux.svg" width="48" alt="" align="top"> DroidNux
 
 DroidNux runs a real Linux desktop on Android, without root: KDE Plasma on Debian, with the GPU, sound and video
 decoding of the device. It is built for everyday use with a keyboard and a trackpad, first on tablets and then on
@@ -67,3 +67,6 @@ components are built by CI from `guest/` and downloaded by the app.
 ## License
 
 DroidNux is licensed under the [GPL-3.0](LICENSE).
+
+The Android robot in DroidNux's icon is reproduced or modified from work created and shared by Google and used
+according to terms described in the [Creative Commons 3.0 Attribution License](https://creativecommons.org/licenses/by/3.0/).
