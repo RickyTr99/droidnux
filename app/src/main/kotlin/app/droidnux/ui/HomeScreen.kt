@@ -298,13 +298,16 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp) {
     val context = LocalContext.current
     val compact = isCompact()
     var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
+    // Reloaded whenever the screen comes back; decoding a screen-sized picture takes a few frames.
+    val scope = rememberCoroutineScope()
     LifecycleResumeEffect(Unit) {
-        val file = DesktopActivity.thumbnailFile(context)
-        thumbnail = if (file.isFile) BitmapFactory.decodeFile(file.path) else null
-        onPauseOrDispose { }
+        val load = scope.launch {
+            val file = DesktopActivity.thumbnailFile(context)
+            thumbnail = withContext(Dispatchers.IO) { if (file.isFile) BitmapFactory.decodeFile(file.path) else null }
+        }
+        onPauseOrDispose { load.cancel() }
     }
     var confirmStop by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
     val page = MaterialTheme.colorScheme.background
     Box(Modifier.fillMaxWidth().clickable(onClickLabel = stringResource(R.string.action_open_desktop)) { openDesktop(context) }) {
         val picture = thumbnail

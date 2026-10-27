@@ -194,18 +194,21 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         surfaceView.animate().translationY(-shift).setDuration(KEYBOARD_PAN_MS).start()
     }
 
-    /** The desktop as it is now, small, for the app's home screen. */
+    /**
+     * The desktop as it is now, for the app's home screen. At the screen's size: the home shows it from
+     * edge to edge, and a smaller one sampled by nearest pixel looks grainy there.
+     */
     private fun saveThumbnail() {
         if (!DisplayServer.running || surfaceWidth == 0) return
-        val width = THUMBNAIL_WIDTH
-        val height = width * surfaceHeight / surfaceWidth
+        val width = surfaceWidth
+        val height = surfaceHeight
         Thread {
             runCatching {
                 val pixels = DisplayServer.snapshot(width, height) ?: return@Thread
                 val bitmap = android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
                 val file = thumbnailFile(this)
                 val temp = java.io.File(file.path + ".new")
-                temp.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.WEBP_LOSSY, 85, it) }
+                temp.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.WEBP_LOSSY, 90, it) }
                 temp.renameTo(file)
             }.onFailure { Log.w(TAG, "cannot save the desktop's thumbnail", it) }
         }.start()
@@ -752,7 +755,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         const val MAX_SCALE = 1f
 
         private const val GESTURE_EXCLUSION_DP = 200
-        private const val THUMBNAIL_WIDTH = 960
 
         /** The last picture of the desktop (see saveThumbnail), shown on the home screen. */
         fun thumbnailFile(context: android.content.Context) = java.io.File(context.filesDir, "desktop-thumbnail.webp")
