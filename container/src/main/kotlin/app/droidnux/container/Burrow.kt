@@ -20,6 +20,7 @@ class Burrow(context: Context) {
 
     private val binary = File(context.applicationInfo.nativeLibraryDir, "libburrow.so")
     private val gpuNodeDir = File(context.filesDir, "gpu-node")
+    private val statsFile = File(context.filesDir, "burrow-stats")
 
     /** Where the guest's DNS queries go (the app's proxy); 0 while it is not running. */
     val dnsPort: Int get() = DnsProxy.port
@@ -33,6 +34,8 @@ class Burrow(context: Context) {
             add(binary.absolutePath)
             add("-r"); add(rootfs.absolutePath)
             if (dnsPort > 0) { add("-d"); add(dnsPort.toString()) }
+            // Per-syscall counts of Burrow's handler while the file exists (tools/burrow-stats.py).
+            if (statsFile.exists()) { add("-s"); add(statsFile.absolutePath) }
             for (bind in DEFAULT_BINDS) {
                 add("-b"); add(bind)
             }
