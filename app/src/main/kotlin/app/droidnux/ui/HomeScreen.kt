@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.provider.Settings
 import android.view.View
 import android.view.WindowManager
@@ -121,18 +122,23 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.RadialGradientShader
 import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -386,45 +392,9 @@ private fun BottomBar(current: Tab, position: () -> Float, badge: Tab?, modifier
 /** The desktop's picture with its state and buttons, then the favorites and every app. */
 @Composable
 private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, entrance: Animatable<Float, AnimationVector1D>, onUpdates: () -> Unit) {
+    val context = LocalContext.current
     val compact = isCompact()
     val side = if (compact) 16.dp else 48.dp
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Hero(state, viewModel, side, Modifier.entrance(entrance, 0))
-        Column(
-            Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-                .padding(start = side, end = side, top = 8.dp, bottom = if (compact) 100.dp else 120.dp),
-            verticalArrangement = Arrangement.spacedBy(if (compact) 20.dp else 24.dp),
-        ) {
-            if (updates) {
-                Box(Modifier.entrance(entrance, 1)) {
-                    InfoRow(
-                        title = stringResource(R.string.home_update_title),
-                        text = stringResource(R.string.home_update_text),
-                        icon = Icons.Info,
-                        iconTint = UpdateColor,
-                        onClick = onUpdates,
-                    ) { Icon(Icons.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
-            }
-            val next = if (updates) 2 else 1
-            QuickLaunch(state, viewModel, Modifier.entrance(entrance, next))
-            AllApps(state, viewModel, Modifier.entrance(entrance, next + 1))
-        }
-    }
-}
-
-/**
- * The last picture of the desktop from edge to edge, fading into the page, with the session's state and
- * buttons over its bottom. A dark band under the status bar keeps its icons readable on a light wallpaper.
- */
-@Composable
-private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, modifier: Modifier) {
-    val context = LocalContext.current
-    val view = LocalView.current
-    val compact = isCompact()
-    // Where the picture is: the desktop opens out of it.
-    var bounds by remember { mutableStateOf<Rect?>(null) }
-    val open = { openDesktop(context, view, bounds) }
     var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
     // Reloaded whenever the screen comes back; decoding a screen-sized picture takes a few frames.
     val scope = rememberCoroutineScope()
@@ -435,27 +405,81 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, modifier: M
         }
         onPauseOrDispose { load.cancel() }
     }
+    // Behind the whole page, the same picture blurred and dimmed (blur needs Android 12).
+    val picture = thumbnail
+    Box(Modifier.fillMaxSize()) {
+        if (picture != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            Image(picture.asImageBitmap(), null, Modifier.fillMaxSize().blur(48.dp), contentScale = ContentScale.Crop)
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background.copy(alpha = 0.6f)))
+        }
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+            Hero(state, viewModel, side, picture, Modifier.entrance(entrance, 0))
+            Column(
+                Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                    .padding(start = side, end = side, top = 8.dp, bottom = if (compact) 100.dp else 120.dp),
+                verticalArrangement = Arrangement.spacedBy(if (compact) 20.dp else 24.dp),
+            ) {
+                if (updates) {
+                    Box(Modifier.entrance(entrance, 1)) {
+                        InfoRow(
+                            title = stringResource(R.string.home_update_title),
+                            text = stringResource(R.string.home_update_text),
+                            icon = Icons.Info,
+                            iconTint = UpdateColor,
+                            onClick = onUpdates,
+                        ) { Icon(Icons.Chevron, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                }
+                val next = if (updates) 2 else 1
+                QuickLaunch(state, viewModel, Modifier.entrance(entrance, next))
+                AllApps(state, viewModel, Modifier.entrance(entrance, next + 1))
+            }
+        }
+    }
+}
+
+/**
+ * The last picture of the desktop from edge to edge, fading into the page, with the session's state and
+ * buttons over its bottom. A dark band under the status bar keeps its icons readable on a light wallpaper.
+ */
+@Composable
+private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, picture: Bitmap?, modifier: Modifier) {
+    val context = LocalContext.current
+    val view = LocalView.current
+    val compact = isCompact()
+    // Where the picture is: the desktop opens out of it.
+    var bounds by remember { mutableStateOf<Rect?>(null) }
+    val open = { openDesktop(context, view, bounds) }
+    val scope = rememberCoroutineScope()
     var confirmStop by remember { mutableStateOf(false) }
     // From "Exit" until the session is gone.
     var stopping by remember { mutableStateOf(false) }
-    val page = MaterialTheme.colorScheme.background
     Box(
         modifier.fillMaxWidth().onGloballyPositioned { bounds = it.boundsInRoot() }
             .clickable(onClickLabel = stringResource(R.string.action_open_desktop), onClick = open),
     ) {
-        val picture = thumbnail
         if (picture != null) {
-            Image(picture.asImageBitmap(), stringResource(R.string.home_last_session), Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+            // Sharp at the top, dissolving into the blurred copy behind the page.
+            Image(
+                picture.asImageBitmap(), stringResource(R.string.home_last_session),
+                Modifier.matchParentSize().graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }.drawWithContent {
+                    drawContent()
+                    drawRect(Brush.verticalGradient(0.45f to Color.Black, 1f to Color.Transparent), blendMode = BlendMode.DstIn)
+                },
+                contentScale = ContentScale.Crop,
+            )
         } else {
             Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surfaceContainer), contentAlignment = Alignment.Center) {
                 Icon(Icons.Debian, null, tint = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(140.dp))
             }
         }
+        val page = MaterialTheme.colorScheme.background
         Box(
             Modifier.matchParentSize().background(
                 Brush.verticalGradient(
                     0f to Color.Black.copy(alpha = 0.35f), 0.15f to Color.Transparent,
-                    0.4f to Color.Transparent, 0.65f to page.copy(alpha = 0.6f), 0.85f to page.copy(alpha = 0.92f), 1f to page,
+                    // With a picture, the bottom is the dimmed blur behind: nothing to add, or a seam shows.
+                    0.45f to Color.Transparent, 1f to if (picture != null) Color.Transparent else page,
                 ),
             ),
         )
@@ -620,7 +644,8 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
         }
         val compact = isCompact()
         BoxWithConstraints(
-            Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow)
+            // A little see-through over the blurred picture.
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.75f))
                 .padding(horizontal = 6.dp, vertical = 12.dp),
         ) {
             // As many as the apps' grid below, so the two line up.
@@ -981,14 +1006,12 @@ private fun SettingsTab(
         ) { page ->
             ReachPage(
                 reach,
-                title = stringResource(page?.title ?: R.string.tab_settings),
-                subtitle = page?.let { summary(it) },
                 padding = padding,
-            ) { smallTitle ->
+            ) { open ->
                 if (page == null) {
                     Text(
                         stringResource(R.string.tab_settings), fontSize = 24.sp, fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(start = 4.dp).graphicsLayer { alpha = smallTitle() },
+                        modifier = Modifier.padding(start = 4.dp).reachTitle(open),
                     )
                     Category.entries.chunked(2).forEach { row ->
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -998,7 +1021,7 @@ private fun SettingsTab(
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalIconButton(onClick = { onCategory(null) }) { Icon(Icons.Back, stringResource(R.string.action_back)) }
-                        Text(stringResource(page.title), fontSize = 22.sp, fontWeight = FontWeight.Medium, modifier = Modifier.graphicsLayer { alpha = smallTitle() })
+                        Text(stringResource(page.title), fontSize = 22.sp, fontWeight = FontWeight.Medium, modifier = Modifier.reachTitle(open))
                     }
                     pageContent(page)
                 }
@@ -1049,18 +1072,15 @@ private fun SettingsTab(
 }
 
 /**
- * A Settings page on a phone, usable with one hand: pulled down at its top, it slides under a tall header
- * with its [title] (and [subtitle]) in big type, down to where the thumb reaches; scrolling up closes the
- * header before the page scrolls. [reach] is how far it is pulled, in pixels. [content] gets the opacity
- * for its own small title, which gives way to the big one.
+ * A Settings page on a phone, usable with one hand: pulled down at its top, it slides down to where the
+ * thumb reaches, under an empty band; scrolling up closes the band before the page scrolls. [reach] is
+ * how far it is pulled, in pixels. [content] gets how open the band is (0 to 1), for [reachTitle].
  */
 @Composable
 private fun ReachPage(
     reach: MutableFloatState,
-    title: String,
-    subtitle: String?,
     padding: PaddingValues,
-    content: @Composable ColumnScope.(smallTitle: () -> Float) -> Unit,
+    content: @Composable ColumnScope.(open: () -> Float) -> Unit,
 ) {
     val max = with(LocalDensity.current) { (LocalConfiguration.current.screenHeightDp * 0.35f).dp.toPx() }
     fun open() = (reach.floatValue / max).coerceIn(0f, 1f)
@@ -1098,30 +1118,21 @@ private fun ReachPage(
         }
     }
     Column(Modifier.fillMaxSize().nestedScroll(connection)) {
-        // The header: as tall as the pull, its big title at the bottom.
-        Box(
-            Modifier.fillMaxWidth().clipToBounds().layout { measurable, constraints ->
-                val height = reach.floatValue.roundToInt()
-                val placeable = measurable.measure(constraints.copy(minHeight = 0, maxHeight = Constraints.Infinity))
-                layout(constraints.maxWidth, height) { placeable.place(0, height - placeable.height) }
-            },
-        ) {
-            Column(
-                Modifier.padding(start = 20.dp, end = 20.dp, bottom = 8.dp).graphicsLayer {
-                    alpha = (open() * 1.6f - 0.6f).coerceIn(0f, 1f)
-                    translationY = (1 - open()) * 16.dp.toPx()
-                },
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                Text(title, fontSize = 34.sp, fontWeight = FontWeight.Medium, lineHeight = 40.sp)
-                if (subtitle != null) Text(subtitle, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+        // The band: as tall as the pull.
+        Box(Modifier.fillMaxWidth().layout { _, constraints -> layout(constraints.maxWidth, reach.floatValue.roundToInt()) {} })
         Column(
             Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(padding),
             verticalArrangement = Arrangement.spacedBy(16.dp),
-        ) { content { (1 - open() * 2.2f).coerceIn(0f, 1f) } }
+        ) { content(::open) }
     }
+}
+
+/** A page's title growing to big type, upwards from its bottom left, as the band above it opens. */
+private fun Modifier.reachTitle(open: () -> Float) = graphicsLayer {
+    val scale = 1 + 0.45f * open()
+    scaleX = scale
+    scaleY = scale
+    transformOrigin = TransformOrigin(0f, 1f)
 }
 
 /** Pixels a second: a flick at least this fast opens or closes the reach header. */
