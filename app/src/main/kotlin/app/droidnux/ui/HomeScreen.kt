@@ -76,6 +76,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -144,6 +146,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -185,14 +188,19 @@ private enum class Category(val title: Int, val icon: ImageVector) {
 
 @Composable
 fun HomeScreen(state: AppState, viewModel: AppViewModel) {
-    var tab by rememberSaveable { mutableStateOf(Tab.HOME) }
+    // The pages side by side: a swipe moves between them, a tab slides to its page.
+    val pager = rememberPagerState { Tab.entries.size }
+    val tab = Tab.entries[pager.targetPage]
+    val scope = rememberCoroutineScope()
+    fun select(next: Tab) {
+        scope.launch { pager.animateScrollToPage(next.ordinal, animationSpec = tween(320, easing = Emphasized)) }
+    }
     var category by rememberSaveable { mutableStateOf<Category?>(null) }
     LaunchedEffect(Unit) { if (state.apps == null) viewModel.loadApps() }
 
-    BackHandler(enabled = tab != Tab.HOME) { tab = Tab.HOME }
+    BackHandler(enabled = tab != Tab.HOME) { select(Tab.HOME) }
     val updates = !state.desktopUpToDate || Component.ALL.any { it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled }
     // Every return to the app (from the desktop too) brings the Home's sections in one after another.
-    val scope = rememberCoroutineScope()
     val entrance = remember { Animatable(1f) }
     LifecycleResumeEffect(Unit) {
         val play = scope.launch {
@@ -203,25 +211,16 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
     }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        AnimatedContent(
-            tab,
-            transitionSpec = {
-                // The next page comes in from its tab's side.
-                val towards = if (targetState > initialState) 1 else -1
-                slideInHorizontally(tween(320, easing = Emphasized)) { it * towards } togetherWith
-                    slideOutHorizontally(tween(320, easing = Emphasized)) { -it * towards }
-            },
-            label = "tab",
-        ) { page ->
+        HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
             // Room for the bar floating over the bottom of every page.
             val padding = if (isCompact()) {
                 PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 100.dp)
             } else {
                 PaddingValues(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 120.dp)
             }
-            when (page) {
+            when (Tab.entries[page]) {
                 // The Home runs under the status bar: its picture reaches the top edge.
-                Tab.HOME -> HomeTab(state, viewModel, updates, entrance, onUpdates = { category = Category.COMPONENTS; tab = Tab.SETTINGS })
+                Tab.HOME -> HomeTab(state, viewModel, updates, entrance, onUpdates = { category = Category.COMPONENTS; select(Tab.SETTINGS) })
                 Tab.STORE -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) { StoreTab(state, viewModel, padding) }
                 Tab.SETTINGS -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
                     SettingsTab(
@@ -233,10 +232,12 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
         }
         BottomBar(
             tab,
+            // The pill follows the pages, under the finger too.
+            position = { pager.currentPage + pager.currentPageOffsetFraction },
             badge = if (updates) Tab.SETTINGS else null,
             modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.safeDrawing)
                 .padding(bottom = if (isCompact()) 12.dp else 24.dp),
-        ) { tab = it }
+        ) { if (it != tab) select(it) }
     }
 }
 
@@ -293,21 +294,23 @@ private fun <S> AnimatedContentTransitionScope<S>.textSwap(): ContentTransform =
 private fun Badge(modifier: Modifier = Modifier) = Box(modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(UpdateColor))
 
 /**
- * A floating rounded bar: each tab is its icon over its name, the current one on a pill that slides
- * to it. The tab changes on touch down, without waiting for the finger to lift. [badge] marks a tab
- * with something waiting.
+ * A floating rounded bar: each tab is its icon over its name, the current one on a pill at [position]
+ * (the page shown, fractional while the pages move). The tab changes on touch down, without waiting
+ * for the finger to lift. [badge] marks a tab with something waiting.
  */
 @Composable
-private fun BottomBar(current: Tab, badge: Tab?, modifier: Modifier, onSelect: (Tab) -> Unit) {
+private fun BottomBar(current: Tab, position: () -> Float, badge: Tab?, modifier: Modifier, onSelect: (Tab) -> Unit) {
     // Smaller on a phone, never closer than 12 dp to the screen's sides.
     val compact = isCompact()
     val height = if (compact) 60.dp else 68.dp
     BoxWithConstraints(modifier.padding(horizontal = if (compact) 12.dp else 0.dp)) {
         // Tabs just wide enough for "Impostazioni": the bar stays a pill in the middle, also on a phone.
         val item = minOf(if (compact) 88.dp else 108.dp, (maxWidth - if (compact) 12.dp else 44.dp) / Tab.entries.size)
-        val pillX by animateDpAsState(item * current.ordinal, spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow), label = "pill")
         Box(Modifier.clip(RoundedCornerShape(40.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(6.dp)) {
-            Box(Modifier.offset(x = pillX).size(item, height).clip(RoundedCornerShape(height / 2)).background(PillBrush))
+            Box(
+                Modifier.offset { IntOffset((item.toPx() * position()).roundToInt(), 0) }.size(item, height)
+                    .clip(RoundedCornerShape(height / 2)).background(PillBrush),
+            )
             Row {
                 Tab.entries.forEach { tab ->
                     val selected = tab == current
