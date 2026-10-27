@@ -26,6 +26,9 @@ object DesktopEnvironment {
     private const val LAUNCH_FIFO = "/tmp/.droidnux-launch"
     const val DISPLAY = 0
 
+    /** The shadow hash the app's password got last (USER_SESSION), root's only. */
+    private const val PASSWORD_STAMP = "/var/lib/droidnux/password-hash"
+
     /** KWin's render time prediction (guest/kwin-pacing), preloaded into Plasma. */
     private const val KWIN_LIBRARY = "libdroidnux-guest-kwin.so"
     private const val GUEST_LIB_DIR = "/usr/local/lib/droidnux"
@@ -451,7 +454,7 @@ object DesktopEnvironment {
      * (some apps refuse root, VLC among them), DROIDNUX_USER, made on first use
      * with the settings root had (or renamed from the account made before);
      * the password the app sends on the input line becomes its password and
-     * sudo's, and the key of KDE's wallet, opened in --in-dbus as pam_kwallet
+     * sudo's (when new to the account: one changed in Linux stays), and the key of KDE's wallet, opened in --in-dbus as pam_kwallet
      * would at login (DROIDNUX_WALLET; DROIDNUX_WALLET_BEFORE when the app
      * also sends the password before, on a second line). Then the script again with the user's
      * ids (perl: setpriv needs capabilities Android refuses).
@@ -493,7 +496,17 @@ object DesktopEnvironment {
             home=${'$'}(getent passwd "${'$'}user" | cut -d: -f6)
             unset DROIDNUX_WALLET DROIDNUX_WALLET_BEFORE
             if [ -n "${'$'}pass" ]; then
-                printf '%s:%s\n' "${'$'}user" "${'$'}pass" | chpasswd || echo "chpasswd failed"
+                # The app's password becomes the account's when it is new to it (first start, changed in the
+                # app): one changed in Linux (passwd, Plasma's settings) stays. The stamp is the hash the
+                # app's password got last; the password goes on perl's input, not its command line.
+                stamp=$PASSWORD_STAMP
+                last=${'$'}(cat "${'$'}stamp" 2> /dev/null) || last=${'$'}(getent shadow "${'$'}user" | cut -d: -f2)
+                if ! printf '%s\n%s' "${'$'}last" "${'$'}pass" | perl -e 'chomp(my ${'$'}h = <STDIN>); local ${'$'}/; my ${'$'}p = <STDIN>;
+                        exit(${'$'}h ne "" && crypt(${'$'}p, ${'$'}h) eq ${'$'}h ? 0 : 1)'; then
+                    printf '%s:%s\n' "${'$'}user" "${'$'}pass" | chpasswd || echo "chpasswd failed"
+                    last=${'$'}(getent shadow "${'$'}user" | cut -d: -f2)
+                fi
+                mkdir -p "${'$'}{stamp%/*}" && (umask 077 && printf '%s\n' "${'$'}last" > "${'$'}stamp")
                 sudo="ALL=(ALL:ALL) ALL"
                 # pam_kwallet's key: PBKDF2-HMAC-SHA512 of the password, 50000 rounds, the wallet's salt.
                 wallets=${'$'}home/.local/share/kwalletd
