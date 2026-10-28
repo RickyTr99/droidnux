@@ -41,6 +41,10 @@ class Burrow(context: Context) {
             }
             // Android has no /dev/shm; glibc shm_open() needs one.
             add("-b"); add("${File(rootfs, SHM_DIR).apply { mkdirs() }.absolutePath}:/dev/shm")
+            // The desktop's own cgroup tree (DesktopEnvironment's APP_GROUPS): Android's is not readable.
+            val cgroups = File(rootfs, CGROUP_DIR).apply { mkdirs() }
+            File(cgroups, CGROUP_MARKER).createNewFile()
+            add("-b"); add("${cgroups.absolutePath}:/sys/fs/cgroup")
             // The device's shared storage, once the user allows access to all files.
             if (Environment.isExternalStorageManager()) {
                 add("-b"); add("${Environment.getExternalStorageDirectory().absolutePath}:$GUEST_SDCARD")
@@ -109,6 +113,8 @@ class Burrow(context: Context) {
 
         val DEFAULT_BINDS = listOf("/dev", "/proc", "/sys")
         const val SHM_DIR = "tmp/.droidnux-shm"
+        const val CGROUP_DIR = "run/droidnux-cgroup"
+        const val CGROUP_MARKER = ".droidnux"
 
         val GUEST_ENVIRONMENT = linkedMapOf(
             "HOME" to "/root",

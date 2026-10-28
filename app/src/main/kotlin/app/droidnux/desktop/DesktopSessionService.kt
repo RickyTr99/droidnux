@@ -37,6 +37,7 @@ class DesktopSessionService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var session: Process? = null
     private var battery: BroadcastReceiver? = null
+    private var network: NetworkReporter? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -62,6 +63,7 @@ class DesktopSessionService : Service() {
 
     override fun onDestroy() {
         battery?.let { unregisterReceiver(it) }
+        network?.stop()
         stopSession()
         scope.cancel()
         super.onDestroy()
@@ -80,6 +82,7 @@ class DesktopSessionService : Service() {
                 }
             }.also { registerReceiver(it, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
         }
+        if (network == null) network = NetworkReporter(this, rootfs, scope).also { it.start() }
         val user = DesktopSettings.load(this).user
         val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, user))
         val password = Account.password(this).orEmpty()

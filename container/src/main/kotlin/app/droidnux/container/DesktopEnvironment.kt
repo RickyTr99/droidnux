@@ -72,6 +72,18 @@ object DesktopEnvironment {
     private const val BATTERY_FILE = "/run/droidnux-battery/state"
     private const val UPOWER_SCRIPT = "$GUEST_LIB_DIR/droidnux-upower"
     private const val SYSTEM_BUS_CONF = "$GUEST_LIB_DIR/system-bus.conf"
+
+    /** Groups the desktop's processes by app for System Monitor ([APP_GROUPS]). */
+    private const val APP_GROUPS_SCRIPT = "$GUEST_LIB_DIR/droidnux-app-groups"
+
+    /**
+     * Android's active network for ksystemstats (guest/plasma, patch 0002): the
+     * app writes NETWORK_STATE, and its byte counters again whenever the plugin
+     * writes NETWORK_REQUEST.
+     */
+    private const val NETWORK_DIR = "/run/droidnux-network"
+    private const val NETWORK_STATE = "$NETWORK_DIR/state"
+    const val NETWORK_REQUEST = "wanted"
     private const val SYSTEM_BUS_SOCKET = "/run/dbus/system_bus_socket"
 
     /** Plasma on the app's Wayland compositor, with KDE's everyday apps. */
@@ -188,8 +200,13 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PLASMA_DEFAULTS/kwalletrc", PLASMA_KWALLETRC.toByteArray())
         writeFile(rootfs, WALLET_SCRIPT, WALLET.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, UPOWER_SCRIPT, UPOWER.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, APP_GROUPS_SCRIPT, APP_GROUPS.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, SYSTEM_BUS_CONF, SYSTEM_BUS.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/powerdevilrc", PLASMA_POWERDEVILRC.toByteArray())
+        hidePowerProfiles(rootfs)
+        // Android's clipboard is the one that lasts: Klipper's history from the last
+        // session would replace it at login (and Android would show it as copied).
+        writeFile(rootfs, "$PLASMA_DEFAULTS/klipperrc", "[General]\nKeepClipboardContents=false\n".toByteArray())
         writeFile(rootfs, IM_DESKTOP_FILE, IM_DESKTOP.toByteArray())
         writeFile(rootfs, IM_PROGRAM, File(nativeLibraryDir, IM_LIBRARY).readBytes(), mode = 0x1ED)
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/metadata.json", PLASMA_LNF_METADATA.toByteArray())
@@ -378,7 +395,7 @@ object DesktopEnvironment {
         fi
     """.trimIndent()
 
-    /** Session script part, inside D-Bus: sound. */
+    /** Session script part, inside D-Bus: sound, and the apps for System Monitor. */
     private val SESSION_SERVICES = """
         # Session services without systemd start here, on the session bus.
         if command -v pipewire > /dev/null; then
@@ -391,6 +408,8 @@ object DesktopEnvironment {
             wireplumber &
             pipewire-pulse &
         fi
+        # The apps' processes for System Monitor.
+        $APP_GROUPS_SCRIPT &
     """.trimIndent()
 
     /** Session script part, inside D-Bus: apps the app starts, once the process LAUNCH_AFTER runs. */
@@ -581,7 +600,7 @@ ${GPU_ENV.prependIndent("            ")}
                 "${'$'}(sed 1d "${'$'}PLASMA/droidnux-plasma.version" | while read -r package version; do
                     echo "${'$'}package ${'$'}(dpkg-query -W -f '${'$'}{Version}' "${'$'}package" 2> /dev/null)"; done)" ]; then
                 export LD_LIBRARY_PATH=${'$'}PLASMA/lib/aarch64-linux-gnu${'$'}{LD_LIBRARY_PATH:+:${'$'}LD_LIBRARY_PATH}
-                # ksystemstats' GPU and disk plugins for Android, found before the distro's of the same name.
+                # ksystemstats' GPU, disk and network plugins for Android, found before the distro's of the same name.
                 export QT_PLUGIN_PATH=${'$'}PLASMA/lib/aarch64-linux-gnu/qt6/plugins${'$'}{QT_PLUGIN_PATH:+:${'$'}QT_PLUGIN_PATH}
             fi
             # Turnip on KGSL has no calibrated timestamps: Zink answers
@@ -773,6 +792,19 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         )
     }
 
+    /** The directory where the network plugin writes [NETWORK_REQUEST], made if missing. */
+    fun networkDir(rootfs: File): File = File(rootfs, NETWORK_DIR.removePrefix("/")).apply { mkdirs() }
+
+    /**
+     * Android's default network for the network plugin: [fields] as interface,
+     * name, signal (percent), ipv4/ipv6 (address/prefix), ipv4gateway,
+     * ipv6gateway, ipv4dns, ipv6dns, received, sent (bytes) and time (ms of
+     * the counters); no interface when offline.
+     */
+    fun writeNetwork(rootfs: File, fields: Map<String, Any>) {
+        writeFile(rootfs, NETWORK_STATE, fields.entries.joinToString("") { "${it.key}=${it.value}\n" }.toByteArray())
+    }
+
     /** The system bus: no services started on demand, and everyone may talk to everyone (one user, in a container). */
     private val SYSTEM_BUS = """
         <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
@@ -951,6 +983,203 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
 
         [LowBattery][SuspendAndShutdown]
         AutoSuspendAction=0
+    """.trimIndent() + "\n"
+
+    /**
+     * No power profiles in the battery applet: Android manages the CPU and an app
+     * cannot change it, so the applet would only say they are not available. The
+     * applet has no setting for it: its QML is changed in place, again after
+     * every update of powerdevil.
+     */
+    private fun hidePowerProfiles(rootfs: File) {
+        val dialog = File(rootfs, "usr/share/plasma/plasmoids/org.kde.plasma.battery/contents/ui/PopupDialog.qml")
+        if (java.nio.file.Files.isSymbolicLink(dialog.toPath()) || !dialog.isFile) return
+        val qml = dialog.readText()
+        if (HIDDEN_PROFILES in qml) return
+        val hidden = qml.replace(Regex("""(?m)^(\s*)PowerProfileItem \{$""")) { "${it.value}\n${it.groupValues[1]}    $HIDDEN_PROFILES" }
+        if (hidden != qml) writeFile(rootfs, "/${dialog.relativeTo(rootfs).path}", hidden.toByteArray())
+    }
+
+    private const val HIDDEN_PROFILES = "visible: false // DroidNux: Android manages power"
+
+    /**
+     * The cgroup tree systemd would make for the desktop's apps, which System
+     * Monitor's Applications page reads (libksysguard's ApplicationDataModel):
+     * one app-<desktop id>-<pid>.scope per app started, with its processes and
+     * their children. Burrow shows the app's directory as /sys/fs/cgroup
+     * (Android's cgroups are not readable). Without systemd nothing says which
+     * app a process is: the first process (from the top of the tree) whose
+     * program is an app's Exec starts that app. The tree is made again only when
+     * someone reads it (inotify), at most once a second.
+     */
+    private val APP_GROUPS = """
+        #!/usr/bin/python3
+        # Written by DroidNux: the desktop's apps as systemd scopes in /sys/fs/cgroup,
+        # for System Monitor. Runs as the desktop's user.
+        import ctypes
+        import os
+        import shlex
+        import shutil
+        import time
+
+        ROOT = "/sys/fs/cgroup"
+        UID = os.getuid()
+        SERVICE = f"{ROOT}/user.slice/user-{UID}.slice/user@{UID}.service"
+        APPS = SERVICE + "/app.slice"
+        HOME = os.path.expanduser("~")
+        DIRS = [HOME + "/.local/share/applications", "/usr/local/share/applications", "/usr/share/applications",
+                HOME + "/.local/share/flatpak/exports/share/applications", "/var/lib/flatpak/exports/share/applications"]
+        INTERPRETERS = {"sh", "bash", "dash", "python", "perl", "env"}
+        IN_OPEN = 0x20
+
+
+        def interpreter(path):
+            return os.path.basename(path).rstrip("0123456789.") in INTERPRETERS
+
+
+        def desktop_entries():
+            # program (real path or name) -> desktop id; the entry with the shortest Exec wins.
+            programs = {}
+            for d in DIRS:
+                try:
+                    names = sorted(os.listdir(d))
+                except OSError:
+                    continue
+                for name in names:
+                    if not name.endswith(".desktop"):
+                        continue
+                    entry, group = {}, None
+                    try:
+                        with open(os.path.join(d, name), encoding="utf-8", errors="replace") as f:
+                            for line in f:
+                                line = line.strip()
+                                if line.startswith("["):
+                                    group = line
+                                elif group == "[Desktop Entry]" and "=" in line:
+                                    key, _, value = line.partition("=")
+                                    entry.setdefault(key.strip(), value.strip())
+                    except OSError:
+                        continue
+                    if entry.get("Type") != "Application" or "true" in (entry.get("NoDisplay"), entry.get("Hidden")):
+                        continue
+                    try:
+                        args = [a for a in shlex.split(entry.get("Exec", "")) if not a.startswith("%")]
+                    except ValueError:
+                        continue
+                    while args and (os.path.basename(args[0]) == "env" or "=" in args[0]):
+                        args = args[1:]
+                    if not args:
+                        continue
+                    program = shutil.which(args[0]) or args[0]
+                    key = os.path.realpath(program) if os.path.isabs(program) else program
+                    keys = {key, os.path.basename(args[0])}
+                    if interpreter(key):
+                        # Not every shell or Python: the script it runs (sh -c has none).
+                        keys = {os.path.basename(args[1])} if len(args) > 1 and not args[1].startswith("-") else set()
+                    for k in keys:
+                        if k not in programs or len(args) < programs[k][1]:
+                            programs[k] = (name[:-8], len(args))
+            return {k: v[0] for k, v in programs.items()}
+
+
+        def app_of(pid, programs):
+            try:
+                exe = os.readlink(f"/proc/{pid}/exe")
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    argv = [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
+            except OSError:
+                return None
+            names = [os.path.basename(a) for a in argv[:2]]
+            if interpreter(exe):
+                # A script: its interpreter runs it.
+                return programs.get(names[1]) if len(names) > 1 else None
+            return programs.get(exe) or (programs.get(names[0]) if names else None)
+
+
+        def parents():
+            result = {}
+            for name in os.listdir("/proc"):
+                if not name.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{name}/stat") as f:
+                        result[int(name)] = int(f.read().rsplit(")", 1)[1].split()[1])
+                except (OSError, IndexError, ValueError):
+                    pass
+            return result
+
+
+        def escape(app):
+            # systemd's unit name escaping: libksysguard undoes it.
+            return "".join(c if c.isalnum() or c in ":_." else "\\x%02x" % ord(c) for c in app)
+
+
+        def scopes(programs):
+            tree = parents()
+            apps, roots = {}, {}
+
+            def assign(pid):
+                if pid in apps:
+                    return apps[pid]
+                apps[pid] = None
+                ppid = tree.get(pid)
+                inherited = assign(ppid) if ppid in tree else None
+                if inherited:
+                    apps[pid] = inherited
+                else:
+                    app = app_of(pid, programs)
+                    if app:
+                        apps[pid] = (app, pid)
+                return apps[pid]
+
+            for pid in tree:
+                assign(pid)
+            for pid, owner in apps.items():
+                if owner:
+                    roots.setdefault("app-%s-%d.scope" % (escape(owner[0]), owner[1]), []).append(pid)
+            return roots
+
+
+        def write(groups):
+            os.makedirs(APPS, exist_ok=True)
+            for name in os.listdir(APPS):
+                if name not in groups:
+                    shutil.rmtree(os.path.join(APPS, name), ignore_errors=True)
+            for name, pids in groups.items():
+                os.makedirs(os.path.join(APPS, name), exist_ok=True)
+                path = os.path.join(APPS, name, "cgroup.procs")
+                text = "".join(f"{p}\n" for p in sorted(pids))
+                try:
+                    with open(path) as f:
+                        if f.read() == text:
+                            continue
+                except OSError:
+                    pass
+                with open(path + ".new", "w") as f:
+                    f.write(text)
+                os.replace(path + ".new", path)
+
+
+        # Only in the app's tree, never in a real cgroup file system.
+        if not os.path.exists(ROOT + "/.droidnux"):
+            raise SystemExit("droidnux-app-groups: /sys/fs/cgroup is not DroidNux's")
+        shutil.rmtree(ROOT + "/user.slice", ignore_errors=True)
+        os.makedirs(APPS)
+        libc = ctypes.CDLL(None, use_errno=True)
+        inotify = libc.inotify_init1(os.O_CLOEXEC)
+        if inotify < 0 or libc.inotify_add_watch(inotify, SERVICE.encode(), IN_OPEN) < 0:
+            raise SystemExit("droidnux-app-groups: inotify: " + os.strerror(ctypes.get_errno()))
+        stamps, programs, last = None, {}, 0.0
+        while True:
+            now = time.monotonic()
+            if now - last >= 1:
+                last = now
+                current = [os.stat(d).st_mtime if os.path.isdir(d) else 0 for d in DIRS]
+                if current != stamps:
+                    stamps, programs = current, desktop_entries()
+                write(scopes(programs))
+            # Until System Monitor reads the tree again (it lists user@<uid>.service first).
+            os.read(inotify, 4096)
     """.trimIndent() + "\n"
 
     /** No lock screen: Android locks the device. */

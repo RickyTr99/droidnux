@@ -38,10 +38,10 @@ data class Component(
         /** KSvg and KIconThemes with fewer file lookups, and system monitor plugins for Android: guest/plasma. */
         val PLASMA = Component(
             id = "plasma",
-            version = "6.13.0-dn3",
-            url = "$RELEASES/plasma-6.13.0-dn3/droidnux-plasma-6.13.0-dn3-arm64.tar.xz",
-            sha256 = "01b82e1d06d849075157fe6f5ae5cbfc5729c4d25d5e9c25e17dcb503d473c6f",
-            sizeBytes = 181_768,
+            version = "6.13.0-dn4",
+            url = "$RELEASES/plasma-6.13.0-dn4/droidnux-plasma-6.13.0-dn4-arm64.tar.xz",
+            sha256 = "4290bce12d8c861fded03076668d2ad7b3606b98faa37dca91c4614cf77c5b6a",
+            sizeBytes = 203_544,
             guestPath = DesktopEnvironment.PLASMA_PREFIX,
         )
 
