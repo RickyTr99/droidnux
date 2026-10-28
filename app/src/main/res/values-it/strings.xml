@@ -304,4 +304,7 @@
     <string name="section_container">Container</string>
     <string name="diagnostics_spike_text">Prova dei buffer condivisi con la GPU</string>
     <string name="diagnostics_desktop_log">Log dell’installazione del desktop</string>
+    <string name="diagnostics_log">Log</string>
+    <string name="diagnostics_log_text">Il desktop non parte? Manda questo file</string>
+    <string name="action_share">Condividi</string>
 </resources>

@@ -12,6 +12,11 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -19,13 +24,32 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.droidnux.R
+import app.droidnux.desktop.SessionLog
 import app.droidnux.spike.BufferSpikeActivity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
-/** Settings › Diagnostics: a command in the container, the display core, the desktop's install log. */
+/** Settings › Diagnostics: the log to send, a command in the container, the display core, the desktop's install log. */
 @Composable
 fun DiagnosticsPage(state: AppState, viewModel: AppViewModel) {
     val context = LocalContext.current
     val installed = state.rootfs == InstallState.Installed
+    val scope = rememberCoroutineScope()
+    var sharing by remember { mutableStateOf(false) }
+    InfoRow(stringResource(R.string.diagnostics_log), text = stringResource(R.string.diagnostics_log_text)) {
+        FilledTonalButton(
+            onClick = {
+                sharing = true
+                scope.launch {
+                    runCatching { withContext(Dispatchers.IO) { SessionLog.share(context, state.display) } }
+                        .onSuccess { context.startActivity(it) }
+                    sharing = false
+                }
+            },
+            enabled = !sharing,
+        ) { Text(stringResource(R.string.action_share)) }
+    }
     InfoRow(
         stringResource(R.string.section_container),
         text = if (installed) null else stringResource(R.string.container_hint),

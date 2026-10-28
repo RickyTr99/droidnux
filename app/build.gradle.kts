@@ -27,6 +27,8 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.0.1-dev"
+        // -Pdiagnostic: the session logs all KWin, Qt and Mesa say (testers' devices).
+        buildConfigField("boolean", "DIAGNOSTIC", project.hasProperty("diagnostic").toString())
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -65,6 +67,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {

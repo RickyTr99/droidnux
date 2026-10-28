@@ -306,4 +306,7 @@
     <string name="settings_diagnostics_text">System checks and logs</string>
     <string name="diagnostics_spike_text">Test of the buffers shared with the GPU</string>
     <string name="diagnostics_desktop_log">Desktop install log</string>
+    <string name="diagnostics_log">Log</string>
+    <string name="diagnostics_log_text">The desktop doesn’t start? Send this file</string>
+    <string name="action_share">Share</string>
 </resources>

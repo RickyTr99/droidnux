@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import app.droidnux.BuildConfig
 import app.droidnux.R
 import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
@@ -84,7 +85,7 @@ class DesktopSessionService : Service() {
         }
         if (network == null) network = NetworkReporter(this, rootfs, scope).also { it.start() }
         val user = DesktopSettings.load(this).user
-        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, user))
+        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, user, verbose = BuildConfig.DIAGNOSTIC))
         val password = Account.password(this).orEmpty()
         session = process
         Log.i(TAG, "session started (layout $layout)")
@@ -94,9 +95,11 @@ class DesktopSessionService : Service() {
             runCatching { process.outputStream.use { it.write("$password\n$before\n".toByteArray()) } }
         }
         scope.launch {
+            val log = SessionLog.Writer(this@DesktopSessionService)
             try {
                 process.inputStream.bufferedReader().forEachLine {
                     Log.i(TAG_GUEST, it)
+                    log.line(it)
                     // The desktop logged out; its services (PipeWire, D-Bus) would keep the runtime alive.
                     if (it == DesktopEnvironment.SESSION_END_MARKER) process.destroy()
                     if (it == DesktopEnvironment.WALLET_MOVED_MARKER) Account.walletMoved(this@DesktopSessionService, password)
@@ -104,6 +107,8 @@ class DesktopSessionService : Service() {
             } catch (e: java.io.IOException) {
                 // destroy() from another thread closes the stream under the reader.
                 Log.i(TAG, "session output closed: $e")
+            } finally {
+                log.close()
             }
             val code = process.waitFor()
             Log.i(TAG, "session ended with $code")

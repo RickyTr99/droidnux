@@ -228,9 +228,10 @@ object DesktopEnvironment {
      * password before it (empty line if it did not change): KDE's wallet
      * moves to the new one, and [WALLET_MOVED_MARKER] says so.
      */
-    fun sessionCommand(layout: String, user: String = ""): String =
+    fun sessionCommand(layout: String, user: String = "", verbose: Boolean = false): String =
         "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_LOCALE=${glibcLocale()} " +
             (if (user.isNotEmpty()) "DROIDNUX_USER=$user " else "") +
+            (if (verbose) "DROIDNUX_VERBOSE=1 " else "") +
             "exec $SESSION_SCRIPT"
 
     /** Android's language as a glibc locale name ("it_IT"); the session checks Debian has it. */
@@ -344,10 +345,13 @@ object DesktopEnvironment {
 
     /** Session script part: DroidNux's Mesa for the session's apps. */
     private val GPU_ENV = """
-        # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed,
-        # otherwise the distro's software rendering.
+        # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed on
+        # an Adreno (KGSL), otherwise the distro's software rendering: on other
+        # GPUs Turnip finds no device, Zink fails and KWin gets no EGL.
         MESA=$MESA_PREFIX
-        if [ -f "${'$'}MESA/droidnux-mesa.version" ]; then
+        if [ -f "${'$'}MESA/droidnux-mesa.version" ] && [ -e /dev/kgsl-3d0 ]; then
+            echo "GPU: DroidNux Mesa ${'$'}(head -n 1 "${'$'}MESA/droidnux-mesa.version") on KGSL"
+            MESA_GPU=1
             export LD_LIBRARY_PATH=${'$'}MESA/lib/aarch64-linux-gnu${'$'}{LD_LIBRARY_PATH:+:${'$'}LD_LIBRARY_PATH}
             export VK_DRIVER_FILES=${'$'}MESA/share/vulkan/icd.d/freedreno_icd.aarch64.json
             export __GLX_VENDOR_LIBRARY_NAME=droidnux
@@ -367,6 +371,7 @@ object DesktopEnvironment {
                 export LIBVA_DRIVER_NAME=droidnux
             fi
         else
+            echo "GPU: software rendering (no KGSL device or no DroidNux Mesa)"
             # With DRI3 but no device, Debian's GLX tries Zink; with no
             # Vulkan driver Zink fails and Mesa 25.0 deadlocks on its own
             # instance_lock in the error path (zink_destroy_screen): X11 apps
@@ -586,9 +591,16 @@ ${USER_SESSION.prependIndent("        ")}
             # namespaces or its set-user-ID helper, neither of which Android allows.
             export ELECTRON_DISABLE_SANDBOX=1
 ${GPU_ENV.prependIndent("            ")}
-            if [ -f "${'$'}MESA/droidnux-mesa.version" ]; then
+            if [ -n "${'$'}MESA_GPU" ]; then
                 # KWin renders into GBM buffers from the app (Mesa patch 0004).
                 export GBM_BACKENDS_PATH=${'$'}MESA/lib/aarch64-linux-gnu/gbm
+            fi
+            if [ -n "${'$'}DROIDNUX_VERBOSE" ]; then
+                # Diagnostic builds: the GPU devices, and all KWin, Qt's platform, EGL and Mesa say.
+                uname -a
+                ls -l /dev/kgsl* /dev/mali* /dev/dri 2>&1
+                export QT_LOGGING_RULES='kwin_*.debug=true;qt.qpa.*.debug=true'
+                export EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose MESA_DEBUG=1 VK_LOADER_DEBUG=error,warn
             fi
             # KSvg and KIconThemes with DroidNux's patches (Plasma component),
             # while the distro's are the versions they were built from (the
