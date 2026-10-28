@@ -2,7 +2,8 @@
 # Builds the DroidNux Plasma component: Debian's KSvg and KIconThemes with
 # DroidNux's patches (guest/plasma/patches/<library>), which save the file
 # lookups of Plasma's interface and of KDE's icons, slow in the container, and
-# ksystemstats' GPU and disk plugins, which find Android's Adreno and storage.
+# ksystemstats' GPU, disk and network plugins, which find Android's Adreno,
+# storage and network.
 # Runs on a Debian of the release the app installs: in CI
 # (.github/workflows/plasma.yml) or inside the container itself.
 #
@@ -68,7 +69,7 @@ build kf6-kiconthemes "$KICONTHEMES_DEB" kiconthemes KF6IconThemes libKF6IconThe
 fetch ksystemstats "$KSYSTEMSTATS_DEB" ksystemstats
 PLUGINS=$STAGE/$LIBDIR/qt6/plugins/ksystemstats
 mkdir -p "$PLUGINS"
-for plugin in ksystemstats_plugin_gpu ksystemstats_plugin_disk; do
+for plugin in ksystemstats_plugin_gpu ksystemstats_plugin_disk ksystemstats_plugin_network; do
     cmake --build build/ksystemstats --target "$plugin" -j"$(nproc)"
     cp -L "build/ksystemstats/bin/$plugin.so" "$PLUGINS/$plugin.so"
     strip --strip-unneeded "$PLUGINS/$plugin.so"

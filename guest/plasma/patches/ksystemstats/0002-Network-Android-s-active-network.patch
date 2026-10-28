@@ -1,0 +1,253 @@
+From 610638b41361a89075f34eff96229c637be3c3b3 Mon Sep 17 00:00:00 2001
+From: RickyTr99 <rickytorre99@gmail.com>
+Date: Wed, 28 Oct 2026 14:16:21 +0100
+Subject: [PATCH] Network: Android's active network
+
+An app on Android has neither netlink's links nor /proc/net/dev or
+/sys/class/net, so the plugin found no device.
+
+- A backend, tried first, that reads the network DroidNux's app writes to
+  /run/droidnux-network/state: interface, name, signal, addresses,
+  gateways, DNS and byte counters.
+- The counters are written again when the plugin asks through
+  /run/droidnux-network/wanted, which it does only while a device is
+  subscribed: nothing polls when no one looks.
+---
+ plugins/network/AndroidBackend.cpp | 135 +++++++++++++++++++++++++++++
+ plugins/network/AndroidBackend.h   |  44 ++++++++++
+ plugins/network/CMakeLists.txt     |   2 +-
+ plugins/network/NetworkPlugin.cpp  |   5 ++
+ 4 files changed, 185 insertions(+), 1 deletion(-)
+ create mode 100644 plugins/network/AndroidBackend.cpp
+ create mode 100644 plugins/network/AndroidBackend.h
+
+diff --git a/plugins/network/AndroidBackend.cpp b/plugins/network/AndroidBackend.cpp
+new file mode 100644
+index 0000000..ad35a8f
+--- /dev/null
++++ b/plugins/network/AndroidBackend.cpp
+@@ -0,0 +1,135 @@
++/*
++ * SPDX-FileCopyrightText: 2026 RickyTr99 <rickytorre99@gmail.com>
++ *
++ * SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
++ */
++
++#include "AndroidBackend.h"
++
++#include <QFile>
++#include <QFileInfo>
++#include <QHostAddress>
++#include <QNetworkAddressEntry>
++
++static const QString directory = QStringLiteral("/run/droidnux-network");
++
++// An address with its prefix length ("192.168.1.5/24") into its three sensors.
++static void setAddress(const QString &withPrefix, KSysGuard::SensorProperty *address, KSysGuard::SensorProperty *withPrefixLength, KSysGuard::SensorProperty *mask)
++{
++    const auto parts = withPrefix.split(QLatin1Char('/'));
++    address->setValue(parts.value(0));
++    withPrefixLength->setValue(withPrefix);
++    QString netmask;
++    if (parts.size() == 2) {
++        QNetworkAddressEntry entry;
++        entry.setIp(QHostAddress(parts[0]));
++        entry.setPrefixLength(parts[1].toInt());
++        netmask = entry.netmask().toString();
++    }
++    mask->setValue(netmask);
++}
++
++AndroidDevice::AndroidDevice(const QString &id)
++    : NetworkDevice(id, id)
++{
++}
++
++void AndroidDevice::update(const QHash<QByteArray, QByteArray> &state)
++{
++    auto text = [&state](const char *key) {
++        return QString::fromUtf8(state.value(key));
++    };
++    m_networkSensor->setValue(text("name"));
++    m_signalSensor->setValue(state.value("signal").toInt());
++    setAddress(text("ipv4"), m_ipv4Sensor, m_ipv4WithPrefixLengthSensor, m_ipv4SubnetMaskSensor);
++    setAddress(text("ipv6"), m_ipv6Sensor, m_ipv6WithPrefixLengthSensor, m_ipv6SubnetMaskSensor);
++    m_ipv4GatewaySensor->setValue(text("ipv4gateway"));
++    m_ipv6GatewaySensor->setValue(text("ipv6gateway"));
++    m_ipv4DNSSensor->setValue(text("ipv4dns"));
++    m_ipv6DNSSensor->setValue(text("ipv6dns"));
++
++    // The counters change only when the app wrote them again, with the time (ms) it read them.
++    const qint64 time = state.value("time").toLongLong();
++    if (time <= m_time) {
++        return;
++    }
++    const qulonglong received = state.value("received").toULongLong();
++    const qulonglong sent = state.value("sent").toULongLong();
++    if (m_time != 0 && received >= m_received && sent >= m_sent) {
++        const qint64 elapsed = time - m_time;
++        m_downloadSensor->setValue((received - m_received) * 1000 / elapsed);
++        m_downloadBitsSensor->setValue((received - m_received) * 1000 / elapsed * 8);
++        m_uploadSensor->setValue((sent - m_sent) * 1000 / elapsed);
++        m_uploadBitsSensor->setValue((sent - m_sent) * 1000 / elapsed * 8);
++    }
++    m_totalDownloadSensor->setValue(received);
++    m_totalUploadSensor->setValue(sent);
++    m_received = received;
++    m_sent = sent;
++    m_time = time;
++}
++
++AndroidBackend::AndroidBackend(QObject *parent)
++    : NetworkBackend(parent)
++{
++}
++
++AndroidBackend::~AndroidBackend()
++{
++    qDeleteAll(m_devices);
++}
++
++bool AndroidBackend::isSupported()
++{
++    return QFileInfo(directory).isDir();
++}
++
++void AndroidBackend::start()
++{
++    update();
++}
++
++void AndroidBackend::stop()
++{
++}
++
++void AndroidBackend::update()
++{
++    QHash<QByteArray, QByteArray> state;
++    QFile file(directory + QStringLiteral("/state"));
++    if (file.open(QIODevice::ReadOnly)) {
++        const auto lines = file.readAll().split('\n');
++        for (const auto &line : lines) {
++            const int equals = line.indexOf('=');
++            if (equals > 0) {
++                state.insert(line.left(equals), line.mid(equals + 1));
++            }
++        }
++    }
++
++    // One device: the interface of Android's default network, none when offline.
++    const QString interface = QString::fromUtf8(state.value("interface"));
++    if (m_active && m_active->id() != interface) {
++        Q_EMIT deviceRemoved(m_active);
++        m_active = nullptr;
++    }
++    if (!m_active && !interface.isEmpty()) {
++        m_active = m_devices.value(interface);
++        if (!m_active) {
++            m_active = new AndroidDevice(interface);
++            m_devices.insert(interface, m_active);
++        }
++        Q_EMIT deviceAdded(m_active);
++    }
++    if (!m_active) {
++        return;
++    }
++    m_active->update(state);
++    // Fresh counters for the next update, only while someone shows them.
++    if (m_active->isSubscribed()) {
++        QFile request(directory + QStringLiteral("/wanted"));
++        request.open(QIODevice::WriteOnly);
++    }
++}
++
++#include "moc_AndroidBackend.cpp"
+diff --git a/plugins/network/AndroidBackend.h b/plugins/network/AndroidBackend.h
+new file mode 100644
+index 0000000..ef2624e
+--- /dev/null
++++ b/plugins/network/AndroidBackend.h
+@@ -0,0 +1,44 @@
++/*
++ * SPDX-FileCopyrightText: 2026 RickyTr99 <rickytorre99@gmail.com>
++ *
++ * SPDX-License-Identifier: GPL-2.0-only OR GPL-3.0-only OR LicenseRef-KDE-Accepted-GPL
++ */
++
++#pragma once
++
++#include "NetworkBackend.h"
++#include "NetworkDevice.h"
++
++#include <QHash>
++
++// Android's network, which an app sees neither through netlink nor in
++// /proc/net or /sys/class/net (SELinux): DroidNux's app writes the active
++// network to /run/droidnux-network/state, and its byte counters again when
++// asked through /run/droidnux-network/wanted.
++class AndroidDevice : public NetworkDevice
++{
++    Q_OBJECT
++public:
++    AndroidDevice(const QString &id);
++    void update(const QHash<QByteArray, QByteArray> &state);
++
++private:
++    qulonglong m_received = 0;
++    qulonglong m_sent = 0;
++    qint64 m_time = 0;
++};
++
++class AndroidBackend : public NetworkBackend
++{
++public:
++    AndroidBackend(QObject *parent);
++    ~AndroidBackend() override;
++    bool isSupported() override;
++    void start() override;
++    void stop() override;
++    void update() override;
++
++private:
++    QHash<QString, AndroidDevice *> m_devices;
++    AndroidDevice *m_active = nullptr;
++};
+diff --git a/plugins/network/CMakeLists.txt b/plugins/network/CMakeLists.txt
+index 90a7368..790e2dc 100644
+--- a/plugins/network/CMakeLists.txt
++++ b/plugins/network/CMakeLists.txt
+@@ -22,7 +22,7 @@ if (KF6NetworkManagerQt_FOUND)
+     target_link_libraries(ksystemstats_plugin_network PRIVATE KF6::NetworkManagerQt)
+ endif()
+ if (${CMAKE_SYSTEM_NAME} MATCHES "Linux")
+-    target_sources(ksystemstats_plugin_network PRIVATE RtNetlinkBackend.cpp)
++    target_sources(ksystemstats_plugin_network PRIVATE RtNetlinkBackend.cpp AndroidBackend.cpp)
+     target_link_libraries(ksystemstats_plugin_network PRIVATE ${NL_LIBRARIES} Qt::Network)
+     target_include_directories(ksystemstats_plugin_network PRIVATE ${NL_INCLUDE_DIRS})
+ endif()
+diff --git a/plugins/network/NetworkPlugin.cpp b/plugins/network/NetworkPlugin.cpp
+index b15320e..972601f 100644
+--- a/plugins/network/NetworkPlugin.cpp
++++ b/plugins/network/NetworkPlugin.cpp
+@@ -22,6 +22,7 @@
+ #include "NetworkManagerBackend.h"
+ #endif
+ #ifdef Q_OS_LINUX
++#include "AndroidBackend.h"
+ #include "RtNetlinkBackend.h"
+ #endif
+ 
+@@ -47,6 +48,10 @@ NetworkPlugin::NetworkPlugin(QObject *parent, const QVariantList &args)
+ 
+     using creationFunction = std::add_pointer_t<NetworkBackend *(NetworkPlugin *parent)>;
+     std::vector<creationFunction> backendFunctions;
++#ifdef Q_OS_LINUX
++    // First: on Android neither of the others sees anything.
++    backendFunctions.emplace_back([](NetworkPlugin *parent) -> NetworkBackend* {return new AndroidBackend(parent);});
++#endif
+ #ifdef NETWORKMANAGER_FOUND
+     backendFunctions.emplace_back([](NetworkPlugin *parent) -> NetworkBackend* {return new NetworkManagerBackend(parent);});
+ #endif
+-- 
+2.56.0.windows.1
+
