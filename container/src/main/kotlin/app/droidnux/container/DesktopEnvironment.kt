@@ -205,9 +205,6 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PLASMA_DEFAULTS/powerdevilrc", PLASMA_POWERDEVILRC.toByteArray())
         hidePowerProfiles(rootfs)
         touchTables(rootfs)
-        // Android's clipboard is the one that lasts: Klipper's history from the last
-        // session would replace it at login (and Android would show it as copied).
-        writeFile(rootfs, "$PLASMA_DEFAULTS/klipperrc", "[General]\nKeepClipboardContents=false\n".toByteArray())
         writeFile(rootfs, IM_DESKTOP_FILE, IM_DESKTOP.toByteArray())
         writeFile(rootfs, IM_PROGRAM, File(nativeLibraryDir, IM_LIBRARY).readBytes(), mode = 0x1ED)
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/metadata.json", PLASMA_LNF_METADATA.toByteArray())
@@ -1344,6 +1341,7 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         "/usr/local/bin/droidnux-ui-scale",
         "$GUEST_LIB_DIR/libdroidnux-guest-shm.so",
         "$GUEST_LIB_DIR/libdroidnux-guest-paths.so",
+        "$PLASMA_DEFAULTS/klipperrc",
     )
 
     // There is no Flatpak in the container: access by socket, and full
