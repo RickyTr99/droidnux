@@ -41,7 +41,7 @@ object DisplayServer {
     /** The text the soft keyboard is still composing, shown in the field; "" clears it. */
     fun preeditText(text: String) = nativePreeditText(text.toByteArray())
 
-    /** Called on the compositor thread when a text field gains (true) or loses the focus. */
+    /** Called on the compositor thread when a text field gains (true) or loses the focus; true again when it changes (a tap on it does). */
     @Volatile var onTextInput: ((Boolean) -> Unit)? = null
 
     @JvmStatic private fun textInputFromWayland(active: Boolean) {

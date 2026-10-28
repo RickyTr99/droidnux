@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
@@ -553,6 +554,13 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         } else {
             showCursor(false) // a finger needs no pointer; the next mouse motion brings it back
             lastInputTouch = true
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> fingerDown = true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    fingerDown = false
+                    lastFingerUp = SystemClock.uptimeMillis()
+                }
+            }
             sendTouch(event)
         }
         return true
@@ -581,16 +589,28 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** The last input came from a finger on the screen: a text field getting the focus then shows the soft keyboard. */
     private var lastInputTouch = false
+    /** A finger is on the desktop, and when the last one left (uptime ms). */
+    private var fingerDown = false
+    private var lastFingerUp = 0L
 
     /** The permission to change Android's brightness is asked once per desktop. */
     private var askedWriteSettings = false
     /** The soft keyboard was shown for a text field, so it hides when the field loses the focus. */
     private var keyboardForTextField = false
 
-    /** A text field of the desktop gained or lost the focus (KWin's input method). */
+    /**
+     * A text field of the desktop gained or lost the focus, or the focused one
+     * changed, as a tap on it does (KWin's input method).
+     */
     private fun onTextField(active: Boolean) {
         val imm = getSystemService(InputMethodManager::class.java)
-        if (active && lastInputTouch && !menu.isOpen) {
+        // Only for a tap on the field, as Android does: toolkits focus a field on the
+        // press or the release. A page that focuses its search field once it loads
+        // (System Settings, System Monitor) comes later and gets no keyboard.
+        val sinceUp = SystemClock.uptimeMillis() - lastFingerUp
+        val tapped = lastInputTouch && (fingerDown || sinceUp <= TAP_FOCUS_MS)
+        if (active && tapped && !menu.isOpen) {
+            Log.d(TAG, "keyboard for a tapped text field, finger ${if (fingerDown) "down" else "up ${sinceUp}ms ago"}")
             surfaceView.requestFocus()
             imm.showSoftInput(surfaceView, 0)
             keyboardForTextField = true
@@ -730,6 +750,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     companion object {
         private const val TAG = "DroidNux.Desktop"
+        /** How long after a finger leaves a text field may still get the focus from its tap. */
+        private const val TAP_FOCUS_MS = 150L
 
         /** The desktop on screen, if any (main thread only). */
         private var current: DesktopActivity? = null
