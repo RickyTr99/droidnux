@@ -137,7 +137,7 @@ static void context_invoke_action(void* data, struct zwp_input_method_context_v1
 static void context_preferred_language(void* data, struct zwp_input_method_context_v1* c, const char* language) {}
 
 /* The field's state again: also what a tap on the field already focused sends,
- * told to the app as active again (it shows the keyboard if a finger is on it). */
+ * told to the app as active again (it shows the keyboard if a finger just tapped). */
 static void context_commit_state(void* data, struct zwp_input_method_context_v1* c, uint32_t serial) {
     context_serial = serial;
     if (text_input_callback) text_input_callback(true);

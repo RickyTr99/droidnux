@@ -204,6 +204,7 @@ object DesktopEnvironment {
         writeFile(rootfs, SYSTEM_BUS_CONF, SYSTEM_BUS.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/powerdevilrc", PLASMA_POWERDEVILRC.toByteArray())
         hidePowerProfiles(rootfs)
+        touchTables(rootfs)
         // Android's clipboard is the one that lasts: Klipper's history from the last
         // session would replace it at login (and Android would show it as copied).
         writeFile(rootfs, "$PLASMA_DEFAULTS/klipperrc", "[General]\nKeepClipboardContents=false\n".toByteArray())
@@ -1001,6 +1002,49 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
     }
 
     private const val HIDDEN_PROFILES = "visible: false // DroidNux: Android manages power"
+
+    /**
+     * System Monitor's tables (processes, apps) with a finger: upstream they
+     * never flick (a drag selects rows) and a tap is also a right click (a
+     * TapHandler's acceptedButtons does not filter touch), which opens the
+     * column menu instead of sorting. The QML is changed in place, again after
+     * every update of plasma-systemmonitor; Qt reads it from the disk only
+     * without the qmldir's "prefer" of the compiled copy.
+     */
+    private fun touchTables(rootfs: File) {
+        val dir = "usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/ksysguard/table"
+        val rightTap = Regex("""(?m)^(\s*)acceptedButtons: Qt\.RightButton$""")
+        val mouseOnly = { m: MatchResult ->
+            "${m.value}\n${m.groupValues[1]}acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus $TOUCH_TABLES"
+        }
+        val table = patchFile(rootfs, "$dir/BaseTableView.qml", TOUCH_TABLES) { qml ->
+            qml.replace("interactive: false\n", "interactive: Kirigami.Settings.hasTransientTouchInput $TOUCH_TABLES\n")
+                .replace(
+                    "selectionMode: SelectionRectangle.Drag\n",
+                    "selectionMode: Kirigami.Settings.hasTransientTouchInput ? SelectionRectangle.PressAndHold : SelectionRectangle.Drag\n",
+                )
+                .replace(rightTap, mouseOnly)
+        }
+        val header = patchFile(rootfs, "$dir/TableViewHeader.qml", TOUCH_TABLES) { it.replace(rightTap, mouseOnly) }
+        if (table && header) patchFile(rootfs, "$dir/qmldir", null) { it.replace(Regex("""(?m)^prefer .*\n"""), "") }
+    }
+
+    private const val TOUCH_TABLES = "// DroidNux: a finger flicks"
+
+    /**
+     * Changes a file of the rootfs in place, unless it is a link or already has
+     * [marker]; [change] returns it as it is when it does not apply. True when
+     * the file has [marker] (any file, for none).
+     */
+    private fun patchFile(rootfs: File, path: String, marker: String?, change: (String) -> String): Boolean {
+        val file = File(rootfs, path)
+        if (java.nio.file.Files.isSymbolicLink(file.toPath()) || !file.isFile) return false
+        val text = file.readText()
+        if (marker != null && marker in text) return true
+        val changed = change(text)
+        if (changed != text) writeFile(rootfs, "/$path", changed.toByteArray())
+        return marker == null || marker in changed
+    }
 
     /**
      * The cgroup tree systemd would make for the desktop's apps, which System
