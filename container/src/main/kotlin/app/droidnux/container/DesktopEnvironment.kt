@@ -582,6 +582,8 @@ ${USER_SESSION.prependIndent("        ")}
             export WAYLAND_DISPLAY=/tmp/wayland-$DISPLAY
             export XDG_SESSION_TYPE=wayland
             export SHELL=/bin/bash
+            # Debian's games (/usr/games), on a user's PATH after a login; none happens here.
+            export PATH=${'$'}PATH:/usr/local/games:/usr/games
             export XDG_CONFIG_DIRS=$PLASMA_DEFAULTS:/etc/xdg
             # Android's SELinux denies reopening a memfd through /proc/self/fd,
             # so Firefox's parent process falls back to unsealed shm_open while
