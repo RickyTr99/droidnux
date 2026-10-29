@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.Typeface
@@ -636,7 +637,9 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         val tapped = lastInputTouch && (activated ||
             lastFingerDown > textFieldSince && (fingerOn || at - lastFingerUp <= TAP_FOCUS_MS))
         if (activated) textFieldSince = at
-        if (active && tapped && !menu.isOpen) {
+        // With a physical keyboard attached, as Android does with its own soft keyboard.
+        val hardKeyboard = resources.configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+        if (active && tapped && !menu.isOpen && !hardKeyboard) {
             Log.d(TAG, "keyboard for a text field, ${if (activated) "focused" else "tapped again"}")
             showKeyboard()
             keyboardForTextField = true
