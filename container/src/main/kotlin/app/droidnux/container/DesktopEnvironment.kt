@@ -458,9 +458,10 @@ object DesktopEnvironment {
         n=0
         while [ ${'$'}n -lt 20 ]; do
             tail --pid="${'$'}p" -f /dev/null
-            # At logout ksmserver goes too: leave plasmashell gone.
+            # At logout ksmserver goes too: the session is over. Leaving (shutdown, restart)
+            # then waits on logind, which is not here, and startplasma-wayland stays.
             sleep 2
-            pgrep -x ksmserver > /dev/null || exit
+            pgrep -x ksmserver > /dev/null || { echo $SESSION_END_MARKER; exit; }
             p=${'$'}(pgrep -x plasmashell | head -1)
             if [ -z "${'$'}p" ]; then
                 echo "plasmashell exited, restarting it"

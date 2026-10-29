@@ -203,7 +203,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
      * edge to edge, and a smaller one sampled by nearest pixel looks grainy there.
      */
     private fun saveThumbnail(then: (() -> Unit)? = null) {
-        if (!DisplayServer.running || surfaceWidth == 0) {
+        if (!DisplayServer.running || surfaceWidth == 0 || sessionEnded) {
             then?.invoke()
             return
         }
@@ -593,6 +593,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** The last input came from a finger on the screen: a text field getting the focus then shows the soft keyboard. */
     private var lastInputTouch = false
+    /** The session is over: no picture of what is left of the desktop. */
+    private var sessionEnded = false
     /** When the first finger touched the desktop and when the last one left (uptime ms). */
     private var lastFingerDown = 0L
     private var lastFingerUp = 0L
@@ -613,23 +615,15 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         val imm = getSystemService(InputMethodManager::class.java)
         val activated = active && !textFieldActive
         textFieldActive = active
-        // Only for a tap on the field, as Android does. Toolkits focus a field on the
-        // press; a page or a window that focuses its field itself does it after the
-        // release that opened it (a sidebar item, the taskbar) and gets no keyboard.
-        // A tap on the field already focused tells it again after the release.
+        // Any field focused while using the fingers, a page's own focus included: telling
+        // a tap from it by timing missed quick taps. A tap on the field already focused
+        // tells it again after the release.
         val fingerOn = lastFingerDown <= at && (lastFingerUp < lastFingerDown || lastFingerUp >= at)
-        val tapped = lastInputTouch && if (activated) {
-            fingerOn
-        } else {
-            lastFingerDown > textFieldSince && (fingerOn || at - lastFingerUp <= TAP_FOCUS_MS)
-        }
-        if (activated) {
-            textFieldSince = at
-            Log.d(TAG, "text field focused ${at - lastFingerDown} ms after a finger's down, " +
-                if (fingerOn) "finger on" else "${at - lastFingerUp} ms after its release")
-        }
+        val tapped = lastInputTouch && (activated ||
+            lastFingerDown > textFieldSince && (fingerOn || at - lastFingerUp <= TAP_FOCUS_MS))
+        if (activated) textFieldSince = at
         if (active && tapped && !menu.isOpen) {
-            Log.d(TAG, "keyboard for a tapped text field, ${if (activated) "focused" else "tapped again"}")
+            Log.d(TAG, "keyboard for a text field, ${if (activated) "focused" else "tapped again"}")
             surfaceView.requestFocus()
             imm.showSoftInput(surfaceView, 0)
             keyboardForTextField = true
@@ -786,8 +780,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         fun onSystemKey(event: KeyEvent): Boolean = focused?.sendPhysicalKey(event) ?: false
 
         /** Closes the desktop activity, when the session ends. Main thread. */
+        /** The session ended: the desktop closes, keeping the picture taken before (Plasma's screen is gone). */
         fun finishCurrent() {
-            current?.finishAndRemoveTask()
+            current?.run {
+                sessionEnded = true
+                finishAndRemoveTask()
+            }
         }
 
         /** Float extra: desktop size as a fraction of the screen, [MIN_SCALE] to [MAX_SCALE]. */
