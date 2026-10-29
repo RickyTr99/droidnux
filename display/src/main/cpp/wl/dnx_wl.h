@@ -59,6 +59,10 @@ void dnx_wl_set_clipboard_callback(void (*callback)(const char* utf8));
 /* The interface scale the nested KWin should use (1.0 = 100%). */
 void dnx_wl_set_scale(double scale);
 
+/* Called on the compositor thread when KWin's scale changes by other means
+ * (Plasma's display settings). Set before dnx_wl_start. */
+void dnx_wl_set_scale_callback(void (*callback)(double scale));
+
 /* Pointer, in desktop pixels. */
 void dnx_wl_pointer_move(float x, float y);
 void dnx_wl_pointer_move_relative(float dx, float dy);

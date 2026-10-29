@@ -38,8 +38,9 @@
     <string name="menu_screenshot_saved">Screenshot saved in Pictures</string>
     <string name="menu_screenshot_failed">Could not take the screenshot</string>
     <string name="menu_stats">Statistics</string>
-    <string name="menu_screen">SCREEN</string>
-    <string name="menu_interface">Interface</string>
+    <string name="menu_device">DEVICE</string>
+    <string name="menu_desktop">DESKTOP</string>
+    <string name="menu_interface">Scale</string>
     <string name="menu_cpu">CPU</string>
     <string name="menu_memory">Memory</string>
     <string name="menu_battery">Battery</string>

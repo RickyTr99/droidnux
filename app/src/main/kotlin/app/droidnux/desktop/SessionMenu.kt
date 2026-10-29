@@ -174,21 +174,19 @@ class SessionMenu(
         resolutionSlider = Slider(STEP, DesktopActivity.MIN_SCALE, DesktopActivity.MAX_SCALE, listener::resolutionFor) {
             scale = it
             updateSize()
+            interfaceSlider.show(kwinScale()) // the elements keep their size: KWin's scale follows
             apply(applyScale)
         }
-        interfaceSlider = Slider(STEP, DesktopSettings.MIN_UI_SCALE, DesktopSettings.MAX_UI_SCALE) {
-            uiScale = it
+        // KWin's scale, as Plasma's display settings show it.
+        interfaceSlider = Slider(STEP, MIN_KWIN_SCALE, MAX_KWIN_SCALE, { percent((it * 20).roundToInt() / 20f) }) {
+            uiScale = it * DesktopActivity.DEFAULT_SCALE / scale
             apply(applyUiScale)
         }
         val light = listOf(sliderRow(R.string.menu_brightness, brightnessSlider), sliderRow(R.string.menu_volume, volumeSlider))
         val screen = listOf(sliderRow(R.string.menu_resolution, resolutionSlider), sliderRow(R.string.menu_interface, interfaceSlider))
-        if (compact) {
-            section(row(*light.toTypedArray()))
-            section(row(*screen.toTypedArray()), top = dp(6))
-        } else {
-            light.forEachIndexed { i, it -> section(it, top = if (i == 0) gap else dp(4)) }
-            section(label(context.getString(R.string.menu_screen), PRIMARY, sp = 12f, medium = true).apply { letterSpacing = 0.07f })
-            screen.forEach { section(it, top = dp(4)) }
+        for ((header, rows) in listOf(R.string.menu_device to light, R.string.menu_desktop to screen)) {
+            section(label(context.getString(header), PRIMARY, sp = 12f, medium = true).apply { letterSpacing = 0.07f })
+            if (compact) section(row(*rows.toTypedArray()), top = dp(4)) else rows.forEach { section(it, top = dp(4)) }
         }
 
         // What the session costs.
@@ -298,7 +296,7 @@ class SessionMenu(
         updateTiles()
         updateSize()
         resolutionSlider.show(scale)
-        interfaceSlider.show(uiScale)
+        interfaceSlider.show(kwinScale())
         showConfirm(false, animate = false)
         brightnessSlider.show(listener.brightness())
         volumeSlider.show(listener.volume())
@@ -339,6 +337,14 @@ class SessionMenu(
         panel.animate().translationX(dp(SLIDE_DP)).setDuration(SHORT_MS).setInterpolator(ACCELERATE).start()
         listener.onClosed()
     }
+
+    /** The interface size changed elsewhere (Plasma's display settings). */
+    fun showUiScale(uiScale: Float) {
+        this.uiScale = uiScale
+        interfaceSlider.show(kwinScale())
+    }
+
+    private fun kwinScale() = uiScale * scale / DesktopActivity.DEFAULT_SCALE
 
     private fun updateTiles() {
         animateColor(trackpadTile, if (trackpad) SELECTED else SURFACE_HIGH)
@@ -477,7 +483,7 @@ class SessionMenu(
         override fun onDraw(canvas: Canvas) {
             val track = dp(TRACK_DP)
             val thumb = dp(4f)
-            val gap = dp(4f)
+            val gap = dp(6f)
             val inner = dp(2f)
             val outer = track / 2
             val top = (height - track) / 2
@@ -718,9 +724,13 @@ class SessionMenu(
         const val SLIDE_DP = 32f
         const val CONFIRM_DP = 264
         const val STEP = 0.05f
-        const val TRACK_DP = 8f
-        const val THUMB_DP = 24f
-        const val SLIDER_DP = 32
+        // Material 3's slider, as Compose draws it in the app's settings.
+        const val TRACK_DP = 16f
+        const val THUMB_DP = 44f
+        const val SLIDER_DP = 44
+        // Plasma's display settings' range.
+        const val MIN_KWIN_SCALE = 0.5f
+        const val MAX_KWIN_SCALE = 3f
         const val GB = 1e9f
         val DECELERATE = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         val ACCELERATE = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)

@@ -51,6 +51,13 @@ object DisplayServer {
     /** The nested desktop's interface scale (1 = 100%). */
     fun setScale(scale: Float) = nativeSetScale(scale)
 
+    /** Called on the compositor thread when KWin's scale changes by other means (Plasma's display settings). */
+    @Volatile var onScale: ((Float) -> Unit)? = null
+
+    @JvmStatic private fun scaleFromWayland(scale: Float) {
+        onScale?.invoke(scale)
+    }
+
     /** Touchscreen, in desktop pixels: [TOUCH_DOWN] and the others, then [TOUCH_FRAME]. */
     fun touch(type: Int, id: Int = 0, x: Float = 0f, y: Float = 0f) = nativeTouch(type, id, x, y)
 

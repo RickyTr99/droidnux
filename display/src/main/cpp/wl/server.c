@@ -228,6 +228,10 @@ void dnx_wl_set_text_input_callback(void (*callback)(bool active)) {
     dnx_wl_nested_set_text_input_callback(callback);
 }
 
+void dnx_wl_set_scale_callback(void (*callback)(double scale)) {
+    dnx_wl_nested_set_scale_callback(callback);
+}
+
 void dnx_wl_set_scale(double scale) {
     send_event((struct event) {.type = EVENT_SCALE, .x = (float) scale});
 }

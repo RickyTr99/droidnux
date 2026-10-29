@@ -92,6 +92,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             val at = SystemClock.uptimeMillis()
             handler.post { onTextField(active, at) }
         }
+        DisplayServer.onScale = { scale -> handler.post { followKWinScale(scale) } }
         val settings = DesktopSettings.load(this)
         desktopScale = settings.scale
         desktopScale = scaleOf(intent)
@@ -266,6 +267,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             current = null
             DisplayServer.onClipboard = null
             DisplayServer.onTextInput = null
+            DisplayServer.onScale = null
         }
         super.onDestroy()
     }
@@ -780,6 +782,13 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         // KWin's output scale, in the 5% steps of Plasma's display settings. Only on a change:
         // KWin keeps it across sessions, and the display settings may set it too.
         DisplayServer.setScale((dpi() * 20f / BASE_DPI).roundToInt() / 20f)
+    }
+
+    /** KWin's scale set in Plasma's display settings: the interface size that gives it here. */
+    private fun followKWinScale(kwinScale: Float) {
+        uiScale = kwinScale * DEFAULT_SCALE / desktopScale
+        DesktopSettings.update(this) { it.copy(uiScale = uiScale) }
+        menu.showUiScale(uiScale)
     }
 
     // -- Debug overlay -----------------------------------------------------

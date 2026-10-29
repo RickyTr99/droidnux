@@ -35,8 +35,9 @@
     <string name="menu_screenshot_saved">Screenshot salvato in Immagini</string>
     <string name="menu_screenshot_failed">Screenshot non riuscito</string>
     <string name="menu_stats">Statistiche</string>
-    <string name="menu_screen">SCHERMO</string>
-    <string name="menu_interface">Interfaccia</string>
+    <string name="menu_device">DISPOSITIVO</string>
+    <string name="menu_desktop">DESKTOP</string>
+    <string name="menu_interface">Scala</string>
     <string name="menu_cpu">CPU</string>
     <string name="menu_memory">Memoria</string>
     <string name="menu_battery">Batteria</string>
