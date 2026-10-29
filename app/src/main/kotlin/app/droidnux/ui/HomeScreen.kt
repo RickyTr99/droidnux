@@ -166,6 +166,7 @@ import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LifecycleStartEffect
 import app.droidnux.MainActivity
 import app.droidnux.R
 import app.droidnux.container.Component
@@ -212,13 +213,14 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
     BackHandler(enabled = tab != Tab.HOME) { select(Tab.HOME) }
     val updates = !state.desktopUpToDate || Component.ALL.any { it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled }
     // Every return to the app (from the desktop too) brings the Home's sections in one after another.
-    val entrance = remember { Animatable(1f) }
+    // Hidden from the first frame and again once out of sight, so no frame shows the sections before they come in.
+    val entrance = remember { Animatable(0f) }
     LifecycleResumeEffect(Unit) {
-        val play = scope.launch {
-            entrance.snapTo(0f)
-            entrance.animateTo(1f, tween(ENTRANCE_MS, easing = LinearEasing))
-        }
+        val play = scope.launch { entrance.animateTo(1f, tween(ENTRANCE_MS, easing = LinearEasing)) }
         onPauseOrDispose { play.cancel() }
+    }
+    LifecycleStartEffect(Unit) {
+        onStopOrDispose { scope.launch { entrance.snapTo(0f) } }
     }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
