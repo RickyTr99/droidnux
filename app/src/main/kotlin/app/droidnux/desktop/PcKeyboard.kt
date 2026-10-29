@@ -16,6 +16,7 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.view.doOnPreDraw
 import app.droidnux.R
 import app.droidnux.desktop.SessionMenu.Companion.ACCELERATE
 import app.droidnux.desktop.SessionMenu.Companion.DECELERATE
@@ -130,8 +131,14 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
         if (!shown) {
             shown = true
             view.visibility = View.VISIBLE
-            panel.translationY = height.toFloat()
-            panel.animate().translationY(0f).setDuration(MEDIUM_MS).setInterpolator(DECELERATE).start()
+            // Laid out in place: the window's hole for the desktop's SurfaceView is measured
+            // at layout and would leave out a panel still below the edge. It slides in after.
+            panel.animate().cancel()
+            panel.translationY = 0f
+            panel.doOnPreDraw {
+                panel.translationY = height.toFloat()
+                panel.animate().translationY(0f).setDuration(MEDIUM_MS).setInterpolator(DECELERATE).start()
+            }
         }
         listener.onHeight(height)
     }

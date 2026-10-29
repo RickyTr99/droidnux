@@ -579,9 +579,36 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 MotionEvent.ACTION_DOWN -> lastFingerDown = SystemClock.uptimeMillis()
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> lastFingerUp = SystemClock.uptimeMillis()
             }
-            if (!keyboardGesture(event)) sendTouch(event)
+            when {
+                keyboardGesture(event) -> dropHeldTouches()
+                // A first finger waits a moment: two more may follow for the keyboard's tap.
+                event.actionMasked == MotionEvent.ACTION_DOWN -> {
+                    heldTouches += MotionEvent.obtain(event)
+                    handler.postDelayed(flushHeldTouches, TOUCH_HOLD_MS)
+                }
+                heldTouches.isNotEmpty() -> {
+                    heldTouches += MotionEvent.obtain(event)
+                    if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+                        flushHeldTouches.run()
+                    }
+                }
+                else -> sendTouch(event)
+            }
         }
         return true
+    }
+
+    /** Touches of a gesture's first moments, not yet sent to the desktop. */
+    private val heldTouches = mutableListOf<MotionEvent>()
+    private val flushHeldTouches = Runnable {
+        heldTouches.forEach { sendTouch(it) }
+        dropHeldTouches()
+    }
+
+    private fun dropHeldTouches() {
+        handler.removeCallbacks(flushHeldTouches)
+        heldTouches.forEach { it.recycle() }
+        heldTouches.clear()
     }
 
     /** Three fingers on the desktop since the third landed: they are ours, not the desktop's. */
@@ -612,7 +639,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             }
             MotionEvent.ACTION_UP -> if (threeFingers) {
                 threeFingers = false
-                if (!threeFingersMoved && event.eventTime - firstFingerDown <= THREE_FINGER_TAP_MS) toggleKeyboard()
+                val tap = !threeFingersMoved && event.eventTime - firstFingerDown <= THREE_FINGER_TAP_MS
+                if (tap) toggleKeyboard()
             }
             MotionEvent.ACTION_CANCEL -> threeFingers = false
         }
@@ -936,6 +964,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val KEYBOARD_MARGIN_DP = 48
         /** From the first finger to the last one leaving: longer is a hold, not a tap. */
         private const val THREE_FINGER_TAP_MS = 400L
+        /** How long a first finger waits before reaching the desktop. */
+        private const val TOUCH_HOLD_MS = 60L
         private const val KEYBOARD_PAN_MS = 250L
         private const val LAUNCH_ATTEMPTS = 120
         private const val LAUNCH_RETRY_MS = 500L
