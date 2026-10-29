@@ -5,12 +5,14 @@ import android.content.Context
 import android.graphics.Outline
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.ImageView
@@ -30,12 +32,15 @@ import app.droidnux.desktop.SessionMenu.Companion.SURFACE
 import app.droidnux.desktop.SessionMenu.Companion.SURFACE_HIGH
 import app.droidnux.desktop.SessionMenu.Companion.SURFACE_HIGHEST
 import java.util.Locale
+import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.roundToInt
 
 /**
  * The full PC keyboard over the bottom of the desktop: six rows on a tablet,
- * five with Fn on a phone. The keys send evdev codes, so the session's XKB
+ * five with Fn on a phone, under a bar with paste, Android's keyboard, shrink
+ * and hide. Shrunk, it waits as a button that can be dragged to either side
+ * or onto a close target. The keys send evdev codes, so the session's XKB
  * layout types the characters; the labels follow that layout. A modifier
  * tapped holds for the next key, tapped again until a third tap; held while
  * other keys are touched, it comes up with the finger.
@@ -53,6 +58,8 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
     private val compact = context.resources.configuration.smallestScreenWidthDp < 600
     private var layout = Layouts.get("us")
     private var shown = false
+    /** Shrunk to [bubble]: the layer stays visible for it. */
+    private var minimized = false
 
     val isShown: Boolean get() = shown
 
@@ -74,7 +81,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
         clipToOutline = true
         isClickable = true // a touch between two keys stays off the desktop
         isFocusable = false
-        if (compact) setPadding(dp(44), dp(8), dp(44), dp(8)) else setPadding(dp(24), dp(10), dp(24), dp(18))
+        if (!compact) setPadding(dp(24), dp(10), dp(24), dp(18)) // a phone's: in place()
     }
     private val keyRows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
     private val hint = label("", ON_SURFACE_VARIANT, 12f)
@@ -94,16 +101,48 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
     private val held = mutableMapOf<Int, Boolean>()
     private var capsLock = false
 
+    private val bubbleSize = dp(if (compact) 48 else 56)
+    private val bubble = ImageView(context).apply {
+        setImageResource(R.drawable.ic_menu_keyboard)
+        scaleType = ImageView.ScaleType.CENTER
+        background = rounded(SELECTED, dp(if (compact) 14f else 16f))
+        contentDescription = context.getString(R.string.kbd_show)
+        visibility = View.GONE
+    }
+    /** Where a dragged [bubble] is let go to close it, as Android's bubbles. */
+    private val closeTarget = ImageView(context).apply {
+        setImageResource(R.drawable.ic_kbd_close)
+        scaleType = ImageView.ScaleType.CENTER
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(SCRIM)
+            setStroke(dp(2), ON_SURFACE)
+        }
+        visibility = View.GONE
+    }
+
     init {
-        if (!compact) panel.addView(strip(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(40)).apply {
-            bottomMargin = dp(8)
+        panel.addView(strip(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(if (compact) 32 else 40)).apply {
+            bottomMargin = dp(if (compact) 4 else 8)
         })
         panel.addView(keyRows, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         view.addView(panel, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, Gravity.BOTTOM))
         view.addView(preview, FrameLayout.LayoutParams(0, 0))
+        view.addView(closeTarget, FrameLayout.LayoutParams(dp(56), dp(56), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = dp(BUBBLE_BOTTOM_DP - 8)
+        })
+        view.addView(bubble, FrameLayout.LayoutParams(bubbleSize, bubbleSize, Gravity.TOP or Gravity.START))
+        bubble.setOnTouchListener(BubbleDrag())
+        // Turned: the panel takes its new size, the button its place on the new edges.
+        view.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
+            if (r - l != or - ol || b - t != ob - ot) view.post {
+                if (shown) listener.onHeight(place())
+                if (minimized) placeBubble(animate = false)
+            }
+        }
     }
 
-    /** Layout, extras and hide, over the keys (tablet). */
+    /** Paste, the modifiers' hint, Android's keyboard, shrink and hide, over the keys. */
     private fun strip() = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
@@ -113,21 +152,28 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
             marginEnd = dp(12)
         })
         hint.gravity = Gravity.END
-        addView(iconChip(R.drawable.ic_kbd_phone, R.string.kbd_android) { listener.onAndroidKeyboard() })
-        addView(iconChip(R.drawable.ic_kbd_hide, R.string.kbd_hide) { hide() }, LinearLayout.LayoutParams(dp(40), dp(36)).apply {
-            marginStart = dp(8)
-        })
+        hint.maxLines = 1
+        hint.ellipsize = TextUtils.TruncateAt.END
+        addView(iconChip(R.drawable.ic_kbd_phone, R.string.kbd_android) { listener.onAndroidKeyboard() }, chipParams(0))
+        addView(iconChip(R.drawable.ic_kbd_minimize, R.string.kbd_minimize) { minimize() }, chipParams(8))
+        addView(iconChip(R.drawable.ic_kbd_hide, R.string.kbd_hide) { hide() }, chipParams(8))
     }
+
+    private fun chipParams(start: Int) = LinearLayout.LayoutParams(dp(40), dp(if (compact) 30 else 36)).apply { marginStart = dp(start) }
 
     fun show(xkbLayout: String) {
         if (layout.id != xkbLayout || keys.isEmpty()) {
             layout = Layouts.get(xkbLayout)
             buildKeys()
         }
-        val parent = view.parent as? View ?: return
-        val height = (min(parent.width, parent.height) * if (compact) 0.56f else 0.51f).roundToInt()
-        panel.layoutParams.height = height
-        panel.requestLayout()
+        if (view.parent == null) return
+        if (minimized) {
+            minimized = false
+            bubble.animate().cancel()
+            bubble.animate().alpha(0f).scaleX(BUBBLE_HIDDEN_SCALE).scaleY(BUBBLE_HIDDEN_SCALE).setStartDelay(0).setDuration(SHORT_MS)
+                .withEndAction { if (!minimized) bubble.visibility = View.GONE }.start()
+        }
+        val height = place()
         if (!shown) {
             shown = true
             view.visibility = View.VISIBLE
@@ -143,13 +189,144 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
         listener.onHeight(height)
     }
 
+    /**
+     * Sizes the panel for the screen now and returns its height: a phone held
+     * upright gets the whole width and more height, or its keys would be too narrow.
+     */
+    private fun place(): Int {
+        val parent = view.parent as View
+        val portrait = parent.height > parent.width
+        val height = when {
+            compact && portrait -> parent.width * 0.73f
+            compact -> min(parent.width, parent.height) * 0.56f
+            else -> min(parent.width, parent.height) * 0.51f
+        }.roundToInt()
+        if (compact) {
+            val side = dp(if (portrait) 8 else 44)
+            panel.setPadding(side, dp(8), side, dp(8))
+        }
+        panel.layoutParams.height = height
+        panel.requestLayout()
+        return height
+    }
+
     fun hide() {
         if (!shown) return
         shown = false
         releaseAll()
         panel.animate().translationY(panel.height.toFloat()).setDuration(HIDE_MS).setInterpolator(ACCELERATE)
-            .withEndAction { if (!shown) view.visibility = View.GONE }.start()
+            .withEndAction { if (!shown && !minimized) view.visibility = View.GONE }.start()
         listener.onHeight(0)
+    }
+
+    /** The keyboard down to a button that brings it back. */
+    private fun minimize() {
+        minimized = true
+        hide()
+        placeBubble(animate = false)
+        bubble.visibility = View.VISIBLE
+        bubble.alpha = 0f
+        bubble.scaleX = BUBBLE_HIDDEN_SCALE
+        bubble.scaleY = BUBBLE_HIDDEN_SCALE
+        bubble.animate().alpha(1f).scaleX(1f).scaleY(1f).setStartDelay(SHORT_MS).setDuration(MEDIUM_MS)
+            .setInterpolator(DECELERATE).start()
+    }
+
+    /** The button gone: the keyboard comes back from the session menu or a text field. */
+    private fun closeBubble() {
+        minimized = false
+        bubble.animate().alpha(0f).scaleX(BUBBLE_HIDDEN_SCALE).scaleY(BUBBLE_HIDDEN_SCALE).setStartDelay(0).setDuration(SHORT_MS)
+            .withEndAction { if (!minimized && !shown) view.visibility = View.GONE }.start()
+    }
+
+    // -- Button ----------------------------------------------------------------
+
+    /** The button on its saved edge and height, between the top and the desktop's panel. */
+    private fun placeBubble(animate: Boolean) {
+        val settings = DesktopSettings.load(context)
+        val margin = dp(BUBBLE_MARGIN_DP).toFloat()
+        val x = if (settings.keyboardButtonLeft) margin else view.width - bubbleSize - margin
+        val y = margin + bubbleSpan() * settings.keyboardButtonY
+        if (animate) {
+            bubble.animate().translationX(x).translationY(y).setStartDelay(0).setDuration(MEDIUM_MS).setInterpolator(DECELERATE).start()
+        } else {
+            bubble.translationX = x
+            bubble.translationY = y
+        }
+    }
+
+    /** How far the button's top can go down from its highest place. */
+    private fun bubbleSpan() = (view.height - bubbleSize - dp(BUBBLE_BOTTOM_DP) - dp(BUBBLE_MARGIN_DP)).coerceAtLeast(1).toFloat()
+
+    /** Tap: the keyboard back. Drag: anywhere, then to the nearer side, or onto the close target. */
+    private inner class BubbleDrag : View.OnTouchListener {
+        private val slop = ViewConfiguration.get(context).scaledTouchSlop
+        private var downX = 0f
+        private var downY = 0f
+        private var startX = 0f
+        private var startY = 0f
+        private var dragging = false
+        private var overTarget = false
+
+        @SuppressLint("ClickableViewAccessibility")
+        override fun onTouch(v: View, event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.rawX
+                    downY = event.rawY
+                    startX = bubble.translationX
+                    startY = bubble.translationY
+                    dragging = false
+                    overTarget = false
+                    bubble.animate().cancel()
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = event.rawX - downX
+                    val dy = event.rawY - downY
+                    if (!dragging && hypot(dx, dy) > slop) {
+                        dragging = true
+                        closeTarget.visibility = View.VISIBLE
+                        closeTarget.alpha = 0f
+                        closeTarget.scaleX = 1f
+                        closeTarget.scaleY = 1f
+                        closeTarget.animate().alpha(1f).setDuration(SHORT_MS).start()
+                    }
+                    if (dragging) {
+                        bubble.translationX = (startX + dx).coerceIn(0f, (view.width - bubbleSize).toFloat())
+                        bubble.translationY = (startY + dy).coerceIn(0f, (view.height - bubbleSize).toFloat())
+                        val over = onTarget()
+                        if (over != overTarget) {
+                            overTarget = over
+                            if (over) bubble.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            val scale = if (over) 1.2f else 1f
+                            closeTarget.animate().scaleX(scale).scaleY(scale).setDuration(SHORT_MS).start()
+                        }
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> when {
+                    dragging -> {
+                        closeTarget.animate().alpha(0f).setDuration(SHORT_MS)
+                            .withEndAction { closeTarget.visibility = View.GONE }.start()
+                        if (overTarget) {
+                            closeBubble()
+                        } else {
+                            val left = bubble.translationX + bubbleSize / 2f < view.width / 2f
+                            val y = ((bubble.translationY - dp(BUBBLE_MARGIN_DP)) / bubbleSpan()).coerceIn(0f, 1f)
+                            DesktopSettings.update(context) { it.copy(keyboardButtonLeft = left, keyboardButtonY = y) }
+                            placeBubble(animate = true)
+                        }
+                    }
+                    event.actionMasked == MotionEvent.ACTION_UP -> show(layout.id)
+                }
+            }
+            return true
+        }
+
+        private fun onTarget(): Boolean {
+            val x = bubble.translationX + bubbleSize / 2f - (closeTarget.left + closeTarget.width / 2f)
+            val y = bubble.translationY + bubbleSize / 2f - (closeTarget.top + closeTarget.height / 2f)
+            return hypot(x, y) < dp(64f)
+        }
     }
 
     /** Everything comes up in the desktop: on hide, and when the desktop loses the keys. */
@@ -163,7 +340,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
 
     // -- Keys ------------------------------------------------------------------
 
-    private enum class Kind { CHAR, SPECIAL, MODIFIER, CAPS, FN, HIDE }
+    private enum class Kind { CHAR, SPECIAL, MODIFIER, CAPS, FN }
 
     private inner class Key(
         val code: Int,
@@ -211,15 +388,14 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
                     special(KEY_DELETE, 1.25f, string(R.string.kbd_delete)),
                 listOf(
                     Key(0, 1f, Kind.FN, "Fn"),
-                    modifier(KEY_LEFTCTRL, 1.25f, "Ctrl"),
-                    modifier(KEY_LEFTMETA, 1f, "Super"),
+                    modifier(KEY_LEFTCTRL, 1f, "Ctrl"),
+                    modifier(KEY_LEFTMETA, 1.25f, "Super"), // the longer label: whole on a phone held upright
                     modifier(KEY_LEFTALT, 1f, "Alt"),
-                    special(KEY_SPACE, 4.5f, string(R.string.kbd_space)),
+                    special(KEY_SPACE, 5.5f, string(R.string.kbd_space)),
                     modifier(KEY_RIGHTALT, 1f, altGr),
                     Key(KEY_LEFT, 1f, Kind.SPECIAL, "←", KEY_HOME, "⇤"),
                     Key(KEY_DOWN, 1f, Kind.SPECIAL, "↓", KEY_PAGEDOWN, "⇟"),
                     Key(KEY_RIGHT, 1f, Kind.SPECIAL, "→", KEY_END, "⇥"),
-                    Key(0, 1f, Kind.HIDE, "⌄"),
                 ),
             )
         } else {
@@ -300,7 +476,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
         }
         key.view.contentDescription = when (key.code) {
             KEY_BACKSPACE -> "Backspace"
-            else -> if (key.kind == Kind.HIDE) string(R.string.kbd_hide) else null
+            else -> null
         }
     }
 
@@ -363,7 +539,6 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
         if (press) key.view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         key.pressed = press
         when (key.kind) {
-            Kind.HIDE -> if (!press) hide()
             Kind.MODIFIER, Kind.FN -> onModifier(key.code.takeIf { it != 0 } ?: FN, press)
             else -> if (press) {
                 if (key.kind == Kind.CAPS) capsLock = !capsLock
@@ -426,7 +601,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
 
     private fun chip(text: String, onClick: () -> Unit) = label(text, ON_SURFACE, 13f).apply {
         gravity = Gravity.CENTER
-        minHeight = dp(36)
+        minHeight = dp(if (compact) 30 else 36)
         setPadding(dp(14), 0, dp(14), 0)
         background = rounded(SURFACE_HIGH, dp(18f))
         setOnClickListener { onClick() }
@@ -568,6 +743,11 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
         const val PRESSED = 0xFF44474E.toInt()
         const val PREVIEW_MS = 75L
         const val HIDE_MS = 300L
+        const val SCRIM = 0x99000000.toInt()
+        const val BUBBLE_HIDDEN_SCALE = 0.6f
+        const val BUBBLE_MARGIN_DP = 16
+        /** Room under the button at its lowest: the desktop's panel. */
+        const val BUBBLE_BOTTOM_DP = 72
 
         // evdev codes (linux/input-event-codes.h).
         const val KEY_ESC = 1

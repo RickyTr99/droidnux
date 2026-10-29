@@ -49,6 +49,8 @@
     <string name="kbd_paste">Paste from Android</string>
     <string name="kbd_android">Android keyboard</string>
     <string name="kbd_hide">Hide the keyboard</string>
+    <string name="kbd_minimize">Shrink to a button</string>
+    <string name="kbd_show">Show the keyboard</string>
     <string name="kbd_shift">Shift</string>
     <string name="kbd_enter">Enter</string>
     <string name="kbd_space">Space</string>

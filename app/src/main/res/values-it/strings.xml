@@ -46,6 +46,8 @@
     <string name="kbd_paste">Incolla da Android</string>
     <string name="kbd_android">Tastiera di Android</string>
     <string name="kbd_hide">Nascondi la tastiera</string>
+    <string name="kbd_minimize">Riduci a bottone</string>
+    <string name="kbd_show">Mostra la tastiera</string>
     <string name="kbd_shift">Maiusc</string>
     <string name="kbd_enter">Invio</string>
     <string name="kbd_space">Spazio</string>
