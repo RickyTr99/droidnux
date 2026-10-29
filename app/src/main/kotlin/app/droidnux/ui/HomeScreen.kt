@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.FileObserver
 import android.provider.Settings
 import android.view.View
 import android.view.WindowManager
@@ -393,14 +394,25 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
     val compact = isCompact()
     val side = if (compact) 16.dp else 48.dp
     var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
-    // Reloaded whenever the screen comes back; decoding a screen-sized picture takes a few frames.
+    // Reloaded whenever the screen comes back, and when the desktop's process writes a new one
+    // (it does on leaving the desktop, often after this screen is back). Decoding takes a few frames.
     val scope = rememberCoroutineScope()
     LifecycleResumeEffect(Unit) {
-        val load = scope.launch {
-            val file = DesktopActivity.thumbnailFile(context)
+        val file = DesktopActivity.thumbnailFile(context)
+        fun load() = scope.launch {
             thumbnail = withContext(Dispatchers.IO) { if (file.isFile) blurred(file.path) else null }
         }
-        onPauseOrDispose { load.cancel() }
+        var load = load()
+        val observer = object : FileObserver(file.parentFile!!, MOVED_TO) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == file.name) scope.launch { load.cancel(); load = load() }
+            }
+        }
+        observer.startWatching()
+        onPauseOrDispose {
+            observer.stopWatching()
+            load.cancel()
+        }
     }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {

@@ -202,19 +202,23 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
      * The desktop as it is now, for the app's home screen. At the screen's size: the home shows it from
      * edge to edge, and a smaller one sampled by nearest pixel looks grainy there.
      */
-    private fun saveThumbnail() {
-        if (!DisplayServer.running || surfaceWidth == 0) return
+    private fun saveThumbnail(then: (() -> Unit)? = null) {
+        if (!DisplayServer.running || surfaceWidth == 0) {
+            then?.invoke()
+            return
+        }
         val width = surfaceWidth
         val height = surfaceHeight
         Thread {
             runCatching {
-                val pixels = DisplayServer.snapshot(width, height) ?: return@Thread
+                val pixels = DisplayServer.snapshot(width, height) ?: return@runCatching
                 val bitmap = android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
                 val file = thumbnailFile(this)
                 val temp = java.io.File(file.path + ".new")
                 temp.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.WEBP_LOSSY, 90, it) }
                 temp.renameTo(file)
             }.onFailure { Log.w(TAG, "cannot save the desktop's thumbnail", it) }
+            then?.let { handler.post(it) }
         }.start()
     }
 
@@ -619,7 +623,11 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         } else {
             lastFingerDown > textFieldSince && (fingerOn || at - lastFingerUp <= TAP_FOCUS_MS)
         }
-        if (activated) textFieldSince = at
+        if (activated) {
+            textFieldSince = at
+            Log.d(TAG, "text field focused ${at - lastFingerDown} ms after a finger's down, " +
+                if (fingerOn) "finger on" else "${at - lastFingerUp} ms after its release")
+        }
         if (active && tapped && !menu.isOpen) {
             Log.d(TAG, "keyboard for a tapped text field, ${if (activated) "focused" else "tapped again"}")
             surfaceView.requestFocus()
@@ -715,7 +723,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             moveTaskToBack(true)
         }
 
-        override fun onExit() = DesktopSessionService.stop(this@DesktopActivity)
+        // The picture first: once the session stops, the pause has no desktop to take it from.
+        override fun onExit() = saveThumbnail { DesktopSessionService.stop(this@DesktopActivity) }
 
         override fun onClosed() {
             surfaceView.requestFocus()
