@@ -76,6 +76,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     /** Interface size the user chose, 1 = the default; independent of the resolution ([desktopScale]). */
     private var uiScale = 1f
     private lateinit var menu: SessionMenu
+    private lateinit var pcKeyboard: PcKeyboard
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -138,6 +139,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         root.addView(overlay, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
         ))
+        pcKeyboard = PcKeyboard(this, keyboardListener)
+        root.addView(pcKeyboard.view, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
         menu = SessionMenu(this, menuListener)
         root.addView(menu.view, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
@@ -154,7 +159,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
         // Back opens the menu instead of leaving: it has "Back to Android".
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { toggleMenu() }
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { onBack() }
         }
         window.insetsController?.apply {
             hide(WindowInsets.Type.systemBars())
@@ -186,13 +191,15 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private var keyboardHeight = 0
+    private var pcKeyboardHeight = 0
 
     /** Moves the desktop up just enough for the pointer to stay above the soft keyboard. */
     private fun panForKeyboard() {
         val pointer = Presenter.cursorY / scale // desktop pixels to surface pixels
         val margin = KEYBOARD_MARGIN_DP * resources.displayMetrics.density
-        val visibleBottom = surfaceView.height - keyboardHeight
-        val shift = if (keyboardHeight == 0) 0f else (pointer + margin - visibleBottom).coerceIn(0f, keyboardHeight.toFloat())
+        val covered = maxOf(keyboardHeight, pcKeyboardHeight)
+        val visibleBottom = surfaceView.height - covered
+        val shift = if (covered == 0) 0f else (pointer + margin - visibleBottom).coerceIn(0f, covered.toFloat())
         surfaceView.animate().translationY(-shift).setDuration(KEYBOARD_PAN_MS).start()
     }
 
@@ -259,7 +266,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     @Deprecated("Android 12 and older; newer versions use the OnBackInvokedCallback")
-    override fun onBackPressed() = toggleMenu()
+    override fun onBackPressed() = onBack()
+
+    /** Back hides the keyboard first, then opens or closes the menu. */
+    private fun onBack() {
+        if (pcKeyboard.isShown && !menu.isOpen) pcKeyboard.hide() else toggleMenu()
+    }
 
     override fun onDestroy() {
         if (focused === this) focused = null
@@ -285,6 +297,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             clipboardToDesktop()
         } else {
             releaseKeys()
+            pcKeyboard.releaseAll()
         }
     }
 
@@ -566,9 +579,48 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 MotionEvent.ACTION_DOWN -> lastFingerDown = SystemClock.uptimeMillis()
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> lastFingerUp = SystemClock.uptimeMillis()
             }
-            sendTouch(event)
+            if (!keyboardGesture(event)) sendTouch(event)
         }
         return true
+    }
+
+    /** Three fingers on the desktop since the third landed: they are ours, not the desktop's. */
+    private var threeFingers = false
+    private var threeFingersMoved = false
+    private var firstFingerDown = 0L
+    private val fingerStarts = mutableMapOf<Int, Pair<Float, Float>>()
+    private val touchSlop by lazy { android.view.ViewConfiguration.get(this).scaledTouchSlop }
+
+    /** A tap with three fingers shows or hides the keyboard. True while the fingers are taken from the desktop. */
+    private fun keyboardGesture(event: MotionEvent): Boolean {
+        val taken = threeFingers
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                threeFingers = false
+                fingerStarts.clear()
+                firstFingerDown = event.eventTime
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> if (event.pointerCount == 3 && !threeFingers) {
+                threeFingers = true
+                threeFingersMoved = event.eventTime - firstFingerDown > THREE_FINGER_TAP_MS
+                DisplayServer.touch(DisplayServer.TOUCH_CANCEL) // the first two fingers' touches end here
+                return true
+            }
+            MotionEvent.ACTION_MOVE -> if (threeFingers) for (i in 0 until event.pointerCount) {
+                val (x, y) = fingerStarts[event.getPointerId(i)] ?: continue
+                if (kotlin.math.hypot(event.getX(i) - x, event.getY(i) - y) > touchSlop) threeFingersMoved = true
+            }
+            MotionEvent.ACTION_UP -> if (threeFingers) {
+                threeFingers = false
+                if (!threeFingersMoved && event.eventTime - firstFingerDown <= THREE_FINGER_TAP_MS) toggleKeyboard()
+            }
+            MotionEvent.ACTION_CANCEL -> threeFingers = false
+        }
+        if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            val i = event.actionIndex
+            fingerStarts[event.getPointerId(i)] = event.getX(i) to event.getY(i)
+        }
+        return taken || threeFingers
     }
 
     /** The fingers as touch points, for KWin and its apps to handle (taps, gestures, scrolling). */
@@ -625,12 +677,49 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         if (activated) textFieldSince = at
         if (active && tapped && !menu.isOpen) {
             Log.d(TAG, "keyboard for a text field, ${if (activated) "focused" else "tapped again"}")
-            surfaceView.requestFocus()
-            imm.showSoftInput(surfaceView, 0)
+            showKeyboard()
             keyboardForTextField = true
         } else if (!active && keyboardForTextField) {
             imm.hideSoftInputFromWindow(surfaceView.windowToken, 0)
+            pcKeyboard.hide()
             keyboardForTextField = false
+        }
+    }
+
+    // -- Keyboard ------------------------------------------------------------
+
+    private fun showKeyboard() = pcKeyboard.show(DesktopSettings.load(this).xkbLayout())
+
+    /** Hides whichever keyboard shows, or shows the full one. */
+    private fun toggleKeyboard() {
+        val androidShown = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
+        when {
+            androidShown -> getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(surfaceView.windowToken, 0)
+            pcKeyboard.isShown -> pcKeyboard.hide()
+            else -> showKeyboard()
+        }
+    }
+
+    private val keyboardListener = object : PcKeyboard.Listener {
+        override fun onKey(evdevKeycode: Int, down: Boolean) {
+            if (DisplayServer.running) DisplayServer.key(evdevKeycode, down)
+        }
+
+        override fun onPaste() {
+            clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this@DesktopActivity)
+                ?.toString()?.takeIf { it.isNotEmpty() }?.let { DisplayServer.commitText(it) }
+        }
+
+        override fun onAndroidKeyboard() {
+            pcKeyboard.hide()
+            surfaceView.requestFocus()
+            getSystemService(InputMethodManager::class.java).showSoftInput(surfaceView, 0)
+        }
+
+        override fun onHeight(height: Int) {
+            pcKeyboardHeight = height
+            panForKeyboard()
         }
     }
 
@@ -642,6 +731,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         } else {
             // The menu takes the keys from now on, their releases included.
             releaseKeys()
+            pcKeyboard.releaseAll()
             // The pointer must reach the menu: Android draws it again until the menu closes.
             surfaceView.releasePointerCapture()
             menu.open(trackpadMode, overlay?.visibility == View.VISIBLE, desktopScale, uiScale)
@@ -649,17 +739,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private val menuListener = object : SessionMenu.Listener {
-        override fun onToggleKeyboard() {
-            val imm = getSystemService(InputMethodManager::class.java)
-            val shown = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
-            if (shown) {
-                imm.hideSoftInputFromWindow(surfaceView.windowToken, 0)
-            } else {
-                surfaceView.requestFocus()
-                imm.showSoftInput(surfaceView, 0)
-            }
-        }
+        override fun onToggleKeyboard() = toggleKeyboard()
 
         override fun onTrackpadChanged(trackpad: Boolean) {
             trackpadMode = trackpad
@@ -854,6 +934,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         /** String extra: desktop id of a Linux app to start in the session. */
         const val EXTRA_LAUNCH = "app.droidnux.desktop.LAUNCH"
         private const val KEYBOARD_MARGIN_DP = 48
+        /** From the first finger to the last one leaving: longer is a hold, not a tap. */
+        private const val THREE_FINGER_TAP_MS = 400L
         private const val KEYBOARD_PAN_MS = 250L
         private const val LAUNCH_ATTEMPTS = 120
         private const val LAUNCH_RETRY_MS = 500L

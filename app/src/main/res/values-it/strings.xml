@@ -43,6 +43,17 @@
     <string name="menu_battery">Batteria</string>
     <string name="menu_home">Home</string>
     <string name="menu_pause">Pausa</string>
+    <string name="kbd_paste">Incolla da Android</string>
+    <string name="kbd_android">Tastiera di Android</string>
+    <string name="kbd_hide">Nascondi la tastiera</string>
+    <string name="kbd_shift">Maiusc</string>
+    <string name="kbd_enter">Invio</string>
+    <string name="kbd_space">Spazio</string>
+    <string name="kbd_caps">Bloc Maiusc</string>
+    <string name="kbd_insert">Ins</string>
+    <string name="kbd_delete">Canc</string>
+    <string name="kbd_hint_next">%1$s per il prossimo tasto · tocca di nuovo per bloccarlo</string>
+    <string name="kbd_hint_locked">%1$s bloccato · tocca per sbloccarlo</string>
     <string name="menu_end">Termina</string>
     <string name="tab_settings">Impostazioni</string>
     <string name="home_title">Debian 13 · Plasma</string>

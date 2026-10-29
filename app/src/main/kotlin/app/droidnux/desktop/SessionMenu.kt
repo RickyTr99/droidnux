@@ -702,7 +702,7 @@ class SessionMenu(
         const val WHITE = -0x1
     }
 
-    private companion object {
+    internal companion object {
         // MoonVibe's dark palette (blue fallback), as in the app's theme.
         const val SURFACE = 0xF71A1B20.toInt()     // surfaceContainerLow, nearly opaque
         const val SURFACE_HIGH = 0xFF282A2F.toInt()

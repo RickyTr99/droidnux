@@ -46,6 +46,17 @@
     <string name="menu_battery">Battery</string>
     <string name="menu_home">Home</string>
     <string name="menu_pause">Pause</string>
+    <string name="kbd_paste">Paste from Android</string>
+    <string name="kbd_android">Android keyboard</string>
+    <string name="kbd_hide">Hide the keyboard</string>
+    <string name="kbd_shift">Shift</string>
+    <string name="kbd_enter">Enter</string>
+    <string name="kbd_space">Space</string>
+    <string name="kbd_caps">Caps Lock</string>
+    <string name="kbd_insert">Ins</string>
+    <string name="kbd_delete">Del</string>
+    <string name="kbd_hint_next">%1$s for the next key · tap again to lock</string>
+    <string name="kbd_hint_locked">%1$s locked · tap to release</string>
     <string name="menu_end">End</string>
     <string name="tab_settings">Settings</string>
     <string name="home_title">Debian 13 · Plasma</string>
