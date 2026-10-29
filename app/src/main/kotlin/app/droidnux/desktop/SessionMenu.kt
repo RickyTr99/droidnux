@@ -74,15 +74,12 @@ class SessionMenu(
         fun onClosed()
     }
 
-    private enum class Size { NONE, RESOLUTION, INTERFACE }
-
     private val handler = Handler(Looper.getMainLooper())
     private val compact = context.resources.configuration.smallestScreenWidthDp < 600
     private var trackpad = false
     private var stats = false
     private var scale = 1f
     private var uiScale = 1f
-    private var size = Size.NONE
     private var opened = false
     private val applyScale = Runnable { listener.onScaleChanged(scale) }
     private val applyUiScale = Runnable { listener.onUiScaleChanged(uiScale) }
@@ -114,17 +111,15 @@ class SessionMenu(
     private val subtitle = label("", ON_SURFACE_VARIANT, sp = 13f)
     private val trackpadTile: View
     private val statsTile: View
-    private val resolutionBox: LinearLayout
-    private val interfaceBox: LinearLayout
-    private val resolutionValue = label("", sp = if (compact) 13f else 14f, medium = true)
-    private val interfaceValue = label("", sp = if (compact) 13f else 14f, medium = true)
-    private val sizeSlider: Slider
+    private val resolutionSlider: Slider
+    private val interfaceSlider: Slider
     private val brightnessSlider: Slider
     private val volumeSlider: Slider
     private val cpu = StatCard(R.string.menu_cpu, PRIMARY)
     private val memory = StatCard(R.string.menu_memory, PRIMARY)
     private val battery = StatCard(R.string.menu_battery, GREEN)
     private val firstTile: View
+    private val endButton: TextView
 
     init {
         val gap = dp(if (compact) 10 else 18)
@@ -172,29 +167,29 @@ class SessionMenu(
         }
         section(tiles)
 
-        // Brightness and volume, as the app's settings show a value: stacked on a tablet, side by side on a phone.
-        val sliders = LinearLayout(context).apply {
-            orientation = if (compact) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
-        }
+        // Brightness and volume, then the desktop's size: rows as in the app's settings. Stacked
+        // on a tablet, two side by side on a phone.
         brightnessSlider = Slider(STEP) { listener.onBrightnessChanged(it) }
         volumeSlider = Slider(1f / listener.volumeSteps().coerceAtLeast(1)) { listener.onVolumeChanged(it) }
-        val cards = listOf(sliderCard(R.string.menu_brightness, brightnessSlider), sliderCard(R.string.menu_volume, volumeSlider))
-        for ((i, card) in cards.withIndex()) {
-            sliders.addView(card, if (compact) {
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(6) }
-            } else {
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (i > 0) topMargin = dp(8) }
-            })
+        resolutionSlider = Slider(STEP, DesktopActivity.MIN_SCALE, DesktopActivity.MAX_SCALE, listener::resolutionFor) {
+            scale = it
+            updateSize()
+            apply(applyScale)
         }
-        section(sliders)
-
-        // The desktop's size: a box each, a tap shows its slider below them.
-        if (!compact) section(label(context.getString(R.string.menu_screen), PRIMARY, sp = 12f, medium = true).apply { letterSpacing = 0.07f })
-        resolutionBox = box(R.string.menu_resolution, resolutionValue) { showSize(if (size == Size.RESOLUTION) Size.NONE else Size.RESOLUTION) }
-        interfaceBox = box(R.string.menu_interface, interfaceValue) { showSize(if (size == Size.INTERFACE) Size.NONE else Size.INTERFACE) }
-        section(row(resolutionBox, interfaceBox, height = dp(if (compact) 48 else 56)), top = if (compact) gap else dp(8))
-        sizeSlider = Slider(STEP) {}
-        section(sizeSlider.apply { visibility = View.GONE }, top = dp(4))
+        interfaceSlider = Slider(STEP, DesktopSettings.MIN_UI_SCALE, DesktopSettings.MAX_UI_SCALE) {
+            uiScale = it
+            apply(applyUiScale)
+        }
+        val light = listOf(sliderRow(R.string.menu_brightness, brightnessSlider), sliderRow(R.string.menu_volume, volumeSlider))
+        val screen = listOf(sliderRow(R.string.menu_resolution, resolutionSlider), sliderRow(R.string.menu_interface, interfaceSlider))
+        if (compact) {
+            section(row(*light.toTypedArray()))
+            section(row(*screen.toTypedArray()), top = dp(6))
+        } else {
+            light.forEachIndexed { i, it -> section(it, top = if (i == 0) gap else dp(4)) }
+            section(label(context.getString(R.string.menu_screen), PRIMARY, sp = 12f, medium = true).apply { letterSpacing = 0.07f })
+            screen.forEach { section(it, top = dp(4)) }
+        }
 
         // What the session costs.
         section(row(cpu.view, memory.view, battery.view))
@@ -217,7 +212,7 @@ class SessionMenu(
             close()
             listener.onPauseSession()
         }, LinearLayout.LayoutParams(0, actionHeight, 1f).apply { marginStart = dp(3) })
-        val endButton = action(R.drawable.ic_menu_power, R.string.menu_end, ON_ERROR, ERROR, corners(8f, 20f)) {
+        endButton = action(R.drawable.ic_menu_power, R.string.menu_end, ON_ERROR, ERROR, corners(8f, 20f)) {
             showConfirm(true)
         }.apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
         actions.addView(endButton, LinearLayout.LayoutParams(0, actionHeight, 1f).apply { marginStart = dp(3) })
@@ -233,14 +228,14 @@ class SessionMenu(
     private val confirmCancel = textButton(R.string.action_cancel, PRIMARY) { showConfirm(false) }
     private val confirmDialog = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        background = rounded(SURFACE_HIGH, dp(28f))
-        setPadding(dp(24), dp(24), dp(24), dp(18))
+        background = rounded(SURFACE_HIGH, dp(20f))
+        setPadding(dp(20), dp(18), dp(12), dp(8))
         isClickable = true // a touch on the dialog does not dismiss it
         isFocusable = false
-        addView(label(context.getString(R.string.menu_exit_title), sp = 24f))
-        addView(label(context.getString(R.string.menu_exit_text), ON_SURFACE_VARIANT, sp = 14f).apply {
-            setLineSpacing(dp(6f), 1f)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
+        addView(label(context.getString(R.string.menu_exit_title), sp = 16f, medium = true))
+        addView(label(context.getString(R.string.menu_exit_text), ON_SURFACE_VARIANT, sp = 13f).apply {
+            setPadding(0, 0, dp(8), 0)
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
@@ -250,19 +245,22 @@ class SessionMenu(
                 close()
                 listener.onExit()
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)).apply { marginStart = dp(8) })
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(24) })
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
+        // It grows out of the End button, at its bottom right.
+        addOnLayoutChangeListener { dialog, _, _, _, _, _, _, _, _ ->
+            dialog.pivotX = dialog.width.toFloat()
+            dialog.pivotY = dialog.height.toFloat()
+        }
     }
 
-    /** The dialog over a scrim on the whole screen; a touch on the scrim dismisses it. */
+    /** The dialog over a scrim on the whole screen, above the End button; a touch on the scrim dismisses it. */
     private val confirm = FrameLayout(context).apply {
         visibility = View.GONE
         setBackgroundColor(SCRIM)
         isClickable = true
         isFocusable = false
         setOnClickListener { showConfirm(false) }
-        addView(confirmDialog, FrameLayout.LayoutParams(
-            dp(if (compact) 312 else 360), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER,
-        ))
+        addView(confirmDialog, FrameLayout.LayoutParams(dp(CONFIRM_DP), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
     }
 
     init {
@@ -278,6 +276,13 @@ class SessionMenu(
         fade(confirm, show)
         confirmDialog.animate().cancel()
         if (show) {
+            val button = IntArray(2).also { endButton.getLocationInWindow(it) }
+            val layer = IntArray(2).also { view.getLocationInWindow(it) }
+            (confirmDialog.layoutParams as FrameLayout.LayoutParams).apply {
+                marginEnd = (view.width - (button[0] - layer[0] + endButton.width)).coerceAtLeast(0)
+                bottomMargin = view.height - (button[1] - layer[1]) + dp(8)
+            }
+            confirmDialog.requestLayout()
             confirmDialog.scaleX = 0.9f
             confirmDialog.scaleY = 0.9f
             confirmDialog.animate().scaleX(1f).scaleY(1f).setDuration(MEDIUM_MS).setInterpolator(DECELERATE).start()
@@ -292,7 +297,8 @@ class SessionMenu(
         this.uiScale = uiScale
         updateTiles()
         updateSize()
-        showSize(Size.NONE)
+        resolutionSlider.show(scale)
+        interfaceSlider.show(uiScale)
         showConfirm(false, animate = false)
         brightnessSlider.show(listener.brightness())
         volumeSlider.show(listener.volume())
@@ -340,42 +346,13 @@ class SessionMenu(
     }
 
     private fun updateSize() {
-        resolutionValue.text = listener.resolutionFor(scale)
-        interfaceValue.text = percent(uiScale)
         subtitle.text = "${listener.resolutionFor(scale)} · ${context.getString(R.string.menu_shortcut)}"
-    }
-
-    private fun showSize(next: Size) {
-        size = next
-        animateColor(resolutionBox, if (next == Size.RESOLUTION) SELECTED else SURFACE_HIGH)
-        animateColor(interfaceBox, if (next == Size.INTERFACE) SELECTED else SURFACE_HIGH)
-        when (next) {
-            Size.NONE -> sizeSlider.visibility = View.GONE
-            Size.RESOLUTION -> sizeSlider.bind(scale, DesktopActivity.MIN_SCALE, DesktopActivity.MAX_SCALE) {
-                scale = it
-                updateSize()
-                apply(applyScale)
-            }
-            Size.INTERFACE -> sizeSlider.bind(uiScale, DesktopSettings.MIN_UI_SCALE, DesktopSettings.MAX_UI_SCALE) {
-                uiScale = it
-                updateSize()
-                apply(applyUiScale)
-            }
-        }
     }
 
     /** Applying a size costs a redraw (or a guest command): only once the slider rests. */
     private fun apply(pending: Runnable) {
         handler.removeCallbacks(pending)
         handler.postDelayed(pending, RESIZE_DELAY_MS)
-    }
-
-    private fun Slider.bind(value: Float, min: Float, max: Float, onChange: (Float) -> Unit) {
-        this.min = min
-        this.max = max
-        this.onChange = onChange
-        show(value)
-        if (visibility != View.VISIBLE) fade(this, true)
     }
 
     // -- Statistics ----------------------------------------------------------
@@ -455,10 +432,14 @@ class SessionMenu(
      * sets the value where it lands, the arrow keys move it a [step].
      */
     @SuppressLint("ViewConstructor")
-    private inner class Slider(private val step: Float, var onChange: (Float) -> Unit) : View(context) {
-        var min = 0f
-        var max = 1f
-        /** Shows the value as a percentage, if any. */
+    private inner class Slider(
+        private val step: Float,
+        private val min: Float = 0f,
+        private val max: Float = 1f,
+        /** How [valueLabel] shows the value. */
+        private val format: (Float) -> String = { percent(it) },
+        private val onChange: (Float) -> Unit,
+    ) : View(context) {
         var valueLabel: TextView? = null
         private var value = 0f
         private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -476,7 +457,7 @@ class SessionMenu(
         /** Shows [v] without telling [onChange]. */
         fun show(v: Float) {
             value = v.coerceIn(min, max)
-            valueLabel?.text = percent(value)
+            valueLabel?.text = format(value)
             invalidate()
         }
 
@@ -491,12 +472,12 @@ class SessionMenu(
         private fun valueAt(x: Float) = min + ((x - edge) / (width - 2 * edge)).coerceIn(0f, 1f) * (max - min)
 
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) =
-            setMeasuredDimension(getDefaultSize(0, widthMeasureSpec), dp(44))
+            setMeasuredDimension(getDefaultSize(0, widthMeasureSpec), dp(SLIDER_DP))
 
         override fun onDraw(canvas: Canvas) {
             val track = dp(TRACK_DP)
             val thumb = dp(4f)
-            val gap = dp(6f)
+            val gap = dp(4f)
             val inner = dp(2f)
             val outer = track / 2
             val top = (height - track) / 2
@@ -519,7 +500,7 @@ class SessionMenu(
             part(x + thumb / 2 + gap, width.toFloat(), inner, outer, SELECTED)
             paint.color = PRIMARY
             if (x + thumb / 2 + gap < width - outer - inner) canvas.drawCircle(width - outer, height / 2f, inner, paint)
-            rect.set(x - thumb / 2, 0f, x + thumb / 2, height.toFloat())
+            rect.set(x - thumb / 2, (height - dp(THUMB_DP)) / 2, x + thumb / 2, (height + dp(THUMB_DP)) / 2)
             canvas.drawRoundRect(rect, thumb / 2, thumb / 2, paint)
         }
 
@@ -552,23 +533,20 @@ class SessionMenu(
         }
     }
 
-    /** A row as in the app's settings: [title] and the value over [slider]. */
-    private fun sliderCard(title: Int, slider: Slider) = LinearLayout(context).apply {
+    /** A row as in the app's settings, without its card: [title] and the value over [slider]. */
+    private fun sliderRow(title: Int, slider: Slider) = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        background = rounded(SURFACE_HIGH, dp(12f))
-        val side = dp(if (compact) 12 else 20)
-        setPadding(side, dp(12), side, dp(4))
-        val value = label("", ON_SURFACE_VARIANT, sp = if (compact) 13f else 15f)
+        val value = label("", ON_SURFACE_VARIANT, sp = 13f)
         slider.valueLabel = value
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(
-                label(context.getString(title), sp = if (compact) 13f else 16f, medium = true).apply { maxLines = 1 },
+                label(context.getString(title), sp = 14f, medium = true).apply { maxLines = 1 },
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
             )
             addView(value)
         })
-        addView(slider, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(44)).apply { topMargin = dp(4) })
+        addView(slider, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(SLIDER_DP)))
     }
 
     // -- Building blocks -----------------------------------------------------
@@ -594,19 +572,6 @@ class SessionMenu(
             if (row.childCount > 0) marginStart = dp(if (compact) 6 else 8)
         })
         return tile
-    }
-
-    /** A box with a small title over its value. */
-    private fun box(title: Int, value: TextView, onClick: () -> Unit) = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        gravity = Gravity.CENTER_VERTICAL
-        background = ripple(SURFACE_HIGH, dp(12f))
-        setPadding(dp(if (compact) 12 else 14), 0, dp(12), 0)
-        isFocusable = true
-        pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_HAND)
-        setOnClickListener { onClick() }
-        addView(label(context.getString(title), ON_SURFACE_VARIANT, sp = if (compact) 11f else 12f))
-        addView(value)
     }
 
     /** [children] side by side in equal widths. */
@@ -751,8 +716,11 @@ class SessionMenu(
         const val RESIZE_DELAY_MS = 300L
         const val STATS_MS = 1000L
         const val SLIDE_DP = 32f
+        const val CONFIRM_DP = 264
         const val STEP = 0.05f
-        const val TRACK_DP = 16f
+        const val TRACK_DP = 8f
+        const val THUMB_DP = 24f
+        const val SLIDER_DP = 32
         const val GB = 1e9f
         val DECELERATE = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         val ACCELERATE = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
