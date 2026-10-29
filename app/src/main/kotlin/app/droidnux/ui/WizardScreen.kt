@@ -58,6 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -66,6 +67,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.Image
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -78,6 +80,7 @@ import app.droidnux.container.Component
 import app.droidnux.container.InstallProgress
 import app.droidnux.desktop.DesktopActivity
 import app.droidnux.desktop.DesktopSettings
+import app.droidnux.desktop.SessionLog
 
 /** First run: what to install, the Android settings to check, then the installation. */
 @Composable
@@ -537,6 +540,8 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
     val context = LocalContext.current
     val setup = state.setup
     var showLog by remember { mutableStateOf(false) }
+    var sharing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val step = setup?.step ?: SetupStep.ROOTFS
     val mesa = state.components[Component.MESA.id]
     val plasma = state.components[Component.PLASMA.id]
@@ -637,12 +642,27 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
                 )
             }
             setup?.error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 14.sp, modifier = Modifier.padding(top = 8.dp)) }
-            TextButton(onClick = { showLog = !showLog }) {
-                Text(stringResource(if (showLog) R.string.install_hide_log else R.string.install_show_log))
+            Row {
+                TextButton(onClick = { showLog = !showLog }) {
+                    Text(stringResource(if (showLog) R.string.install_hide_log else R.string.install_show_log))
+                }
+                if (setup?.error != null) {
+                    TextButton(
+                        onClick = {
+                            sharing = true
+                            scope.launch {
+                                runCatching { withContext(Dispatchers.IO) { SessionLog.share(context, state.display, state.desktopLog) } }
+                                    .onSuccess { context.startActivity(it) }
+                                sharing = false
+                            }
+                        },
+                        enabled = !sharing,
+                    ) { Text(stringResource(R.string.install_share_log)) }
+                }
             }
             AnimatedVisibility(showLog && state.desktopLog.isNotEmpty()) {
                 Text(
-                    state.desktopLog,
+                    state.desktopLog.lines().takeLast(LOG_LINES_SHOWN).joinToString("\n"),
                     modifier = Modifier.fillMaxWidth().clip(RowShape).background(MaterialTheme.colorScheme.surfaceContainerLowest).padding(12.dp),
                     fontFamily = FontFamily.Monospace,
                     fontSize = 12.sp,
@@ -652,6 +672,8 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
         }
     }
 }
+
+private const val LOG_LINES_SHOWN = 8
 
 private enum class StepStatus { WAITING, RUNNING, DONE, FAILED }
 

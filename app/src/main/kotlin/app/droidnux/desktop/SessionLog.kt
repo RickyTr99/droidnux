@@ -34,8 +34,8 @@ object SessionLog {
         override fun close() = out.close()
     }
 
-    /** Writes the log to send and returns the chooser that shares it; blocking. */
-    fun share(context: Context, probe: String?): Intent {
+    /** Writes the log to send, with the desktop's [install] output if any, and returns the chooser that shares it; blocking. */
+    fun share(context: Context, probe: String?, install: String = ""): Intent {
         val log = File(context.cacheDir, "logs/droidnux-log.txt").apply { parentFile?.mkdirs() }
         log.bufferedWriter().use { out ->
             out.appendLine("DroidNux ${BuildConfig.VERSION_NAME} (${BuildConfig.APPLICATION_ID}${if (BuildConfig.DIAGNOSTIC) ", diagnostic" else ""})")
@@ -43,6 +43,7 @@ object SessionLog {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) out.appendLine("SoC ${Build.SOC_MANUFACTURER} ${Build.SOC_MODEL}")
             out.appendLine("Kernel ${System.getProperty("os.version")}, board ${Build.BOARD}, hardware ${Build.HARDWARE}")
             out.appendLine("\n== GPU probe ==\n${probe ?: "—"}")
+            if (install.isNotEmpty()) out.appendLine("\n== Desktop install ==\n$install")
             out.appendLine("\n== Last session ==")
             file(context).takeIf { it.exists() }?.reader()?.use { it.copyTo(out) } ?: out.appendLine("—")
             // An app reads only its own processes' lines: the display server's and the session's.

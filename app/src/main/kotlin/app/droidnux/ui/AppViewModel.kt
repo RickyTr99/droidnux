@@ -640,7 +640,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private companion object {
-        const val LOG_LINES = 8
+        /** Lines of the desktop's install kept for the log to send (the wizard shows fewer). */
+        const val LOG_LINES = 100
         const val APPS_REFRESH_MS = 30_000L
         val GPU_NAME = Regex("""Adreno \(TM\) (\d+)""")
         val APT_SUMMARY = Regex("""(\d+) upgraded, (\d+) newly installed""")

@@ -56,7 +56,7 @@ fun DiagnosticsPage(
             onClick = {
                 sharing = true
                 scope.launch {
-                    runCatching { withContext(Dispatchers.IO) { SessionLog.share(context, state.display) } }
+                    runCatching { withContext(Dispatchers.IO) { SessionLog.share(context, state.display, state.desktopLog) } }
                         .onSuccess { context.startActivity(it) }
                     sharing = false
                 }

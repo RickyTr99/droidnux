@@ -138,6 +138,7 @@
     <string name="install_plasma_text">Faster icons and themes, system monitor for Android</string>
     <string name="install_show_log">Show the log</string>
     <string name="install_hide_log">Hide the log</string>
+    <string name="install_share_log">Send the log</string>
     <string name="check_gpu">Graphics</string>
     <string name="check_gpu_ok">%1$s: Vulkan and OpenGL acceleration</string>
     <string name="check_gpu_none">No supported GPU: the desktop runs in software</string>
