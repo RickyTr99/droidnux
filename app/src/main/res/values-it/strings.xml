@@ -335,5 +335,7 @@
     <string name="diagnostics_desktop_log">Log dell’installazione del desktop</string>
     <string name="diagnostics_log">Log</string>
     <string name="diagnostics_log_text">Il desktop non parte? Manda questo file</string>
+    <string name="diagnostics_detailed_logs">Log dettagliati</string>
+    <string name="diagnostics_detailed_logs_text">Messaggi del desktop e del driver grafico, dalla prossima sessione. Consuma più batteria: accendilo solo per mandare un log</string>
     <string name="action_share">Condividi</string>
 </resources>

@@ -337,5 +337,7 @@
     <string name="diagnostics_desktop_log">Desktop install log</string>
     <string name="diagnostics_log">Log</string>
     <string name="diagnostics_log_text">The desktop doesn’t start? Send this file</string>
+    <string name="diagnostics_detailed_logs">Detailed logs</string>
+    <string name="diagnostics_detailed_logs_text">Messages from the desktop and the graphics driver, from the next session. Uses more battery: turn it on only to send a log</string>
     <string name="action_share">Share</string>
 </resources>

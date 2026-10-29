@@ -21,6 +21,8 @@ data class DesktopSettings(
     val layout: String = "",
     /** The frame counter in the top right corner of the desktop (debug builds). */
     val stats: Boolean = false,
+    /** The session's output in logcat, and KWin's and Mesa's debug messages; off: only the file to send. */
+    val logs: Boolean = false,
     /** The Linux account's name, empty until the user chose one; see [Account]. */
     val user: String = "",
 ) {
@@ -54,6 +56,7 @@ data class DesktopSettings(
                 trackpad = props.getProperty("trackpad")?.toBooleanStrictOrNull() ?: defaults.trackpad,
                 layout = props.getProperty("layout")?.takeIf { it in LAYOUTS } ?: defaults.layout,
                 stats = props.getProperty("stats")?.toBooleanStrictOrNull() ?: defaults.stats,
+                logs = props.getProperty("logs")?.toBooleanStrictOrNull() ?: defaults.logs,
                 user = props.getProperty("user")?.takeIf { Account.isValidName(it) } ?: defaults.user,
             )
         }
@@ -67,6 +70,7 @@ data class DesktopSettings(
                 setProperty("trackpad", settings.trackpad.toString())
                 setProperty("layout", settings.layout)
                 setProperty("stats", settings.stats.toString())
+                setProperty("logs", settings.logs.toString())
                 setProperty("user", settings.user)
             }
             val file = File(context.filesDir, FILE)

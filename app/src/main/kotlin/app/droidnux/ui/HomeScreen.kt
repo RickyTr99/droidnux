@@ -1046,7 +1046,7 @@ private fun SettingsTab(
                 Category.ACCOUNT -> AccountPage(settings)
                 Category.COMPONENTS -> ComponentsPage(state, viewModel)
                 Category.ANDROID -> SystemChecks(state.gpu)
-                Category.DIAGNOSTICS -> DiagnosticsPage(state, viewModel)
+                Category.DIAGNOSTICS -> DiagnosticsPage(state, viewModel, settings, ::save)
             }
         }
     }

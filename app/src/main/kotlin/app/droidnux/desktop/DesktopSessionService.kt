@@ -85,8 +85,9 @@ class DesktopSessionService : Service() {
         }
         if (network == null) network = NetworkReporter(this, rootfs, scope).also { it.start() }
         SessionPause.file(this).delete() // left by a process that died paused
-        val user = DesktopSettings.load(this).user
-        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, user, verbose = BuildConfig.DIAGNOSTIC))
+        val settings = DesktopSettings.load(this)
+        val verbose = BuildConfig.DIAGNOSTIC || settings.logs
+        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, settings.user, verbose))
         val password = Account.password(this).orEmpty()
         session = process
         Log.i(TAG, "session started (layout $layout)")
@@ -99,7 +100,7 @@ class DesktopSessionService : Service() {
             val log = SessionLog.Writer(this@DesktopSessionService)
             try {
                 process.inputStream.bufferedReader().forEachLine {
-                    Log.i(TAG_GUEST, it)
+                    if (verbose) Log.i(TAG_GUEST, it)
                     log.line(it)
                     // The desktop logged out; its services (PipeWire, D-Bus) would keep the runtime alive.
                     if (it == DesktopEnvironment.SESSION_END_MARKER) process.destroy()
