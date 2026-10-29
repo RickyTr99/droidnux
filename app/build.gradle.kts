@@ -16,6 +16,11 @@ val signingProps = Properties().apply {
     }
 }
 
+// The commit a debug build comes from, in its version: testers' logs say which build they ran.
+val gitCommit = runCatching {
+    providers.exec { commandLine("git", "rev-parse", "--short", "HEAD") }.standardOutput.asText.get().trim()
+}.getOrDefault("")
+
 android {
     namespace = "app.droidnux"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -48,6 +53,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            if (gitCommit.isNotEmpty()) versionNameSuffix = "+$gitCommit"
         }
         release {
             if (!signingProps.isEmpty) signingConfig = signingConfigs.getByName("release")
