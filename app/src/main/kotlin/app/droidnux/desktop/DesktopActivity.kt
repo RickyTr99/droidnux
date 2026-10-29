@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.Typeface
@@ -128,18 +127,16 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             setBackgroundColor(Color.BLACK)
             addView(surfaceView)
         }
-        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
-            overlay = TextView(this).apply {
-                setTextColor(Color.WHITE)
-                setBackgroundColor(0x88000000.toInt())
-                typeface = Typeface.MONOSPACE
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                setPadding(12, 6, 12, 6)
-            }
-            root.addView(overlay, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
-            ))
+        overlay = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0x88000000.toInt())
+            typeface = Typeface.MONOSPACE
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(12, 6, 12, 6)
         }
+        root.addView(overlay, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
+        ))
         menu = SessionMenu(this, menuListener)
         root.addView(menu.view, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
@@ -244,6 +241,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onResume() {
         super.onResume()
+        // Back to a paused desktop: it continues.
+        SessionPause.resume(this)
         reloadSettings()
         AudioFocus.reclaim()
         surfaceView.requestFocus()
@@ -643,7 +642,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             releaseKeys()
             // The pointer must reach the menu: Android draws it again until the menu closes.
             surfaceView.releasePointerCapture()
-            menu.open(trackpadMode, desktopScale, uiScale)
+            menu.open(trackpadMode, overlay?.visibility == View.VISIBLE, desktopScale, uiScale)
         }
     }
 
@@ -664,6 +663,15 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             trackpadMode = trackpad
             DesktopSettings.update(this@DesktopActivity) { it.copy(trackpad = trackpad) }
         }
+
+        override fun onStatsChanged(shown: Boolean) {
+            DesktopSettings.update(this@DesktopActivity) { it.copy(stats = shown) }
+            overlay?.visibility = if (shown) View.VISIBLE else View.GONE
+            handler.removeCallbacks(overlayUpdater)
+            if (shown) handler.post(overlayUpdater)
+        }
+
+        override fun onScreenshot() = takeScreenshot()
 
         override fun resolutionFor(scale: Float) =
             "${(surfaceWidth * scale).toInt() and 1.inv()} × ${(surfaceHeight * scale).toInt() and 1.inv()}"
@@ -713,8 +721,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 .setStreamVolume(AudioManager.STREAM_MUSIC, (volume * volumeSteps()).roundToInt(), 0)
         }
 
-        override fun onBackToAndroid() {
-            moveTaskToBack(true)
+        override fun onBackToAndroid() = showHome()
+
+        // The picture first, while the desktop still draws; then frozen, and Android in front.
+        override fun onPauseSession() = saveThumbnail {
+            SessionPause.pause(this@DesktopActivity)
+            showHome()
         }
 
         // The picture first: once the session stops, the pause has no desktop to take it from.
@@ -724,6 +736,37 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             surfaceView.requestFocus()
             capturePointer()
         }
+    }
+
+    /** The app's Home in front, as its launcher icon brings it (the desktop's task stays behind). */
+    private fun showHome() {
+        startActivity(packageManager.getLaunchIntentForPackage(packageName)!!.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED))
+    }
+
+    /** The desktop at its own resolution, as a PNG in Android's Pictures/DroidNux. */
+    private fun takeScreenshot() {
+        val width = (surfaceWidth * desktopScale).toInt() and 1.inv()
+        val height = (surfaceHeight * desktopScale).toInt() and 1.inv()
+        Thread {
+            val saved = runCatching {
+                val pixels = DisplayServer.snapshot(width, height) ?: error("no picture from the display server")
+                val bitmap = android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
+                val name = "DroidNux_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(java.util.Date())}.png"
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+                    put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/DroidNux")
+                }
+                val uri = contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: error("no MediaStore entry")
+                contentResolver.openOutputStream(uri)!!.use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            }.onFailure { Log.w(TAG, "cannot take a screenshot", it) }.isSuccess
+            handler.post {
+                android.widget.Toast.makeText(
+                    this, if (saved) R.string.menu_screenshot_saved else R.string.menu_screenshot_failed, android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }.start()
     }
 
     /**

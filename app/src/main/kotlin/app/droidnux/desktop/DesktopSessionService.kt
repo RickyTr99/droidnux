@@ -84,6 +84,7 @@ class DesktopSessionService : Service() {
             }.also { registerReceiver(it, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
         }
         if (network == null) network = NetworkReporter(this, rootfs, scope).also { it.start() }
+        SessionPause.file(this).delete() // left by a process that died paused
         val user = DesktopSettings.load(this).user
         val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, user, verbose = BuildConfig.DIAGNOSTIC))
         val password = Account.password(this).orEmpty()
@@ -146,6 +147,8 @@ class DesktopSessionService : Service() {
     }
 
     private fun stopSession() {
+        // Stopped processes would not see the end.
+        SessionPause.resume(this)
         session?.destroy()
         session = null
     }

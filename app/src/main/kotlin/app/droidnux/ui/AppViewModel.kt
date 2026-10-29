@@ -17,6 +17,7 @@ import app.droidnux.container.DesktopEnvironment
 import app.droidnux.container.Distro
 import app.droidnux.container.InstallProgress
 import app.droidnux.desktop.DesktopSessionService
+import app.droidnux.desktop.SessionPause
 import app.droidnux.display.DisplayCore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -112,6 +113,8 @@ data class AppState(
     val apps: List<DesktopEnvironment.LinuxApp>? = null,
     /** True while the desktop process (display server and session) is alive. */
     val sessionRunning: Boolean = false,
+    /** The running session is paused: its processes are stopped (SessionPause). */
+    val sessionPaused: Boolean = false,
     /** The Home's quick launch: desktop ids, in the user's order. */
     val homeApps: List<String> = emptyList(),
     /** Packages installed in the rootfs, as dpkg says. */
@@ -213,7 +216,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         @Suppress("DEPRECATION")
         val services = getApplication<Application>().getSystemService(ActivityManager::class.java).getRunningServices(Int.MAX_VALUE)
         val running = services.orEmpty().any { it.started && it.service.className == DesktopSessionService::class.java.name }
-        _state.update { state -> state.copy(sessionRunning = running) }
+        val paused = running && SessionPause.isPaused(getApplication())
+        _state.update { state -> state.copy(sessionRunning = running, sessionPaused = paused) }
         if (_state.value.ready && SystemClock.elapsedRealtime() - appsLoadedAt > APPS_REFRESH_MS) {
             loadApps()
             viewModelScope.launch { refreshPackages() } // apt in the desktop's terminal

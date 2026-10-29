@@ -4,7 +4,6 @@ import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.FileObserver
@@ -131,6 +130,8 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.RadialGradientShader
 import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.ShaderBrush
@@ -457,12 +458,21 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, picture: Bi
     var confirmStop by remember { mutableStateOf(false) }
     // From "Exit" until the session is gone.
     var stopping by remember { mutableStateOf(false) }
+    val live = state.sessionRunning || stopping
+    val paused = state.sessionPaused && !stopping
+    // Paused: the picture greys out, frozen as the desktop is.
+    val frozen by animateFloatAsState(if (paused) 1f else 0f, tween(400), label = "frozen")
     Box(
         modifier.fillMaxWidth().onGloballyPositioned { bounds = it.boundsInRoot() }
             .clickable(onClickLabel = stringResource(R.string.action_open_desktop), onClick = open),
     ) {
         if (picture != null) {
-            Image(picture.asImageBitmap(), stringResource(R.string.home_last_session), Modifier.matchParentSize(), contentScale = ContentScale.Crop)
+            Image(
+                picture.asImageBitmap(), stringResource(R.string.home_last_session), Modifier.matchParentSize(),
+                contentScale = ContentScale.Crop,
+                alpha = 1f - 0.3f * frozen,
+                colorFilter = if (frozen > 0f) ColorFilter.colorMatrix(ColorMatrix().apply { setToSaturation(1f - 0.7f * frozen) }) else null,
+            )
         } else {
             Box(Modifier.matchParentSize().background(MaterialTheme.colorScheme.surfaceContainer), contentAlignment = Alignment.Center) {
                 Icon(Icons.Debian, null, tint = MaterialTheme.colorScheme.surfaceContainerHighest, modifier = Modifier.size(140.dp))
@@ -477,32 +487,44 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, picture: Bi
                 ),
             ),
         )
-        val live = state.sessionRunning || stopping
+        AnimatedVisibility(
+            paused, Modifier.align(Alignment.Center),
+            enter = fadeIn() + scaleIn(spring(dampingRatio = 0.5f, stiffness = Spring.StiffnessMediumLow), initialScale = 0.6f),
+            exit = fadeOut(tween(200)) + scaleOut(tween(200), targetScale = 0.6f),
+        ) {
+            Box(Modifier.size(72.dp).clip(CircleShape).background(page.copy(alpha = 0.6f)), contentAlignment = Alignment.Center) {
+                Icon(Icons.Pause, null, tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(32.dp))
+            }
+        }
         val status = @Composable { modifier: Modifier ->
             Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 val dot by animateColorAsState(
                     when {
-                        stopping -> UpdateColor
+                        stopping || paused -> UpdateColor
                         live -> RunningColor
                         else -> MaterialTheme.colorScheme.surfaceContainerHighest
                     },
                     label = "dot",
                 )
                 Box(Modifier.size(10.dp)) {
-                    if (live) Halo(dot, period = if (stopping) 900 else 2400)
+                    if (live && !paused) Halo(dot, period = if (stopping) 900 else 2400)
                     Box(Modifier.matchParentSize().clip(CircleShape).background(dot))
                 }
                 Column {
                     AnimatedContent(
                         when {
                             stopping -> R.string.home_stopping
+                            paused -> R.string.home_paused
                             live -> R.string.home_running
                             else -> R.string.home_ready
                         },
                         transitionSpec = { textSwap() },
                         label = "status",
                     ) { Text(stringResource(it), fontSize = if (compact) 18.sp else 22.sp, fontWeight = FontWeight.Medium) }
-                    Text(stringResource(R.string.home_title), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        if (paused) stringResource(R.string.home_paused_text) else stringResource(R.string.home_title),
+                        fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -510,9 +532,14 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, picture: Bi
             val press = remember { MutableInteractionSource() }
             Button(onClick = open, modifier = modifier.height(56.dp).pressScale(press), interactionSource = press) {
                 Icon(Icons.Play, null, modifier = Modifier.size(22.dp))
-                AnimatedContent(live, transitionSpec = { textSwap() }, label = "open") { resume ->
+                val action = when {
+                    paused -> R.string.action_resume_paused
+                    live -> R.string.action_resume_desktop
+                    else -> R.string.action_open_desktop
+                }
+                AnimatedContent(action, transitionSpec = { textSwap() }, label = "open") { text ->
                     Text(
-                        stringResource(if (resume) R.string.action_resume_desktop else R.string.action_open_desktop),
+                        stringResource(text),
                         fontSize = 18.sp,
                         modifier = Modifier.padding(start = 10.dp),
                     )
@@ -1236,14 +1263,12 @@ private fun ScreenPage(settings: DesktopSettings, screen: android.graphics.Rect,
         uiScale, DesktopSettings.MIN_UI_SCALE..DesktopSettings.MAX_UI_SCALE,
         onChange = { uiScale = it }, onDone = { save { it.copy(uiScale = uiScale) } },
     )
-    if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
-        InfoRow(
-            stringResource(R.string.settings_stats),
-            text = stringResource(R.string.settings_stats_text),
-            onClick = { save { it.copy(stats = !it.stats) } },
-        ) {
-            Switch(checked = settings.stats, onCheckedChange = { checked -> save { it.copy(stats = checked) } })
-        }
+    InfoRow(
+        stringResource(R.string.settings_stats),
+        text = stringResource(R.string.settings_stats_text),
+        onClick = { save { it.copy(stats = !it.stats) } },
+    ) {
+        Switch(checked = settings.stats, onCheckedChange = { checked -> save { it.copy(stats = checked) } })
     }
 }
 
