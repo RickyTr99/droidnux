@@ -579,76 +579,9 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 MotionEvent.ACTION_DOWN -> lastFingerDown = SystemClock.uptimeMillis()
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> lastFingerUp = SystemClock.uptimeMillis()
             }
-            when {
-                keyboardGesture(event) -> dropHeldTouches()
-                // A first finger waits a moment: two more may follow for the keyboard's tap.
-                event.actionMasked == MotionEvent.ACTION_DOWN -> {
-                    heldTouches += MotionEvent.obtain(event)
-                    handler.postDelayed(flushHeldTouches, TOUCH_HOLD_MS)
-                }
-                heldTouches.isNotEmpty() -> {
-                    heldTouches += MotionEvent.obtain(event)
-                    if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
-                        flushHeldTouches.run()
-                    }
-                }
-                else -> sendTouch(event)
-            }
+            sendTouch(event)
         }
         return true
-    }
-
-    /** Touches of a gesture's first moments, not yet sent to the desktop. */
-    private val heldTouches = mutableListOf<MotionEvent>()
-    private val flushHeldTouches = Runnable {
-        heldTouches.forEach { sendTouch(it) }
-        dropHeldTouches()
-    }
-
-    private fun dropHeldTouches() {
-        handler.removeCallbacks(flushHeldTouches)
-        heldTouches.forEach { it.recycle() }
-        heldTouches.clear()
-    }
-
-    /** Three fingers on the desktop since the third landed: they are ours, not the desktop's. */
-    private var threeFingers = false
-    private var threeFingersMoved = false
-    private var firstFingerDown = 0L
-    private val fingerStarts = mutableMapOf<Int, Pair<Float, Float>>()
-    private val touchSlop by lazy { android.view.ViewConfiguration.get(this).scaledTouchSlop }
-
-    /** A tap with three fingers shows or hides the keyboard. True while the fingers are taken from the desktop. */
-    private fun keyboardGesture(event: MotionEvent): Boolean {
-        val taken = threeFingers
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                threeFingers = false
-                fingerStarts.clear()
-                firstFingerDown = event.eventTime
-            }
-            MotionEvent.ACTION_POINTER_DOWN -> if (event.pointerCount == 3 && !threeFingers) {
-                threeFingers = true
-                threeFingersMoved = event.eventTime - firstFingerDown > THREE_FINGER_TAP_MS
-                DisplayServer.touch(DisplayServer.TOUCH_CANCEL) // the first two fingers' touches end here
-                return true
-            }
-            MotionEvent.ACTION_MOVE -> if (threeFingers) for (i in 0 until event.pointerCount) {
-                val (x, y) = fingerStarts[event.getPointerId(i)] ?: continue
-                if (kotlin.math.hypot(event.getX(i) - x, event.getY(i) - y) > touchSlop) threeFingersMoved = true
-            }
-            MotionEvent.ACTION_UP -> if (threeFingers) {
-                threeFingers = false
-                val tap = !threeFingersMoved && event.eventTime - firstFingerDown <= THREE_FINGER_TAP_MS
-                if (tap) toggleKeyboard()
-            }
-            MotionEvent.ACTION_CANCEL -> threeFingers = false
-        }
-        if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
-            val i = event.actionIndex
-            fingerStarts[event.getPointerId(i)] = event.getX(i) to event.getY(i)
-        }
-        return taken || threeFingers
     }
 
     /** The fingers as touch points, for KWin and its apps to handle (taps, gestures, scrolling). */
@@ -962,10 +895,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         /** String extra: desktop id of a Linux app to start in the session. */
         const val EXTRA_LAUNCH = "app.droidnux.desktop.LAUNCH"
         private const val KEYBOARD_MARGIN_DP = 48
-        /** From the first finger to the last one leaving: longer is a hold, not a tap. */
-        private const val THREE_FINGER_TAP_MS = 400L
-        /** How long a first finger waits before reaching the desktop. */
-        private const val TOUCH_HOLD_MS = 60L
         private const val KEYBOARD_PAN_MS = 250L
         private const val LAUNCH_ATTEMPTS = 120
         private const val LAUNCH_RETRY_MS = 500L
