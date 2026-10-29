@@ -16,6 +16,7 @@ import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
 import app.droidnux.container.Distro
 import app.droidnux.container.InstallProgress
+import app.droidnux.desktop.DesktopSessionService
 import app.droidnux.display.DisplayCore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -207,8 +208,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** Called when a screen comes back: the session may have started or ended, apps may have changed. */
     fun refresh() {
-        val processes = getApplication<Application>().getSystemService(ActivityManager::class.java).runningAppProcesses
-        _state.update { state -> state.copy(sessionRunning = processes.orEmpty().any { it.processName.endsWith(":desktop") }) }
+        // The session's service, not the desktop's process: that outlives a session ended in the desktop by a moment,
+        // the Home is back by then. Apps still get their own services from getRunningServices.
+        @Suppress("DEPRECATION")
+        val services = getApplication<Application>().getSystemService(ActivityManager::class.java).getRunningServices(Int.MAX_VALUE)
+        val running = services.orEmpty().any { it.started && it.service.className == DesktopSessionService::class.java.name }
+        _state.update { state -> state.copy(sessionRunning = running) }
         if (_state.value.ready && SystemClock.elapsedRealtime() - appsLoadedAt > APPS_REFRESH_MS) {
             loadApps()
             viewModelScope.launch { refreshPackages() } // apt in the desktop's terminal
