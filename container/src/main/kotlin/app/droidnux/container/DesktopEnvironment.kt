@@ -117,6 +117,8 @@ object DesktopEnvironment {
         // The browser pinned in the panel (PLASMA_LAYOUT).
         "firefox-esr",
         "fonts-dejavu-core", "tzdata",
+        // HTTPS for the desktop's tools (Flatpak's remotes, curl, git): the slim image has no CA certificates.
+        "ca-certificates",
         // Chinese, Japanese, Korean and emoji: without them web pages show empty boxes.
         "fonts-noto-cjk", "fonts-noto-color-emoji",
         // Android's language in the desktop's apps (SESSION generates the locale).
