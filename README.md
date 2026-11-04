@@ -10,7 +10,7 @@ phones.
 > DroidNux is in early development and has no release yet. It is tested on a Galaxy Tab S9+ and a Galaxy S26 Ultra.
 
 <p align="center">
-  <img src=".github/screenshots/desktop.png" alt="Plasma with Dolphin, System Monitor and Konsole" width="100%">
+  <img src=".github/screenshots/home.png" alt="Home: the desktop, favorites and all apps" width="100%">
 </p>
 
 ## What you get
@@ -48,17 +48,19 @@ phones.
 ## Screenshots
 
 <p align="center">
-  <img src=".github/screenshots/home.png" alt="Home: the desktop, favorites and all apps" width="49%">
-  <img src=".github/screenshots/store.png" alt="Store: featured apps and categories" width="49%">
+  <img src=".github/screenshots/desktop.png" alt="Plasma with Dolphin and System Monitor" width="49%">
+  <img src=".github/screenshots/session-menu.png" alt="The in-session panel" width="49%">
 </p>
 <p align="center">
-  <img src=".github/screenshots/session-menu.png" alt="The in-session panel" width="49%">
+  <img src=".github/screenshots/store.png" alt="Store: featured apps and categories" width="49%">
   <img src=".github/screenshots/keyboard.png" alt="The PC keyboard over the desktop" width="49%">
 </p>
 
 ## Requirements
 
-- Android 10 or later, arm64, with a **Snapdragon (Adreno) GPU**.
+- Android 10 or later, arm64.
+- A **Snapdragon (Adreno) GPU** for hardware acceleration. DroidNux also runs on other devices without it, such as
+  the Galaxy Tab S9 FE (Mali) and the Pixel 9a (Tensor).
 - Linux kernel 5.10 or later.
 - A few GB of free space: the base install takes about 2 GB.
 - In Android's developer options, "Disable child process restrictions": without it, Android stops the desktop once it
