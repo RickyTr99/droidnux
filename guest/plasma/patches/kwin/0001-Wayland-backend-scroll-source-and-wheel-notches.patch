@@ -1,0 +1,68 @@
+Subject: [PATCH] Wayland backend: pass on the scroll source and wheel notches
+
+The nested backend dropped them (a TODO): a touchpad scrolled like a wheel
+in every client, in steps, and wheels lost their notches.
+---
+diff --git a/src/backends/wayland/wayland_backend.cpp b/src/backends/wayland/wayland_backend.cpp
+index d326d93..f0bf15f 100644
+--- a/src/backends/wayland/wayland_backend.cpp
++++ b/src/backends/wayland/wayland_backend.cpp
+@@ -117,7 +117,28 @@ WaylandInputDevice::WaylandInputDevice(KWayland::Client::Pointer *pointer, Wayla
+         }
+         Q_EMIT pointerButtonChanged(button, state, std::chrono::milliseconds(time), this);
+     });
+-    // TODO: Send discreteDelta and source as well.
++    // The source and the wheel's notches come before the axis events of their frame.
++    connect(pointer, &Pointer::axisSourceChanged, this, [this](Pointer::AxisSource source) {
++        switch (source) {
++        case Pointer::AxisSource::Wheel:
++            m_axisSource = PointerAxisSource::Wheel;
++            break;
++        case Pointer::AxisSource::Finger:
++            m_axisSource = PointerAxisSource::Finger;
++            break;
++        case Pointer::AxisSource::Continuous:
++            m_axisSource = PointerAxisSource::Continuous;
++            break;
++        case Pointer::AxisSource::WheelTilt:
++            m_axisSource = PointerAxisSource::WheelTilt;
++            break;
++        default:
++            m_axisSource = PointerAxisSource::Unknown;
++        }
++    });
++    connect(pointer, &Pointer::axisDiscreteChanged, this, [this](Pointer::Axis nativeAxis, qint32 discreteDelta) {
++        m_axisDiscrete[nativeAxis == Pointer::Axis::Vertical ? 1 : 0] = discreteDelta;
++    });
+     connect(pointer, &Pointer::axisChanged, this, [this](quint32 time, Pointer::Axis nativeAxis, qreal delta) {
+         PointerAxis axis;
+         switch (nativeAxis) {
+@@ -130,10 +151,14 @@ WaylandInputDevice::WaylandInputDevice(KWayland::Client::Pointer *pointer, Wayla
+         default:
+             Q_UNREACHABLE();
+         }
+-        Q_EMIT pointerAxisChanged(axis, delta, 0, PointerAxisSource::Unknown, false, std::chrono::milliseconds(time), this);
++        qint32 &discrete = m_axisDiscrete[axis == PointerAxis::Vertical ? 1 : 0];
++        Q_EMIT pointerAxisChanged(axis, delta, discrete * 120, m_axisSource, false, std::chrono::milliseconds(time), this);
++        discrete = 0;
+     });
+ 
+     connect(pointer, &Pointer::frame, this, [this]() {
++        m_axisSource = PointerAxisSource::Unknown;
++        m_axisDiscrete[0] = m_axisDiscrete[1] = 0;
+         Q_EMIT pointerFrame(this);
+     });
+ 
+diff --git a/src/backends/wayland/wayland_backend.h b/src/backends/wayland/wayland_backend.h
+index d7039e3..8156994 100644
+--- a/src/backends/wayland/wayland_backend.h
++++ b/src/backends/wayland/wayland_backend.h
+@@ -94,6 +94,8 @@ private:
+     std::unique_ptr<KWayland::Client::PointerSwipeGesture> m_swipeGesture;
+ 
+     QSet<quint32> m_pressedKeys;
++    PointerAxisSource m_axisSource = PointerAxisSource::Unknown;
++    qint32 m_axisDiscrete[2] = {}; // horizontal, vertical
+ };
+ 
+ class WaylandInputBackend : public InputBackend

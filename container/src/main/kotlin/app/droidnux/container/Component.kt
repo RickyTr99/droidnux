@@ -35,7 +35,7 @@ data class Component(
             guestPath = DesktopEnvironment.MESA_PREFIX,
         )
 
-        /** KSvg and KIconThemes with fewer file lookups, and system monitor plugins for Android: guest/plasma. */
+        /** KSvg and KIconThemes with fewer file lookups, KWin passing on the scroll source, and system monitor plugins for Android: guest/plasma. */
         val PLASMA = Component(
             id = "plasma",
             version = "6.13.0-dn4",
