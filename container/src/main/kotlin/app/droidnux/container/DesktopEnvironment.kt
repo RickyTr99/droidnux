@@ -73,6 +73,9 @@ object DesktopEnvironment {
     private const val UPOWER_SCRIPT = "$GUEST_LIB_DIR/droidnux-upower"
     private const val SYSTEM_BUS_CONF = "$GUEST_LIB_DIR/system-bus.conf"
 
+    /** bubblewrap for Flatpak, on what Burrow emulates ([BWRAP]). */
+    private const val BWRAP_SCRIPT = "$GUEST_LIB_DIR/droidnux-bwrap"
+
     /** Groups the desktop's processes by app for System Monitor ([APP_GROUPS]). */
     private const val APP_GROUPS_SCRIPT = "$GUEST_LIB_DIR/droidnux-app-groups"
 
@@ -201,6 +204,7 @@ object DesktopEnvironment {
         writeFile(rootfs, WALLET_SCRIPT, WALLET.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, UPOWER_SCRIPT, UPOWER.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, APP_GROUPS_SCRIPT, APP_GROUPS.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, BWRAP_SCRIPT, BWRAP.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, SYSTEM_BUS_CONF, SYSTEM_BUS.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/powerdevilrc", PLASMA_POWERDEVILRC.toByteArray())
         hidePowerProfiles(rootfs)
@@ -593,6 +597,10 @@ ${USER_SESSION.prependIndent("        ")}
             # Electron apps (VS Code, Discord, Obsidian): Chromium's sandbox needs user
             # namespaces or its set-user-ID helper, neither of which Android allows.
             export ELECTRON_DISABLE_SANDBOX=1
+            # Flatpak's apps: Android has no user namespaces for bwrap's sandbox.
+            export FLATPAK_BWRAP=$BWRAP_SCRIPT
+            # Their menu entries, as Flatpak's profile.d script would add after a login.
+            export XDG_DATA_DIRS=${'$'}HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:${'$'}{XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 ${GPU_ENV.prependIndent("            ")}
             if [ -n "${'$'}MESA_GPU" ]; then
                 # KWin renders into GBM buffers from the app (Mesa patch 0004).
@@ -1349,6 +1357,276 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
 
     // Written by earlier versions: an autoconfig script hiding Firefox's
     // "sandbox disabled" bar, and what only XFCE and proot used.
+    /**
+     * bwrap for Flatpak ([BWRAP_SCRIPT]): the sandbox built with what Burrow emulates
+     * (unshare, bind mounts as bindings, chroot), since Android allows apps no user namespaces.
+     */
+    private val BWRAP = """
+        #!/usr/bin/python3
+        # Written by DroidNux: bubblewrap for the container. Android gives apps no
+        # user namespaces, so bwrap's own sandbox cannot be built. Burrow (the
+        # container's runtime) emulates what bwrap's sandboxes need instead: unshare()
+        # of a user namespace lets a process mount, a bind mount becomes a binding of
+        # that process and its children, and chroot() moves to the new root. This
+        # builds the root bwrap's options describe in a directory of /tmp with those
+        # calls, then runs the command in it.
+        #
+        # Not a security boundary (no more than Burrow): namespaces, seccomp filters
+        # (--seccomp) and read-only mounts are not applied. Flatpak runs its apps with
+        # it (FLATPAK_BWRAP, set by the session).
+        import ctypes
+        import json
+        import os
+        import shutil
+        import sys
+        import warnings  # noqa: F401 os.execvpe() imports it, after chroot, where Python's library is gone
+
+        VERSION = "bubblewrap 0.11.0 (droidnux)"
+        STAGING = "/tmp/.droidnux-bwrap"
+        MS_BIND, MS_REC = 4096, 16384
+
+        libc = ctypes.CDLL(None, use_errno=True)
+
+        # Options without an argument, and how many the others take (the operations
+        # building the root are handled in build()).
+        FLAGS = {
+            "--unshare-user", "--unshare-user-try", "--unshare-ipc", "--unshare-pid", "--unshare-net", "--unshare-uts",
+            "--unshare-cgroup", "--unshare-cgroup-try", "--unshare-all", "--share-net", "--disable-userns",
+            "--assert-userns-disabled", "--clearenv", "--new-session", "--die-with-parent", "--as-pid-1", "--level-prefix",
+        }
+        IGNORED = {"--hostname": 1, "--uid": 1, "--gid": 1, "--cap-add": 1, "--cap-drop": 1, "--exec-label": 1,
+                   "--file-label": 1, "--userns": 1, "--userns2": 1, "--pidns": 1, "--size": 1}
+        OPERATIONS = {
+            "--bind": 2, "--bind-try": 2, "--ro-bind": 2, "--ro-bind-try": 2, "--dev-bind": 2, "--dev-bind-try": 2,
+            "--bind-fd": 2, "--ro-bind-fd": 2,
+            "--remount-ro": 1, "--proc": 1, "--dev": 1, "--tmpfs": 1, "--mqueue": 1, "--dir": 1, "--file": 2,
+            "--bind-data": 2, "--ro-bind-data": 2, "--symlink": 2, "--chmod": 2, "--perms": 1, "--lock-file": 1,
+        }
+        # The session's variables for the app's Mesa (/opt/droidnux/mesa, built for the
+        # distro's /usr), dropped where the new root has another /usr. The Mesa of
+        # Flatpak's runtimes has no Turnip for KGSL, takes the render node for Zink's and
+        # gives up: it renders in software instead.
+        GPU_VARIABLES = (
+            "VK_DRIVER_FILES", "__GLX_VENDOR_LIBRARY_NAME", "__EGL_VENDOR_LIBRARY_FILENAMES", "MESA_LOADER_DRIVER_OVERRIDE",
+            "GALLIUM_DRIVER", "LIBVA_DRIVERS_PATH", "LIBVA_DRIVER_NAME", "GBM_BACKENDS_PATH",
+        )
+        SETTINGS = {
+            "--setenv": 2, "--unsetenv": 1, "--chdir": 1, "--info-fd": 1, "--json-status-fd": 1, "--block-fd": 1,
+            "--userns-block-fd": 1, "--sync-fd": 1, "--seccomp": 1, "--add-seccomp-fd": 1, "--argv0": 1,
+        }
+
+
+        def fail(message):
+            sys.stderr.write("bwrap: %s\n" % message)
+            sys.exit(1)
+
+
+        def read_fd(fd):
+            with os.fdopen(int(fd), "rb") as f:
+                return f.read()
+
+
+        # The options and the command; --args FD inserts NUL-separated arguments.
+        def parse(argv):
+            args = list(argv)
+            options, i = [], 0
+            while i < len(args):
+                a = args[i]
+                if a == "--":
+                    return options, args[i + 1:]
+                if not a.startswith("--"):
+                    return options, args[i:]
+                if a == "--args":
+                    data = read_fd(args[i + 1]).split(b"\0")
+                    if data and data[-1] == b"":
+                        data.pop()
+                    args[i:i + 2] = [os.fsdecode(d) for d in data]
+                    continue
+                if a in ("--version", "--help"):
+                    print(VERSION)
+                    sys.exit(0)
+                if a in ("--overlay-src", "--overlay", "--tmp-overlay", "--ro-overlay"):
+                    fail("%s is not supported" % a)
+                count = 0 if a in FLAGS else IGNORED.get(a, OPERATIONS.get(a, SETTINGS.get(a)))
+                if count is None:
+                    fail("unknown option %s" % a)
+                if i + count >= len(args):
+                    fail("%s takes %d arguments" % (a, count))
+                options.append((a, args[i + 1:i + 1 + count]))
+                i += 1 + count
+            fail("no command")
+
+
+        def mount(source, target):
+            if libc.mount(os.fsencode(source), os.fsencode(target), None, MS_BIND | MS_REC, None) != 0:
+                e = ctypes.get_errno()
+                fail("cannot bind %s to %s: %s" % (source, target, os.strerror(e)))
+
+
+        # Removes the roots of bwrap processes gone (the command keeps the pid).
+        def clean_staging():
+            try:
+                names = os.listdir(STAGING)
+            except FileNotFoundError:
+                return
+            for name in names:
+                if name.isdigit() and not os.path.exists("/proc/" + name):
+                    shutil.rmtree(os.path.join(STAGING, name), ignore_errors=True)
+
+
+        # Builds the new root at root, from the operations in order.
+        def build(root, options):
+            extra = os.path.join(root, ".droidnux")  # data files and empty directories, bound where asked
+            count = [0]
+            perms = [None]
+
+            def at(dest):
+                return root + "/" + os.path.normpath("/" + dest).lstrip("/")
+
+            def fresh(kind):
+                count[0] += 1
+                os.makedirs(extra, exist_ok=True)
+                return os.path.join(extra, "%s%d" % (kind, count[0]))
+
+            def mount_point(target, directory):
+                try:
+                    if directory:
+                        os.makedirs(target, exist_ok=True)
+                    elif not os.path.lexists(target):
+                        os.makedirs(os.path.dirname(target), exist_ok=True)
+                        open(target, "a").close()
+                except OSError:
+                    pass  # a read-only place: the binding needs no mount point
+
+            def mode(default):
+                m, perms[0] = perms[0], None
+                return m if m is not None else default
+
+            for name, args in options:
+                if name in ("--bind", "--bind-try", "--ro-bind", "--ro-bind-try", "--dev-bind", "--dev-bind-try",
+                            "--bind-fd", "--ro-bind-fd"):
+                    source, target = args[0], at(args[1])
+                    if name.endswith("-fd"):
+                        # The directory open on the descriptor (Burrow gives its guest path).
+                        source = os.readlink("/proc/self/fd/" + args[0])
+                        os.close(int(args[0]))
+                    if not os.path.exists(source):
+                        if name.endswith("-try"):
+                            continue
+                        fail("cannot find %s" % source)
+                    mount_point(target, os.path.isdir(source))
+                    mount(source, target)
+                elif name in ("--proc", "--dev"):
+                    target = at(args[0])
+                    mount_point(target, True)
+                    mount("/" + name[2:], target)
+                elif name in ("--tmpfs", "--dir", "--mqueue"):
+                    target = at(args[0])
+                    m = mode(0o755)
+                    try:
+                        busy = name == "--tmpfs" and os.path.isdir(target) and bool(os.listdir(target))
+                        if not busy:
+                            os.makedirs(target, exist_ok=True)
+                            os.chmod(target, m)
+                    except OSError:
+                        busy = True  # in a binding of the host's (/dev/shm)
+                    if busy:
+                        # Over a directory with files, or where none can be made: an empty one of ours.
+                        empty = fresh("tmpfs")
+                        os.mkdir(empty, m)
+                        mount(empty, target)
+                elif name in ("--file", "--bind-data", "--ro-bind-data"):
+                    data = read_fd(args[0])
+                    target = at(args[1])
+                    source = fresh("file")
+                    with open(source, "wb") as f:
+                        f.write(data)
+                    os.chmod(source, mode(0o666 if name == "--file" else 0o600))
+                    mount_point(target, False)
+                    mount(source, target)
+                elif name == "--symlink":
+                    target = at(args[1])
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    if os.path.islink(target) and os.readlink(target) == args[0]:
+                        continue
+                    os.symlink(args[0], target)
+                elif name == "--chmod":
+                    os.chmod(at(args[1]), int(args[0], 8))
+                elif name == "--perms":
+                    perms[0] = int(args[0], 8)
+
+
+        def main():
+            options, command = parse(sys.argv[1:])
+            clean_staging()
+            os.makedirs(STAGING, mode=0o1777, exist_ok=True)
+            root = os.path.join(STAGING, str(os.getpid()))
+            shutil.rmtree(root, ignore_errors=True)
+            os.makedirs(root, mode=0o755)
+            os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWNS)
+            build(root, options)
+
+            env = dict(os.environ)
+            directory = None
+            argv0 = None
+            keep = []  # descriptors held until exec: lock files
+            for name, args in options:
+                if name == "--clearenv":
+                    env.clear()
+                elif name == "--setenv":
+                    env[args[0]] = args[1]
+                elif name == "--unsetenv":
+                    env.pop(args[0], None)
+                elif name == "--chdir":
+                    directory = args[0]
+                elif name == "--argv0":
+                    argv0 = args[0]
+                elif name in ("--seccomp", "--add-seccomp-fd"):
+                    os.close(int(args[0]))  # shortcut: the filter is not applied; Burrow is no sandbox either
+                elif name in ("--block-fd", "--userns-block-fd"):
+                    read_fd(args[0])
+                elif name in ("--info-fd", "--json-status-fd"):
+                    with os.fdopen(int(args[0]), "w") as f:
+                        json.dump({"child-pid": os.getpid()}, f)
+                        f.write("\n")
+                elif name == "--lock-file":
+                    try:
+                        keep.append(os.open(root + "/" + args[0].lstrip("/"), os.O_RDONLY))
+                    except OSError:
+                        pass
+                elif name == "--die-with-parent":
+                    libc.prctl(1, 9)  # PR_SET_PDEATHSIG, SIGKILL
+                elif name == "--new-session":
+                    os.setsid()
+            for fd in keep:
+                os.set_inheritable(fd, True)
+            try:
+                same_usr = os.path.samefile(root + "/usr", "/usr")
+            except OSError:
+                same_usr = False
+            if not same_usr:
+                for name in GPU_VARIABLES:
+                    env.pop(name, None)
+                env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+
+            here = os.getcwd()
+            os.chroot(root)
+            for d in (directory, here, os.environ.get("HOME"), "/"):
+                if d:
+                    try:
+                        os.chdir(d)
+                        break
+                    except OSError:
+                        pass
+            try:
+                os.execvpe(command[0], [argv0 or command[0]] + command[1:], env)
+            except OSError as e:
+                fail("execvp %s: %s" % (command[0], e.strerror))
+
+
+        main()
+    """.trimIndent()
+
     private val OBSOLETE_FILES = listOf(
         "/usr/lib/firefox-esr/defaults/pref/droidnux-autoconfig.js",
         "/usr/lib/firefox-esr/droidnux.cfg",
