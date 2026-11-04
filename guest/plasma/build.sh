@@ -1,8 +1,10 @@
 #!/bin/sh
 # Builds the DroidNux Plasma component: Debian's KSvg and KIconThemes with
 # DroidNux's patches (guest/plasma/patches/<library>), which save the file
-# lookups of Plasma's interface and of KDE's icons, slow in the container, and
-# ksystemstats' GPU and disk plugins, which find Android's Adreno and storage.
+# lookups of Plasma's interface and of KDE's icons, slow in the container,
+# KWin's library, whose nested Wayland backend passes on how the app's
+# compositor scrolls (touchpad or wheel), and ksystemstats' GPU, disk and
+# network plugins, which find Android's Adreno, storage and network.
 # Runs on a Debian of the release the app installs: in CI
 # (.github/workflows/plasma.yml) or inside the container itself.
 #
@@ -34,7 +36,7 @@ if [ "${DROIDNUX_PLASMA_DEPS:-}" = install ]; then
         libkf6colorscheme-dev libkf6coreaddons-dev libkf6guiaddons-dev libkirigami-dev \
         qt6-base-private-dev qt6-declarative-private-dev qt6-tools-dev libkf6breezeicons-dev \
         libkf6configwidgets-dev libkf6i18n-dev libkf6widgetsaddons-dev libxkbcommon-dev
-    apt-get build-dep -y -q ksystemstats
+    apt-get build-dep -y -q ksystemstats kwin
 fi
 
 cd "$WORK"
@@ -63,12 +65,13 @@ fetch() {
 }
 build kf6-ksvg "$KSVG_DEB" ksvg KF6Svg libKF6Svg.so.6 libkf6svg6
 build kf6-kiconthemes "$KICONTHEMES_DEB" kiconthemes KF6IconThemes libKF6IconThemes.so.6 libkf6iconthemes6
+build kwin "$KWIN_DEB" kwin kwin libkwin.so.6 libkwin6
 
 # ksystemstats' plugins, under the names of the distro's they replace (found first).
 fetch ksystemstats "$KSYSTEMSTATS_DEB" ksystemstats
 PLUGINS=$STAGE/$LIBDIR/qt6/plugins/ksystemstats
 mkdir -p "$PLUGINS"
-for plugin in ksystemstats_plugin_gpu ksystemstats_plugin_disk; do
+for plugin in ksystemstats_plugin_gpu ksystemstats_plugin_disk ksystemstats_plugin_network; do
     cmake --build build/ksystemstats --target "$plugin" -j"$(nproc)"
     cp -L "build/ksystemstats/bin/$plugin.so" "$PLUGINS/$plugin.so"
     strip --strip-unneeded "$PLUGINS/$plugin.so"

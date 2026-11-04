@@ -57,6 +57,17 @@
                 android:value="Runs a Linux desktop session (display server and container) chosen by the user" />
         </service>
 
+        <!-- The log a tester shares from Diagnostics (SessionLog). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.logs"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/log_paths" />
+        </provider>
+
         <!-- Optional: gives the desktop the keys Android keeps (Meta, Alt+Tab). -->
         <service
             android:name=".desktop.DesktopKeysService"

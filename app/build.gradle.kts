@@ -16,6 +16,11 @@ val signingProps = Properties().apply {
     }
 }
 
+// The commit a debug build comes from, in its version: testers' logs say which build they ran.
+val gitCommit = runCatching {
+    providers.exec { commandLine("git", "rev-parse", "--short", "HEAD") }.standardOutput.asText.get().trim()
+}.getOrDefault("")
+
 android {
     namespace = "app.droidnux"
     compileSdk = libs.versions.compileSdk.get().toInt()
@@ -27,6 +32,8 @@ android {
         targetSdk = libs.versions.targetSdk.get().toInt()
         versionCode = 1
         versionName = "0.0.1-dev"
+        // -Pdiagnostic: the session logs all KWin, Qt and Mesa say (testers' devices).
+        buildConfigField("boolean", "DIAGNOSTIC", project.hasProperty("diagnostic").toString())
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -46,6 +53,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
+            if (gitCommit.isNotEmpty()) versionNameSuffix = "+$gitCommit"
         }
         release {
             if (!signingProps.isEmpty) signingConfig = signingConfigs.getByName("release")
@@ -65,6 +73,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {

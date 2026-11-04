@@ -4,7 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
-import android.content.pm.ApplicationInfo
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.Typeface
@@ -14,6 +14,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import android.util.TypedValue
@@ -76,6 +77,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     /** Interface size the user chose, 1 = the default; independent of the resolution ([desktopScale]). */
     private var uiScale = 1f
     private lateinit var menu: SessionMenu
+    private lateinit var pcKeyboard: PcKeyboard
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -88,7 +90,11 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 clipboard.setPrimaryClip(ClipData.newPlainText("DroidNux", text))
             }
         }
-        DisplayServer.onTextInput = { active -> handler.post { onTextField(active) } }
+        DisplayServer.onTextInput = { active ->
+            val at = SystemClock.uptimeMillis()
+            handler.post { onTextField(active, at) }
+        }
+        DisplayServer.onScale = { scale -> handler.post { followKWinScale(scale) } }
         val settings = DesktopSettings.load(this)
         desktopScale = settings.scale
         desktopScale = scaleOf(intent)
@@ -124,18 +130,20 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             setBackgroundColor(Color.BLACK)
             addView(surfaceView)
         }
-        if (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0) {
-            overlay = TextView(this).apply {
-                setTextColor(Color.WHITE)
-                setBackgroundColor(0x88000000.toInt())
-                typeface = Typeface.MONOSPACE
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                setPadding(12, 6, 12, 6)
-            }
-            root.addView(overlay, FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
-            ))
+        overlay = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            setBackgroundColor(0x88000000.toInt())
+            typeface = Typeface.MONOSPACE
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setPadding(12, 6, 12, 6)
         }
+        root.addView(overlay, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
+        ))
+        pcKeyboard = PcKeyboard(this, keyboardListener)
+        root.addView(pcKeyboard.view, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
+        ))
         menu = SessionMenu(this, menuListener)
         root.addView(menu.view, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
@@ -152,7 +160,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
         // Back opens the menu instead of leaving: it has "Back to Android".
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { toggleMenu() }
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT) { onBack() }
         }
         window.insetsController?.apply {
             hide(WindowInsets.Type.systemBars())
@@ -184,13 +192,15 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     private var keyboardHeight = 0
+    private var pcKeyboardHeight = 0
 
     /** Moves the desktop up just enough for the pointer to stay above the soft keyboard. */
     private fun panForKeyboard() {
         val pointer = Presenter.cursorY / scale // desktop pixels to surface pixels
         val margin = KEYBOARD_MARGIN_DP * resources.displayMetrics.density
-        val visibleBottom = surfaceView.height - keyboardHeight
-        val shift = if (keyboardHeight == 0) 0f else (pointer + margin - visibleBottom).coerceIn(0f, keyboardHeight.toFloat())
+        val covered = maxOf(keyboardHeight, pcKeyboardHeight)
+        val visibleBottom = surfaceView.height - covered
+        val shift = if (covered == 0) 0f else (pointer + margin - visibleBottom).coerceIn(0f, covered.toFloat())
         surfaceView.animate().translationY(-shift).setDuration(KEYBOARD_PAN_MS).start()
     }
 
@@ -198,19 +208,23 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
      * The desktop as it is now, for the app's home screen. At the screen's size: the home shows it from
      * edge to edge, and a smaller one sampled by nearest pixel looks grainy there.
      */
-    private fun saveThumbnail() {
-        if (!DisplayServer.running || surfaceWidth == 0) return
+    private fun saveThumbnail(then: (() -> Unit)? = null) {
+        if (!DisplayServer.running || surfaceWidth == 0 || sessionEnded) {
+            then?.invoke()
+            return
+        }
         val width = surfaceWidth
         val height = surfaceHeight
         Thread {
             runCatching {
-                val pixels = DisplayServer.snapshot(width, height) ?: return@Thread
+                val pixels = DisplayServer.snapshot(width, height) ?: return@runCatching
                 val bitmap = android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
                 val file = thumbnailFile(this)
                 val temp = java.io.File(file.path + ".new")
                 temp.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.WEBP_LOSSY, 90, it) }
                 temp.renameTo(file)
             }.onFailure { Log.w(TAG, "cannot save the desktop's thumbnail", it) }
+            then?.let { handler.post(it) }
         }.start()
     }
 
@@ -236,6 +250,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onResume() {
         super.onResume()
+        // Back to a paused desktop: it continues.
+        SessionPause.resume(this)
         reloadSettings()
         AudioFocus.reclaim()
         surfaceView.requestFocus()
@@ -251,7 +267,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     @Deprecated("Android 12 and older; newer versions use the OnBackInvokedCallback")
-    override fun onBackPressed() = toggleMenu()
+    override fun onBackPressed() = onBack()
+
+    /** Back hides the keyboard first, then opens or closes the menu. */
+    private fun onBack() {
+        if (pcKeyboard.isShown && !menu.isOpen) pcKeyboard.hide() else toggleMenu()
+    }
 
     override fun onDestroy() {
         if (focused === this) focused = null
@@ -259,6 +280,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             current = null
             DisplayServer.onClipboard = null
             DisplayServer.onTextInput = null
+            DisplayServer.onScale = null
         }
         super.onDestroy()
     }
@@ -276,6 +298,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             clipboardToDesktop()
         } else {
             releaseKeys()
+            pcKeyboard.releaseAll()
         }
     }
 
@@ -553,6 +576,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         } else {
             showCursor(false) // a finger needs no pointer; the next mouse motion brings it back
             lastInputTouch = true
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> lastFingerDown = SystemClock.uptimeMillis()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> lastFingerUp = SystemClock.uptimeMillis()
+            }
             sendTouch(event)
         }
         return true
@@ -581,22 +608,82 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** The last input came from a finger on the screen: a text field getting the focus then shows the soft keyboard. */
     private var lastInputTouch = false
+    /** The session is over: no picture of what is left of the desktop. */
+    private var sessionEnded = false
+    /** When the first finger touched the desktop and when the last one left (uptime ms). */
+    private var lastFingerDown = 0L
+    private var lastFingerUp = 0L
+    /** A text field has the focus, since when (uptime ms). */
+    private var textFieldActive = false
+    private var textFieldSince = 0L
 
     /** The permission to change Android's brightness is asked once per desktop. */
     private var askedWriteSettings = false
     /** The soft keyboard was shown for a text field, so it hides when the field loses the focus. */
     private var keyboardForTextField = false
 
-    /** A text field of the desktop gained or lost the focus (KWin's input method). */
-    private fun onTextField(active: Boolean) {
+    /**
+     * A text field of the desktop gained or lost the focus, or the focused one
+     * changed, as a tap on it does (KWin's input method).
+     */
+    private fun onTextField(active: Boolean, at: Long) {
         val imm = getSystemService(InputMethodManager::class.java)
-        if (active && lastInputTouch && !menu.isOpen) {
-            surfaceView.requestFocus()
-            imm.showSoftInput(surfaceView, 0)
+        val activated = active && !textFieldActive
+        textFieldActive = active
+        // Any field focused while using the fingers, a page's own focus included: telling
+        // a tap from it by timing missed quick taps. A tap on the field already focused
+        // tells it again after the release.
+        val fingerOn = lastFingerDown <= at && (lastFingerUp < lastFingerDown || lastFingerUp >= at)
+        val tapped = lastInputTouch && (activated ||
+            lastFingerDown > textFieldSince && (fingerOn || at - lastFingerUp <= TAP_FOCUS_MS))
+        if (activated) textFieldSince = at
+        // With a physical keyboard attached, as Android does with its own soft keyboard.
+        val hardKeyboard = resources.configuration.hardKeyboardHidden == Configuration.HARDKEYBOARDHIDDEN_NO
+        if (active && tapped && !menu.isOpen && !hardKeyboard) {
+            Log.d(TAG, "keyboard for a text field, ${if (activated) "focused" else "tapped again"}")
+            showKeyboard()
             keyboardForTextField = true
         } else if (!active && keyboardForTextField) {
             imm.hideSoftInputFromWindow(surfaceView.windowToken, 0)
+            pcKeyboard.hide()
             keyboardForTextField = false
+        }
+    }
+
+    // -- Keyboard ------------------------------------------------------------
+
+    private fun showKeyboard() = pcKeyboard.show(DesktopSettings.load(this).xkbLayout())
+
+    /** Hides whichever keyboard shows, or shows the full one. */
+    private fun toggleKeyboard() {
+        val androidShown = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+            window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
+        when {
+            androidShown -> getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(surfaceView.windowToken, 0)
+            pcKeyboard.isShown -> pcKeyboard.hide()
+            else -> showKeyboard()
+        }
+    }
+
+    private val keyboardListener = object : PcKeyboard.Listener {
+        override fun onKey(evdevKeycode: Int, down: Boolean) {
+            if (DisplayServer.running) DisplayServer.key(evdevKeycode, down)
+        }
+
+        override fun onPaste() {
+            clipboard.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this@DesktopActivity)
+                ?.toString()?.takeIf { it.isNotEmpty() }?.let { DisplayServer.commitText(it) }
+        }
+
+        override fun onAndroidKeyboard() {
+            pcKeyboard.hide()
+            surfaceView.requestFocus()
+            getSystemService(InputMethodManager::class.java).showSoftInput(surfaceView, 0)
+        }
+
+        override fun onHeight(height: Int) {
+            pcKeyboardHeight = height
+            panForKeyboard()
         }
     }
 
@@ -608,29 +695,29 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         } else {
             // The menu takes the keys from now on, their releases included.
             releaseKeys()
+            pcKeyboard.releaseAll()
             // The pointer must reach the menu: Android draws it again until the menu closes.
             surfaceView.releasePointerCapture()
-            menu.open(trackpadMode, desktopScale, uiScale)
+            menu.open(trackpadMode, overlay?.visibility == View.VISIBLE, desktopScale, uiScale)
         }
     }
 
     private val menuListener = object : SessionMenu.Listener {
-        override fun onToggleKeyboard() {
-            val imm = getSystemService(InputMethodManager::class.java)
-            val shown = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
-            if (shown) {
-                imm.hideSoftInputFromWindow(surfaceView.windowToken, 0)
-            } else {
-                surfaceView.requestFocus()
-                imm.showSoftInput(surfaceView, 0)
-            }
-        }
+        override fun onToggleKeyboard() = toggleKeyboard()
 
         override fun onTrackpadChanged(trackpad: Boolean) {
             trackpadMode = trackpad
             DesktopSettings.update(this@DesktopActivity) { it.copy(trackpad = trackpad) }
         }
+
+        override fun onStatsChanged(shown: Boolean) {
+            DesktopSettings.update(this@DesktopActivity) { it.copy(stats = shown) }
+            overlay?.visibility = if (shown) View.VISIBLE else View.GONE
+            handler.removeCallbacks(overlayUpdater)
+            if (shown) handler.post(overlayUpdater)
+        }
+
+        override fun onScreenshot() = takeScreenshot()
 
         override fun resolutionFor(scale: Float) =
             "${(surfaceWidth * scale).toInt() and 1.inv()} × ${(surfaceHeight * scale).toInt() and 1.inv()}"
@@ -680,16 +767,52 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 .setStreamVolume(AudioManager.STREAM_MUSIC, (volume * volumeSteps()).roundToInt(), 0)
         }
 
-        override fun onBackToAndroid() {
-            moveTaskToBack(true)
+        override fun onBackToAndroid() = showHome()
+
+        // The picture first, while the desktop still draws; then frozen, and Android in front.
+        override fun onPauseSession() = saveThumbnail {
+            SessionPause.pause(this@DesktopActivity)
+            showHome()
         }
 
-        override fun onExit() = DesktopSessionService.stop(this@DesktopActivity)
+        // The picture first: once the session stops, the pause has no desktop to take it from.
+        override fun onExit() = saveThumbnail { DesktopSessionService.stop(this@DesktopActivity) }
 
         override fun onClosed() {
             surfaceView.requestFocus()
             capturePointer()
         }
+    }
+
+    /** The app's Home in front, as its launcher icon brings it (the desktop's task stays behind). */
+    private fun showHome() {
+        startActivity(packageManager.getLaunchIntentForPackage(packageName)!!.addFlags(Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED))
+    }
+
+    /** The desktop at its own resolution, as a PNG in Android's Pictures/DroidNux. */
+    private fun takeScreenshot() {
+        val width = (surfaceWidth * desktopScale).toInt() and 1.inv()
+        val height = (surfaceHeight * desktopScale).toInt() and 1.inv()
+        Thread {
+            val saved = runCatching {
+                val pixels = DisplayServer.snapshot(width, height) ?: error("no picture from the display server")
+                val bitmap = android.graphics.Bitmap.createBitmap(pixels, width, height, android.graphics.Bitmap.Config.ARGB_8888)
+                val name = "DroidNux_${java.text.SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ROOT).format(java.util.Date())}.png"
+                val values = android.content.ContentValues().apply {
+                    put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+                    put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
+                    put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/DroidNux")
+                }
+                val uri = contentResolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+                    ?: error("no MediaStore entry")
+                contentResolver.openOutputStream(uri)!!.use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }
+            }.onFailure { Log.w(TAG, "cannot take a screenshot", it) }.isSuccess
+            handler.post {
+                android.widget.Toast.makeText(
+                    this, if (saved) R.string.menu_screenshot_saved else R.string.menu_screenshot_failed, android.widget.Toast.LENGTH_SHORT,
+                ).show()
+            }
+        }.start()
     }
 
     /**
@@ -703,6 +826,13 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         // KWin's output scale, in the 5% steps of Plasma's display settings. Only on a change:
         // KWin keeps it across sessions, and the display settings may set it too.
         DisplayServer.setScale((dpi() * 20f / BASE_DPI).roundToInt() / 20f)
+    }
+
+    /** KWin's scale set in Plasma's display settings: the interface size that gives it here. */
+    private fun followKWinScale(kwinScale: Float) {
+        uiScale = kwinScale * DEFAULT_SCALE / desktopScale
+        DesktopSettings.update(this) { it.copy(uiScale = uiScale) }
+        menu.showUiScale(uiScale)
     }
 
     // -- Debug overlay -----------------------------------------------------
@@ -730,6 +860,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     companion object {
         private const val TAG = "DroidNux.Desktop"
+        /** How long after a finger leaves a focused text field its tap may still reach it. */
+        private const val TAP_FOCUS_MS = 150L
 
         /** The desktop on screen, if any (main thread only). */
         private var current: DesktopActivity? = null
@@ -744,8 +876,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         fun onSystemKey(event: KeyEvent): Boolean = focused?.sendPhysicalKey(event) ?: false
 
         /** Closes the desktop activity, when the session ends. Main thread. */
+        /** The session ended: the desktop closes, keeping the picture taken before (Plasma's screen is gone). */
         fun finishCurrent() {
-            current?.finishAndRemoveTask()
+            current?.run {
+                sessionEnded = true
+                finishAndRemoveTask()
+            }
         }
 
         /** Float extra: desktop size as a fraction of the screen, [MIN_SCALE] to [MAX_SCALE]. */

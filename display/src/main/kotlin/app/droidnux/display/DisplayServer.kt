@@ -41,7 +41,7 @@ object DisplayServer {
     /** The text the soft keyboard is still composing, shown in the field; "" clears it. */
     fun preeditText(text: String) = nativePreeditText(text.toByteArray())
 
-    /** Called on the compositor thread when a text field gains (true) or loses the focus. */
+    /** Called on the compositor thread when a text field gains (true) or loses the focus; true again when it changes (a tap on it does). */
     @Volatile var onTextInput: ((Boolean) -> Unit)? = null
 
     @JvmStatic private fun textInputFromWayland(active: Boolean) {
@@ -50,6 +50,13 @@ object DisplayServer {
 
     /** The nested desktop's interface scale (1 = 100%). */
     fun setScale(scale: Float) = nativeSetScale(scale)
+
+    /** Called on the compositor thread when KWin's scale changes by other means (Plasma's display settings). */
+    @Volatile var onScale: ((Float) -> Unit)? = null
+
+    @JvmStatic private fun scaleFromWayland(scale: Float) {
+        onScale?.invoke(scale)
+    }
 
     /** Touchscreen, in desktop pixels: [TOUCH_DOWN] and the others, then [TOUCH_FRAME]. */
     fun touch(type: Int, id: Int = 0, x: Float = 0f, y: Float = 0f) = nativeTouch(type, id, x, y)

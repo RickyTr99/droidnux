@@ -46,7 +46,8 @@ void dnx_wl_commit_text(const char* utf8);
 void dnx_wl_preedit_text(const char* utf8);
 
 /* Called on the compositor thread when a text field gets (true) or loses the
- * focus: the soft keyboard may show. Set before dnx_wl_start. */
+ * focus: the soft keyboard may show. True again when the focused field changes
+ * (a tap on it does). Set before dnx_wl_start. */
 void dnx_wl_set_text_input_callback(void (*callback)(bool active));
 
 /* Android's clipboard text (UTF-8, copied): the nested desktop pastes it. */
@@ -57,6 +58,10 @@ void dnx_wl_set_clipboard_callback(void (*callback)(const char* utf8));
 
 /* The interface scale the nested KWin should use (1.0 = 100%). */
 void dnx_wl_set_scale(double scale);
+
+/* Called on the compositor thread when KWin's scale changes by other means
+ * (Plasma's display settings). Set before dnx_wl_start. */
+void dnx_wl_set_scale_callback(void (*callback)(double scale));
 
 /* Pointer, in desktop pixels. */
 void dnx_wl_pointer_move(float x, float y);

@@ -72,6 +72,21 @@ object DesktopEnvironment {
     private const val BATTERY_FILE = "/run/droidnux-battery/state"
     private const val UPOWER_SCRIPT = "$GUEST_LIB_DIR/droidnux-upower"
     private const val SYSTEM_BUS_CONF = "$GUEST_LIB_DIR/system-bus.conf"
+
+    /** bubblewrap for Flatpak, on what Burrow emulates ([BWRAP]). */
+    private const val BWRAP_SCRIPT = "$GUEST_LIB_DIR/droidnux-bwrap"
+
+    /** Groups the desktop's processes by app for System Monitor ([APP_GROUPS]). */
+    private const val APP_GROUPS_SCRIPT = "$GUEST_LIB_DIR/droidnux-app-groups"
+
+    /**
+     * Android's active network for ksystemstats (guest/plasma, patch 0002): the
+     * app writes NETWORK_STATE, and its byte counters again whenever the plugin
+     * writes NETWORK_REQUEST.
+     */
+    private const val NETWORK_DIR = "/run/droidnux-network"
+    private const val NETWORK_STATE = "$NETWORK_DIR/state"
+    const val NETWORK_REQUEST = "wanted"
     private const val SYSTEM_BUS_SOCKET = "/run/dbus/system_bus_socket"
 
     /** Plasma on the app's Wayland compositor, with KDE's everyday apps. */
@@ -102,6 +117,8 @@ object DesktopEnvironment {
         // The browser pinned in the panel (PLASMA_LAYOUT).
         "firefox-esr",
         "fonts-dejavu-core", "tzdata",
+        // HTTPS for the desktop's tools (Flatpak's remotes, curl, git): the slim image has no CA certificates.
+        "ca-certificates",
         // Chinese, Japanese, Korean and emoji: without them web pages show empty boxes.
         "fonts-noto-cjk", "fonts-noto-color-emoji",
         // Android's language in the desktop's apps (SESSION generates the locale).
@@ -188,8 +205,12 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PLASMA_DEFAULTS/kwalletrc", PLASMA_KWALLETRC.toByteArray())
         writeFile(rootfs, WALLET_SCRIPT, WALLET.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, UPOWER_SCRIPT, UPOWER.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, APP_GROUPS_SCRIPT, APP_GROUPS.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, BWRAP_SCRIPT, BWRAP.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, SYSTEM_BUS_CONF, SYSTEM_BUS.toByteArray())
         writeFile(rootfs, "$PLASMA_DEFAULTS/powerdevilrc", PLASMA_POWERDEVILRC.toByteArray())
+        hidePowerProfiles(rootfs)
+        touchTables(rootfs)
         writeFile(rootfs, IM_DESKTOP_FILE, IM_DESKTOP.toByteArray())
         writeFile(rootfs, IM_PROGRAM, File(nativeLibraryDir, IM_LIBRARY).readBytes(), mode = 0x1ED)
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/metadata.json", PLASMA_LNF_METADATA.toByteArray())
@@ -213,9 +234,10 @@ object DesktopEnvironment {
      * password before it (empty line if it did not change): KDE's wallet
      * moves to the new one, and [WALLET_MOVED_MARKER] says so.
      */
-    fun sessionCommand(layout: String, user: String = ""): String =
+    fun sessionCommand(layout: String, user: String = "", verbose: Boolean = false): String =
         "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_LOCALE=${glibcLocale()} " +
             (if (user.isNotEmpty()) "DROIDNUX_USER=$user " else "") +
+            (if (verbose) "DROIDNUX_VERBOSE=1 " else "") +
             "exec $SESSION_SCRIPT"
 
     /** Android's language as a glibc locale name ("it_IT"); the session checks Debian has it. */
@@ -329,10 +351,13 @@ object DesktopEnvironment {
 
     /** Session script part: DroidNux's Mesa for the session's apps. */
     private val GPU_ENV = """
-        # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed,
-        # otherwise the distro's software rendering.
+        # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed on
+        # an Adreno (KGSL), otherwise the distro's software rendering: on other
+        # GPUs Turnip finds no device, Zink fails and KWin gets no EGL.
         MESA=$MESA_PREFIX
-        if [ -f "${'$'}MESA/droidnux-mesa.version" ]; then
+        if [ -f "${'$'}MESA/droidnux-mesa.version" ] && [ -e /dev/kgsl-3d0 ]; then
+            echo "GPU: DroidNux Mesa ${'$'}(head -n 1 "${'$'}MESA/droidnux-mesa.version") on KGSL"
+            MESA_GPU=1
             export LD_LIBRARY_PATH=${'$'}MESA/lib/aarch64-linux-gnu${'$'}{LD_LIBRARY_PATH:+:${'$'}LD_LIBRARY_PATH}
             export VK_DRIVER_FILES=${'$'}MESA/share/vulkan/icd.d/freedreno_icd.aarch64.json
             export __GLX_VENDOR_LIBRARY_NAME=droidnux
@@ -352,6 +377,7 @@ object DesktopEnvironment {
                 export LIBVA_DRIVER_NAME=droidnux
             fi
         else
+            echo "GPU: software rendering (no KGSL device or no DroidNux Mesa)"
             # With DRI3 but no device, Debian's GLX tries Zink; with no
             # Vulkan driver Zink fails and Mesa 25.0 deadlocks on its own
             # instance_lock in the error path (zink_destroy_screen): X11 apps
@@ -378,7 +404,7 @@ object DesktopEnvironment {
         fi
     """.trimIndent()
 
-    /** Session script part, inside D-Bus: sound. */
+    /** Session script part, inside D-Bus: sound, and the apps for System Monitor. */
     private val SESSION_SERVICES = """
         # Session services without systemd start here, on the session bus.
         if command -v pipewire > /dev/null; then
@@ -391,6 +417,8 @@ object DesktopEnvironment {
             wireplumber &
             pipewire-pulse &
         fi
+        # The apps' processes for System Monitor.
+        $APP_GROUPS_SCRIPT &
     """.trimIndent()
 
     /** Session script part, inside D-Bus: apps the app starts, once the process LAUNCH_AFTER runs. */
@@ -436,9 +464,10 @@ object DesktopEnvironment {
         n=0
         while [ ${'$'}n -lt 20 ]; do
             tail --pid="${'$'}p" -f /dev/null
-            # At logout ksmserver goes too: leave plasmashell gone.
+            # At logout ksmserver goes too: the session is over. Leaving (shutdown, restart)
+            # then waits on logind, which is not here, and startplasma-wayland stays.
             sleep 2
-            pgrep -x ksmserver > /dev/null || exit
+            pgrep -x ksmserver > /dev/null || { echo $SESSION_END_MARKER; exit; }
             p=${'$'}(pgrep -x plasmashell | head -1)
             if [ -z "${'$'}p" ]; then
                 echo "plasmashell exited, restarting it"
@@ -559,6 +588,8 @@ ${USER_SESSION.prependIndent("        ")}
             export WAYLAND_DISPLAY=/tmp/wayland-$DISPLAY
             export XDG_SESSION_TYPE=wayland
             export SHELL=/bin/bash
+            # Debian's games (/usr/games), on a user's PATH after a login; none happens here.
+            export PATH=${'$'}PATH:/usr/local/games:/usr/games
             export XDG_CONFIG_DIRS=$PLASMA_DEFAULTS:/etc/xdg
             # Android's SELinux denies reopening a memfd through /proc/self/fd,
             # so Firefox's parent process falls back to unsealed shm_open while
@@ -568,10 +599,21 @@ ${USER_SESSION.prependIndent("        ")}
             # Electron apps (VS Code, Discord, Obsidian): Chromium's sandbox needs user
             # namespaces or its set-user-ID helper, neither of which Android allows.
             export ELECTRON_DISABLE_SANDBOX=1
+            # Flatpak's apps: Android has no user namespaces for bwrap's sandbox.
+            export FLATPAK_BWRAP=$BWRAP_SCRIPT
+            # Their menu entries, as Flatpak's profile.d script would add after a login.
+            export XDG_DATA_DIRS=${'$'}HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:${'$'}{XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 ${GPU_ENV.prependIndent("            ")}
-            if [ -f "${'$'}MESA/droidnux-mesa.version" ]; then
+            if [ -n "${'$'}MESA_GPU" ]; then
                 # KWin renders into GBM buffers from the app (Mesa patch 0004).
                 export GBM_BACKENDS_PATH=${'$'}MESA/lib/aarch64-linux-gnu/gbm
+            fi
+            if [ -n "${'$'}DROIDNUX_VERBOSE" ]; then
+                # Diagnostic builds: the GPU devices, and all KWin, Qt's platform, EGL and Mesa say.
+                uname -a
+                ls -l /dev/kgsl* /dev/mali* /dev/dri 2>&1
+                export QT_LOGGING_RULES='kwin_*.debug=true;qt.qpa.*.debug=true'
+                export EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose MESA_DEBUG=1 VK_LOADER_DEBUG=error,warn
             fi
             # KSvg and KIconThemes with DroidNux's patches (Plasma component),
             # while the distro's are the versions they were built from (the
@@ -581,7 +623,7 @@ ${GPU_ENV.prependIndent("            ")}
                 "${'$'}(sed 1d "${'$'}PLASMA/droidnux-plasma.version" | while read -r package version; do
                     echo "${'$'}package ${'$'}(dpkg-query -W -f '${'$'}{Version}' "${'$'}package" 2> /dev/null)"; done)" ]; then
                 export LD_LIBRARY_PATH=${'$'}PLASMA/lib/aarch64-linux-gnu${'$'}{LD_LIBRARY_PATH:+:${'$'}LD_LIBRARY_PATH}
-                # ksystemstats' GPU and disk plugins for Android, found before the distro's of the same name.
+                # ksystemstats' GPU, disk and network plugins for Android, found before the distro's of the same name.
                 export QT_PLUGIN_PATH=${'$'}PLASMA/lib/aarch64-linux-gnu/qt6/plugins${'$'}{QT_PLUGIN_PATH:+:${'$'}QT_PLUGIN_PATH}
             fi
             # Turnip on KGSL has no calibrated timestamps: Zink answers
@@ -773,6 +815,19 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         )
     }
 
+    /** The directory where the network plugin writes [NETWORK_REQUEST], made if missing. */
+    fun networkDir(rootfs: File): File = File(rootfs, NETWORK_DIR.removePrefix("/")).apply { mkdirs() }
+
+    /**
+     * Android's default network for the network plugin: [fields] as interface,
+     * name, signal (percent), ipv4/ipv6 (address/prefix), ipv4gateway,
+     * ipv6gateway, ipv4dns, ipv6dns, received, sent (bytes) and time (ms of
+     * the counters); no interface when offline.
+     */
+    fun writeNetwork(rootfs: File, fields: Map<String, Any>) {
+        writeFile(rootfs, NETWORK_STATE, fields.entries.joinToString("") { "${it.key}=${it.value}\n" }.toByteArray())
+    }
+
     /** The system bus: no services started on demand, and everyone may talk to everyone (one user, in a container). */
     private val SYSTEM_BUS = """
         <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
@@ -953,6 +1008,246 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         AutoSuspendAction=0
     """.trimIndent() + "\n"
 
+    /**
+     * No power profiles in the battery applet: Android manages the CPU and an app
+     * cannot change it, so the applet would only say they are not available. The
+     * applet has no setting for it: its QML is changed in place, again after
+     * every update of powerdevil.
+     */
+    private fun hidePowerProfiles(rootfs: File) {
+        val dialog = File(rootfs, "usr/share/plasma/plasmoids/org.kde.plasma.battery/contents/ui/PopupDialog.qml")
+        if (java.nio.file.Files.isSymbolicLink(dialog.toPath()) || !dialog.isFile) return
+        val qml = dialog.readText()
+        if (HIDDEN_PROFILES in qml) return
+        val hidden = qml.replace(Regex("""(?m)^(\s*)PowerProfileItem \{$""")) { "${it.value}\n${it.groupValues[1]}    $HIDDEN_PROFILES" }
+        if (hidden != qml) writeFile(rootfs, "/${dialog.relativeTo(rootfs).path}", hidden.toByteArray())
+    }
+
+    private const val HIDDEN_PROFILES = "visible: false // DroidNux: Android manages power"
+
+    /**
+     * System Monitor's tables (processes, apps) with a finger: upstream they
+     * never flick (a drag selects rows) and a tap is also a right click (a
+     * TapHandler's acceptedButtons does not filter touch), which opens the
+     * column menu instead of sorting. The QML is changed in place, again after
+     * every update of plasma-systemmonitor; Qt reads it from the disk only
+     * without the qmldir's "prefer" of the compiled copy.
+     */
+    private fun touchTables(rootfs: File) {
+        val dir = "usr/lib/aarch64-linux-gnu/qt6/qml/org/kde/ksysguard/table"
+        val rightTap = Regex("""(?m)^(\s*)acceptedButtons: Qt\.RightButton$""")
+        val mouseOnly = { m: MatchResult ->
+            "${m.value}\n${m.groupValues[1]}acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad | PointerDevice.Stylus $TOUCH_TABLES"
+        }
+        val table = patchFile(rootfs, "$dir/BaseTableView.qml", TOUCH_TABLES) { qml ->
+            qml.replace("interactive: false\n", "interactive: Kirigami.Settings.hasTransientTouchInput $TOUCH_TABLES\n")
+                .replace(
+                    "selectionMode: SelectionRectangle.Drag\n",
+                    "selectionMode: Kirigami.Settings.hasTransientTouchInput ? SelectionRectangle.PressAndHold : SelectionRectangle.Drag\n",
+                )
+                .replace(rightTap, mouseOnly)
+        }
+        val header = patchFile(rootfs, "$dir/TableViewHeader.qml", TOUCH_TABLES) { it.replace(rightTap, mouseOnly) }
+        if (table && header) patchFile(rootfs, "$dir/qmldir", null) { it.replace(Regex("""(?m)^prefer .*\n"""), "") }
+    }
+
+    private const val TOUCH_TABLES = "// DroidNux: a finger flicks"
+
+    /**
+     * Changes a file of the rootfs in place, unless it is a link or already has
+     * [marker]; [change] returns it as it is when it does not apply. True when
+     * the file has [marker] (any file, for none).
+     */
+    private fun patchFile(rootfs: File, path: String, marker: String?, change: (String) -> String): Boolean {
+        val file = File(rootfs, path)
+        if (java.nio.file.Files.isSymbolicLink(file.toPath()) || !file.isFile) return false
+        val text = file.readText()
+        if (marker != null && marker in text) return true
+        val changed = change(text)
+        if (changed != text) writeFile(rootfs, "/$path", changed.toByteArray())
+        return marker == null || marker in changed
+    }
+
+    /**
+     * The cgroup tree systemd would make for the desktop's apps, which System
+     * Monitor's Applications page reads (libksysguard's ApplicationDataModel):
+     * one app-<desktop id>-<pid>.scope per app started, with its processes and
+     * their children. Burrow shows the app's directory as /sys/fs/cgroup
+     * (Android's cgroups are not readable). Without systemd nothing says which
+     * app a process is: the first process (from the top of the tree) whose
+     * program is an app's Exec starts that app. The tree is made again only when
+     * someone reads it (inotify), at most once a second.
+     */
+    private val APP_GROUPS = """
+        #!/usr/bin/python3
+        # Written by DroidNux: the desktop's apps as systemd scopes in /sys/fs/cgroup,
+        # for System Monitor. Runs as the desktop's user.
+        import ctypes
+        import os
+        import shlex
+        import shutil
+        import time
+
+        ROOT = "/sys/fs/cgroup"
+        UID = os.getuid()
+        SERVICE = f"{ROOT}/user.slice/user-{UID}.slice/user@{UID}.service"
+        APPS = SERVICE + "/app.slice"
+        HOME = os.path.expanduser("~")
+        DIRS = [HOME + "/.local/share/applications", "/usr/local/share/applications", "/usr/share/applications",
+                HOME + "/.local/share/flatpak/exports/share/applications", "/var/lib/flatpak/exports/share/applications"]
+        INTERPRETERS = {"sh", "bash", "dash", "python", "perl", "env"}
+        IN_OPEN = 0x20
+
+
+        def interpreter(path):
+            return os.path.basename(path).rstrip("0123456789.") in INTERPRETERS
+
+
+        def desktop_entries():
+            # program (real path or name) -> desktop id; the entry with the shortest Exec wins.
+            programs = {}
+            for d in DIRS:
+                try:
+                    names = sorted(os.listdir(d))
+                except OSError:
+                    continue
+                for name in names:
+                    if not name.endswith(".desktop"):
+                        continue
+                    entry, group = {}, None
+                    try:
+                        with open(os.path.join(d, name), encoding="utf-8", errors="replace") as f:
+                            for line in f:
+                                line = line.strip()
+                                if line.startswith("["):
+                                    group = line
+                                elif group == "[Desktop Entry]" and "=" in line:
+                                    key, _, value = line.partition("=")
+                                    entry.setdefault(key.strip(), value.strip())
+                    except OSError:
+                        continue
+                    if entry.get("Type") != "Application" or "true" in (entry.get("NoDisplay"), entry.get("Hidden")):
+                        continue
+                    try:
+                        args = [a for a in shlex.split(entry.get("Exec", "")) if not a.startswith("%")]
+                    except ValueError:
+                        continue
+                    while args and (os.path.basename(args[0]) == "env" or "=" in args[0]):
+                        args = args[1:]
+                    if not args:
+                        continue
+                    program = shutil.which(args[0]) or args[0]
+                    key = os.path.realpath(program) if os.path.isabs(program) else program
+                    keys = {key, os.path.basename(args[0])}
+                    if interpreter(key):
+                        # Not every shell or Python: the script it runs (sh -c has none).
+                        keys = {os.path.basename(args[1])} if len(args) > 1 and not args[1].startswith("-") else set()
+                    for k in keys:
+                        if k not in programs or len(args) < programs[k][1]:
+                            programs[k] = (name[:-8], len(args))
+            return {k: v[0] for k, v in programs.items()}
+
+
+        def app_of(pid, programs):
+            try:
+                exe = os.readlink(f"/proc/{pid}/exe")
+                with open(f"/proc/{pid}/cmdline", "rb") as f:
+                    argv = [a.decode(errors="replace") for a in f.read().split(b"\0") if a]
+            except OSError:
+                return None
+            names = [os.path.basename(a) for a in argv[:2]]
+            if interpreter(exe):
+                # A script: its interpreter runs it.
+                return programs.get(names[1]) if len(names) > 1 else None
+            return programs.get(exe) or (programs.get(names[0]) if names else None)
+
+
+        def parents():
+            result = {}
+            for name in os.listdir("/proc"):
+                if not name.isdigit():
+                    continue
+                try:
+                    with open(f"/proc/{name}/stat") as f:
+                        result[int(name)] = int(f.read().rsplit(")", 1)[1].split()[1])
+                except (OSError, IndexError, ValueError):
+                    pass
+            return result
+
+
+        def escape(app):
+            # systemd's unit name escaping: libksysguard undoes it.
+            return "".join(c if c.isalnum() or c in ":_." else "\\x%02x" % ord(c) for c in app)
+
+
+        def scopes(programs):
+            tree = parents()
+            apps, roots = {}, {}
+
+            def assign(pid):
+                if pid in apps:
+                    return apps[pid]
+                apps[pid] = None
+                ppid = tree.get(pid)
+                inherited = assign(ppid) if ppid in tree else None
+                if inherited:
+                    apps[pid] = inherited
+                else:
+                    app = app_of(pid, programs)
+                    if app:
+                        apps[pid] = (app, pid)
+                return apps[pid]
+
+            for pid in tree:
+                assign(pid)
+            for pid, owner in apps.items():
+                if owner:
+                    roots.setdefault("app-%s-%d.scope" % (escape(owner[0]), owner[1]), []).append(pid)
+            return roots
+
+
+        def write(groups):
+            os.makedirs(APPS, exist_ok=True)
+            for name in os.listdir(APPS):
+                if name not in groups:
+                    shutil.rmtree(os.path.join(APPS, name), ignore_errors=True)
+            for name, pids in groups.items():
+                os.makedirs(os.path.join(APPS, name), exist_ok=True)
+                path = os.path.join(APPS, name, "cgroup.procs")
+                text = "".join(f"{p}\n" for p in sorted(pids))
+                try:
+                    with open(path) as f:
+                        if f.read() == text:
+                            continue
+                except OSError:
+                    pass
+                with open(path + ".new", "w") as f:
+                    f.write(text)
+                os.replace(path + ".new", path)
+
+
+        # Only in the app's tree, never in a real cgroup file system.
+        if not os.path.exists(ROOT + "/.droidnux"):
+            raise SystemExit("droidnux-app-groups: /sys/fs/cgroup is not DroidNux's")
+        shutil.rmtree(ROOT + "/user.slice", ignore_errors=True)
+        os.makedirs(APPS)
+        libc = ctypes.CDLL(None, use_errno=True)
+        inotify = libc.inotify_init1(os.O_CLOEXEC)
+        if inotify < 0 or libc.inotify_add_watch(inotify, SERVICE.encode(), IN_OPEN) < 0:
+            raise SystemExit("droidnux-app-groups: inotify: " + os.strerror(ctypes.get_errno()))
+        stamps, programs, last = None, {}, 0.0
+        while True:
+            now = time.monotonic()
+            if now - last >= 1:
+                last = now
+                current = [os.stat(d).st_mtime if os.path.isdir(d) else 0 for d in DIRS]
+                if current != stamps:
+                    stamps, programs = current, desktop_entries()
+                write(scopes(programs))
+            # Until System Monitor reads the tree again (it lists user@<uid>.service first).
+            os.read(inotify, 4096)
+    """.trimIndent() + "\n"
+
     /** No lock screen: Android locks the device. */
     private val PLASMA_SCREENLOCKER = """
         [Daemon]
@@ -1064,6 +1359,276 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
 
     // Written by earlier versions: an autoconfig script hiding Firefox's
     // "sandbox disabled" bar, and what only XFCE and proot used.
+    /**
+     * bwrap for Flatpak ([BWRAP_SCRIPT]): the sandbox built with what Burrow emulates
+     * (unshare, bind mounts as bindings, chroot), since Android allows apps no user namespaces.
+     */
+    private val BWRAP = """
+        #!/usr/bin/python3
+        # Written by DroidNux: bubblewrap for the container. Android gives apps no
+        # user namespaces, so bwrap's own sandbox cannot be built. Burrow (the
+        # container's runtime) emulates what bwrap's sandboxes need instead: unshare()
+        # of a user namespace lets a process mount, a bind mount becomes a binding of
+        # that process and its children, and chroot() moves to the new root. This
+        # builds the root bwrap's options describe in a directory of /tmp with those
+        # calls, then runs the command in it.
+        #
+        # Not a security boundary (no more than Burrow): namespaces, seccomp filters
+        # (--seccomp) and read-only mounts are not applied. Flatpak runs its apps with
+        # it (FLATPAK_BWRAP, set by the session).
+        import ctypes
+        import json
+        import os
+        import shutil
+        import sys
+        import warnings  # noqa: F401 os.execvpe() imports it, after chroot, where Python's library is gone
+
+        VERSION = "bubblewrap 0.11.0 (droidnux)"
+        STAGING = "/tmp/.droidnux-bwrap"
+        MS_BIND, MS_REC = 4096, 16384
+
+        libc = ctypes.CDLL(None, use_errno=True)
+
+        # Options without an argument, and how many the others take (the operations
+        # building the root are handled in build()).
+        FLAGS = {
+            "--unshare-user", "--unshare-user-try", "--unshare-ipc", "--unshare-pid", "--unshare-net", "--unshare-uts",
+            "--unshare-cgroup", "--unshare-cgroup-try", "--unshare-all", "--share-net", "--disable-userns",
+            "--assert-userns-disabled", "--clearenv", "--new-session", "--die-with-parent", "--as-pid-1", "--level-prefix",
+        }
+        IGNORED = {"--hostname": 1, "--uid": 1, "--gid": 1, "--cap-add": 1, "--cap-drop": 1, "--exec-label": 1,
+                   "--file-label": 1, "--userns": 1, "--userns2": 1, "--pidns": 1, "--size": 1}
+        OPERATIONS = {
+            "--bind": 2, "--bind-try": 2, "--ro-bind": 2, "--ro-bind-try": 2, "--dev-bind": 2, "--dev-bind-try": 2,
+            "--bind-fd": 2, "--ro-bind-fd": 2,
+            "--remount-ro": 1, "--proc": 1, "--dev": 1, "--tmpfs": 1, "--mqueue": 1, "--dir": 1, "--file": 2,
+            "--bind-data": 2, "--ro-bind-data": 2, "--symlink": 2, "--chmod": 2, "--perms": 1, "--lock-file": 1,
+        }
+        # The session's variables for the app's Mesa (/opt/droidnux/mesa, built for the
+        # distro's /usr), dropped where the new root has another /usr. The Mesa of
+        # Flatpak's runtimes has no Turnip for KGSL, takes the render node for Zink's and
+        # gives up: it renders in software instead.
+        GPU_VARIABLES = (
+            "VK_DRIVER_FILES", "__GLX_VENDOR_LIBRARY_NAME", "__EGL_VENDOR_LIBRARY_FILENAMES", "MESA_LOADER_DRIVER_OVERRIDE",
+            "GALLIUM_DRIVER", "LIBVA_DRIVERS_PATH", "LIBVA_DRIVER_NAME", "GBM_BACKENDS_PATH",
+        )
+        SETTINGS = {
+            "--setenv": 2, "--unsetenv": 1, "--chdir": 1, "--info-fd": 1, "--json-status-fd": 1, "--block-fd": 1,
+            "--userns-block-fd": 1, "--sync-fd": 1, "--seccomp": 1, "--add-seccomp-fd": 1, "--argv0": 1,
+        }
+
+
+        def fail(message):
+            sys.stderr.write("bwrap: %s\n" % message)
+            sys.exit(1)
+
+
+        def read_fd(fd):
+            with os.fdopen(int(fd), "rb") as f:
+                return f.read()
+
+
+        # The options and the command; --args FD inserts NUL-separated arguments.
+        def parse(argv):
+            args = list(argv)
+            options, i = [], 0
+            while i < len(args):
+                a = args[i]
+                if a == "--":
+                    return options, args[i + 1:]
+                if not a.startswith("--"):
+                    return options, args[i:]
+                if a == "--args":
+                    data = read_fd(args[i + 1]).split(b"\0")
+                    if data and data[-1] == b"":
+                        data.pop()
+                    args[i:i + 2] = [os.fsdecode(d) for d in data]
+                    continue
+                if a in ("--version", "--help"):
+                    print(VERSION)
+                    sys.exit(0)
+                if a in ("--overlay-src", "--overlay", "--tmp-overlay", "--ro-overlay"):
+                    fail("%s is not supported" % a)
+                count = 0 if a in FLAGS else IGNORED.get(a, OPERATIONS.get(a, SETTINGS.get(a)))
+                if count is None:
+                    fail("unknown option %s" % a)
+                if i + count >= len(args):
+                    fail("%s takes %d arguments" % (a, count))
+                options.append((a, args[i + 1:i + 1 + count]))
+                i += 1 + count
+            fail("no command")
+
+
+        def mount(source, target):
+            if libc.mount(os.fsencode(source), os.fsencode(target), None, MS_BIND | MS_REC, None) != 0:
+                e = ctypes.get_errno()
+                fail("cannot bind %s to %s: %s" % (source, target, os.strerror(e)))
+
+
+        # Removes the roots of bwrap processes gone (the command keeps the pid).
+        def clean_staging():
+            try:
+                names = os.listdir(STAGING)
+            except FileNotFoundError:
+                return
+            for name in names:
+                if name.isdigit() and not os.path.exists("/proc/" + name):
+                    shutil.rmtree(os.path.join(STAGING, name), ignore_errors=True)
+
+
+        # Builds the new root at root, from the operations in order.
+        def build(root, options):
+            extra = os.path.join(root, ".droidnux")  # data files and empty directories, bound where asked
+            count = [0]
+            perms = [None]
+
+            def at(dest):
+                return root + "/" + os.path.normpath("/" + dest).lstrip("/")
+
+            def fresh(kind):
+                count[0] += 1
+                os.makedirs(extra, exist_ok=True)
+                return os.path.join(extra, "%s%d" % (kind, count[0]))
+
+            def mount_point(target, directory):
+                try:
+                    if directory:
+                        os.makedirs(target, exist_ok=True)
+                    elif not os.path.lexists(target):
+                        os.makedirs(os.path.dirname(target), exist_ok=True)
+                        open(target, "a").close()
+                except OSError:
+                    pass  # a read-only place: the binding needs no mount point
+
+            def mode(default):
+                m, perms[0] = perms[0], None
+                return m if m is not None else default
+
+            for name, args in options:
+                if name in ("--bind", "--bind-try", "--ro-bind", "--ro-bind-try", "--dev-bind", "--dev-bind-try",
+                            "--bind-fd", "--ro-bind-fd"):
+                    source, target = args[0], at(args[1])
+                    if name.endswith("-fd"):
+                        # The directory open on the descriptor (Burrow gives its guest path).
+                        source = os.readlink("/proc/self/fd/" + args[0])
+                        os.close(int(args[0]))
+                    if not os.path.exists(source):
+                        if name.endswith("-try"):
+                            continue
+                        fail("cannot find %s" % source)
+                    mount_point(target, os.path.isdir(source))
+                    mount(source, target)
+                elif name in ("--proc", "--dev"):
+                    target = at(args[0])
+                    mount_point(target, True)
+                    mount("/" + name[2:], target)
+                elif name in ("--tmpfs", "--dir", "--mqueue"):
+                    target = at(args[0])
+                    m = mode(0o755)
+                    try:
+                        busy = name == "--tmpfs" and os.path.isdir(target) and bool(os.listdir(target))
+                        if not busy:
+                            os.makedirs(target, exist_ok=True)
+                            os.chmod(target, m)
+                    except OSError:
+                        busy = True  # in a binding of the host's (/dev/shm)
+                    if busy:
+                        # Over a directory with files, or where none can be made: an empty one of ours.
+                        empty = fresh("tmpfs")
+                        os.mkdir(empty, m)
+                        mount(empty, target)
+                elif name in ("--file", "--bind-data", "--ro-bind-data"):
+                    data = read_fd(args[0])
+                    target = at(args[1])
+                    source = fresh("file")
+                    with open(source, "wb") as f:
+                        f.write(data)
+                    os.chmod(source, mode(0o666 if name == "--file" else 0o600))
+                    mount_point(target, False)
+                    mount(source, target)
+                elif name == "--symlink":
+                    target = at(args[1])
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    if os.path.islink(target) and os.readlink(target) == args[0]:
+                        continue
+                    os.symlink(args[0], target)
+                elif name == "--chmod":
+                    os.chmod(at(args[1]), int(args[0], 8))
+                elif name == "--perms":
+                    perms[0] = int(args[0], 8)
+
+
+        def main():
+            options, command = parse(sys.argv[1:])
+            clean_staging()
+            os.makedirs(STAGING, mode=0o1777, exist_ok=True)
+            root = os.path.join(STAGING, str(os.getpid()))
+            shutil.rmtree(root, ignore_errors=True)
+            os.makedirs(root, mode=0o755)
+            os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWNS)
+            build(root, options)
+
+            env = dict(os.environ)
+            directory = None
+            argv0 = None
+            keep = []  # descriptors held until exec: lock files
+            for name, args in options:
+                if name == "--clearenv":
+                    env.clear()
+                elif name == "--setenv":
+                    env[args[0]] = args[1]
+                elif name == "--unsetenv":
+                    env.pop(args[0], None)
+                elif name == "--chdir":
+                    directory = args[0]
+                elif name == "--argv0":
+                    argv0 = args[0]
+                elif name in ("--seccomp", "--add-seccomp-fd"):
+                    os.close(int(args[0]))  # shortcut: the filter is not applied; Burrow is no sandbox either
+                elif name in ("--block-fd", "--userns-block-fd"):
+                    read_fd(args[0])
+                elif name in ("--info-fd", "--json-status-fd"):
+                    with os.fdopen(int(args[0]), "w") as f:
+                        json.dump({"child-pid": os.getpid()}, f)
+                        f.write("\n")
+                elif name == "--lock-file":
+                    try:
+                        keep.append(os.open(root + "/" + args[0].lstrip("/"), os.O_RDONLY))
+                    except OSError:
+                        pass
+                elif name == "--die-with-parent":
+                    libc.prctl(1, 9)  # PR_SET_PDEATHSIG, SIGKILL
+                elif name == "--new-session":
+                    os.setsid()
+            for fd in keep:
+                os.set_inheritable(fd, True)
+            try:
+                same_usr = os.path.samefile(root + "/usr", "/usr")
+            except OSError:
+                same_usr = False
+            if not same_usr:
+                for name in GPU_VARIABLES:
+                    env.pop(name, None)
+                env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+
+            here = os.getcwd()
+            os.chroot(root)
+            for d in (directory, here, os.environ.get("HOME"), "/"):
+                if d:
+                    try:
+                        os.chdir(d)
+                        break
+                    except OSError:
+                        pass
+            try:
+                os.execvpe(command[0], [argv0 or command[0]] + command[1:], env)
+            except OSError as e:
+                fail("execvp %s: %s" % (command[0], e.strerror))
+
+
+        main()
+    """.trimIndent()
+
     private val OBSOLETE_FILES = listOf(
         "/usr/lib/firefox-esr/defaults/pref/droidnux-autoconfig.js",
         "/usr/lib/firefox-esr/droidnux.cfg",
@@ -1071,6 +1636,7 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         "/usr/local/bin/droidnux-ui-scale",
         "$GUEST_LIB_DIR/libdroidnux-guest-shm.so",
         "$GUEST_LIB_DIR/libdroidnux-guest-paths.so",
+        "$PLASMA_DEFAULTS/klipperrc",
     )
 
     // There is no Flatpak in the container: access by socket, and full

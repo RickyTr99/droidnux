@@ -45,6 +45,7 @@ static struct kde_output_management_v2* management;
 static double device_scale, pending_device_scale;
 static double requested_scale; /* by the app, 0 for none */
 static void (*text_input_callback)(bool active);
+static void (*scale_callback)(double scale);
 
 /* -- Output scale ------------------------------------------------------------ */
 
@@ -97,7 +98,13 @@ static void device_done(void* data, struct kde_output_device_v2* d) {
     log(INFO, "KWin output scale %.3f", device_scale);
     dnx_wl_scale = device_scale;
     dnx_wl_surface_resized(); /* the output size in surface coordinates changed */
-    if (first) apply_requested_scale();
+    if (first) {
+        apply_requested_scale();
+    } else if (fabs(device_scale - requested_scale) >= 0.004) {
+        /* Not ours: Plasma's display settings. The app follows, and a new KWin gets it too. */
+        requested_scale = device_scale;
+        if (scale_callback) scale_callback(device_scale);
+    }
 }
 
 /* Every event up to version 2, the one bound. */
@@ -136,8 +143,11 @@ static void context_invoke_action(void* data, struct zwp_input_method_context_v1
                                   uint32_t index) {}
 static void context_preferred_language(void* data, struct zwp_input_method_context_v1* c, const char* language) {}
 
+/* The field's state again: also what a tap on the field already focused sends,
+ * told to the app as active again (it shows the keyboard if a finger just tapped). */
 static void context_commit_state(void* data, struct zwp_input_method_context_v1* c, uint32_t serial) {
     context_serial = serial;
+    if (text_input_callback) text_input_callback(true);
 }
 
 static const struct zwp_input_method_context_v1_listener context_listener = {
@@ -174,6 +184,10 @@ static const struct zwp_input_method_v1_listener im_listener = {
 
 void dnx_wl_nested_set_text_input_callback(void (*callback)(bool active)) {
     text_input_callback = callback;
+}
+
+void dnx_wl_nested_set_scale_callback(void (*callback)(double scale)) {
+    scale_callback = callback;
 }
 
 void dnx_wl_nested_commit(const char* utf8) {

@@ -86,6 +86,7 @@ void dnx_wl_nested_init(struct wl_display* display, const char* socket_path);
 /* The scale the app wants KWin to use. */
 void dnx_wl_nested_set_scale(double scale);
 void dnx_wl_nested_set_text_input_callback(void (*callback)(bool active));
+void dnx_wl_nested_set_scale_callback(void (*callback)(double scale));
 /* Text for the focused text field, committed or composing; dropped without one. */
 void dnx_wl_nested_commit(const char* utf8);
 void dnx_wl_nested_preedit(const char* utf8);

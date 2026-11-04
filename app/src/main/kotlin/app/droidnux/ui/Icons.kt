@@ -53,6 +53,7 @@ object Icons {
     val Package = stroke("M12 3l8 4.5v9L12 21l-8-4.5v-9z", "M4 7.5l8 4.5 8-4.5M12 12v9")
     val Android = stroke("M5 16a7 7 0 0 1 14 0z", "M8 8.5L6.5 6M16 8.5L17.5 6")
     val Pulse = stroke("M3 12h4l2-6 4 12 2-6h6")
+    val Pause = solid("M7 5h2a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zM15 5h2a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1z")
     val Stop = solid("M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z")
     val Back = stroke("M15 5l-7 7 7 7")
     val Chevron = stroke("M9 5l7 7-7 7")

@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.util.Log
+import app.droidnux.BuildConfig
 import app.droidnux.R
 import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
@@ -37,6 +38,7 @@ class DesktopSessionService : Service() {
     private val handler = Handler(Looper.getMainLooper())
     private var session: Process? = null
     private var battery: BroadcastReceiver? = null
+    private var network: NetworkReporter? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -62,6 +64,7 @@ class DesktopSessionService : Service() {
 
     override fun onDestroy() {
         battery?.let { unregisterReceiver(it) }
+        network?.stop()
         stopSession()
         scope.cancel()
         super.onDestroy()
@@ -80,8 +83,11 @@ class DesktopSessionService : Service() {
                 }
             }.also { registerReceiver(it, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
         }
-        val user = DesktopSettings.load(this).user
-        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, user))
+        if (network == null) network = NetworkReporter(this, rootfs, scope).also { it.start() }
+        SessionPause.file(this).delete() // left by a process that died paused
+        val settings = DesktopSettings.load(this)
+        val verbose = BuildConfig.DIAGNOSTIC || settings.logs
+        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, settings.user, verbose))
         val password = Account.password(this).orEmpty()
         session = process
         Log.i(TAG, "session started (layout $layout)")
@@ -91,9 +97,11 @@ class DesktopSessionService : Service() {
             runCatching { process.outputStream.use { it.write("$password\n$before\n".toByteArray()) } }
         }
         scope.launch {
+            val log = SessionLog.Writer(this@DesktopSessionService)
             try {
                 process.inputStream.bufferedReader().forEachLine {
-                    Log.i(TAG_GUEST, it)
+                    if (verbose) Log.i(TAG_GUEST, it)
+                    log.line(it)
                     // The desktop logged out; its services (PipeWire, D-Bus) would keep the runtime alive.
                     if (it == DesktopEnvironment.SESSION_END_MARKER) process.destroy()
                     if (it == DesktopEnvironment.WALLET_MOVED_MARKER) Account.walletMoved(this@DesktopSessionService, password)
@@ -101,6 +109,8 @@ class DesktopSessionService : Service() {
             } catch (e: java.io.IOException) {
                 // destroy() from another thread closes the stream under the reader.
                 Log.i(TAG, "session output closed: $e")
+            } finally {
+                log.close()
             }
             val code = process.waitFor()
             Log.i(TAG, "session ended with $code")
@@ -138,6 +148,8 @@ class DesktopSessionService : Service() {
     }
 
     private fun stopSession() {
+        // Stopped processes would not see the end.
+        SessionPause.resume(this)
         session?.destroy()
         session = null
     }

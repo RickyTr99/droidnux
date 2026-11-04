@@ -175,6 +175,7 @@ namespace {
 JavaVM* textInputVm;
 jclass textInputClass;
 jmethodID textInputMethod;
+jmethodID scaleMethod;
 
 void onTextInput(bool active) {
     JNIEnv* env = nullptr;
@@ -184,6 +185,17 @@ void onTextInput(bool active) {
         return;
     }
     env->CallStaticVoidMethod(textInputClass, textInputMethod, active ? JNI_TRUE : JNI_FALSE);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+}
+
+// KWin's scale set elsewhere goes to DisplayServer.scaleFromWayland, on the same thread.
+void onScale(double scale) {
+    JNIEnv* env = nullptr;
+    if (textInputVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK &&
+        textInputVm->AttachCurrentThread(&env, nullptr) != JNI_OK) {
+        return;
+    }
+    env->CallStaticVoidMethod(textInputClass, scaleMethod, static_cast<jfloat>(scale));
     if (env->ExceptionCheck()) env->ExceptionClear();
 }
 }  // namespace
@@ -228,6 +240,8 @@ Java_app_droidnux_display_DisplayServer_nativeStart(JNIEnv* env, jclass clazz, j
         textInputClass = static_cast<jclass>(env->NewGlobalRef(clazz));
         textInputMethod = env->GetStaticMethodID(clazz, "textInputFromWayland", "(Z)V");
         dnx_wl_set_text_input_callback(onTextInput);
+        scaleMethod = env->GetStaticMethodID(clazz, "scaleFromWayland", "(F)V");
+        dnx_wl_set_scale_callback(onScale);
     }
     initClipboard(env, clazz);
     dnx_wl_set_clipboard_callback(onClipboard);
