@@ -519,6 +519,7 @@ object DesktopEnvironment {
                 for f in .config .local .mozilla .thunderbird .ssh .gtkrc-2.0 .vscode; do
                     [ -e "/root/${'$'}f" ] && cp -a "/root/${'$'}f" "${'$'}home/"
                 done
+                [ -e "${'$'}home/.local" ] && chown -R "${'$'}user:" "${'$'}home/.local"
                 grep -rlI --exclude-dir=mozilla -e /root/ -e file:///root "${'$'}home/.config" "${'$'}home/.local/share/user-places.xbel" 2> /dev/null |
                     xargs -r sed -i "s|file:///root\b|file://${'$'}home|g; s|=/root/|=${'$'}home/|g; s|\"/root/|\"${'$'}home/|g"
             fi
@@ -541,7 +542,8 @@ object DesktopEnvironment {
                 wallets=${'$'}home/.local/share/kwalletd
                 mkdir -p "${'$'}wallets"
                 [ -s "${'$'}wallets/kdewallet.salt" ] || head -c 56 /dev/urandom > "${'$'}wallets/kdewallet.salt"
-                chown -R "${'$'}user:" "${'$'}home/.local"
+                # Only what mkdir made: ~/.local can hold a Flatpak repository of 100000 files.
+                chown "${'$'}user:" "${'$'}home/.local" "${'$'}home/.local/share" && chown -R "${'$'}user:" "${'$'}wallets"
                 walletkey() {
                     printf %s "${'$'}1" | perl -MDigest::SHA=hmac_sha512 -e '
                         local ${'$'}/; my ${'$'}key = <STDIN>; open my ${'$'}f, "<", ${'$'}ARGV[0] or die "salt: ${'$'}!\n"; binmode ${'$'}f;
