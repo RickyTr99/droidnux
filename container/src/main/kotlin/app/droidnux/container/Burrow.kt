@@ -9,6 +9,9 @@ import java.io.File
 /** Where the device's shared storage appears in the guest. */
 internal const val GUEST_SDCARD = "/sdcard"
 
+/** Where Android's USB drives (/mnt/media_rw/<uuid>) appear in the guest. */
+const val GUEST_USB_DRIVES = "/run/droidnux-usb"
+
 /**
  * Builds the command lines of Burrow, the guest runtime (see burrow/burrow.h).
  *
@@ -50,6 +53,10 @@ class Burrow(context: Context) {
             // The device's shared storage, once the user allows access to all files.
             if (Environment.isExternalStorageManager()) {
                 add("-b"); add("${Environment.getExternalStorageDirectory().absolutePath}:$GUEST_SDCARD")
+                // USB drives, mounted by Android where apps see none of them, but readable and writable
+                // with the external_storage group all-files access gives. Bound whole, so drives plugged
+                // in during the session show up (RemovableDrives links them in /media).
+                add("-b"); add("$MEDIA_RW:$GUEST_USB_DRIVES")
             }
             addAll(gpuNodeBinds())
             add("-w"); add(workDir)
@@ -114,6 +121,7 @@ class Burrow(context: Context) {
         const val RENDER_NODE = "renderD128"
 
         val DEFAULT_BINDS = listOf("/dev", "/proc", "/sys")
+        const val MEDIA_RW = "/mnt/media_rw"
         const val SHM_DIR = "tmp/.droidnux-shm"
         const val CGROUP_DIR = "run/droidnux-cgroup"
         const val CGROUP_MARKER = ".droidnux"

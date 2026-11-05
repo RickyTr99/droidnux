@@ -551,6 +551,10 @@ object DesktopEnvironment {
                 grep -rlI --exclude-dir=mozilla -e /root/ -e file:///root "${'$'}home/.config" "${'$'}home/.local/share/user-places.xbel" 2> /dev/null |
                     xargs -r sed -i "s|file:///root\b|file://${'$'}home|g; s|=/root/|=${'$'}home/|g; s|\"/root/|\"${'$'}home/|g"
             fi
+            # USB drives (Burrow's GUEST_USB_DRIVES) are root:external_storage 0770, a group the app
+            # has: its members see them writable (Dolphin, access()).
+            getent group 1077 > /dev/null || groupadd -g 1077 external_storage
+            id -G "${'$'}user" | grep -qw 1077 || usermod -a -G "${'$'}(getent group 1077 | cut -d: -f1)" "${'$'}user"
             home=${'$'}(getent passwd "${'$'}user" | cut -d: -f6)
             unset DROIDNUX_WALLET DROIDNUX_WALLET_BEFORE
             if [ -n "${'$'}pass" ]; then
