@@ -1,11 +1,10 @@
 package app.droidnux.desktop
 
-import android.content.BroadcastReceiver
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
+import android.os.Build
 import android.os.Environment
 import android.os.storage.StorageManager
+import android.os.storage.StorageVolume
 import android.system.Os
 import android.util.Log
 import app.droidnux.container.GUEST_USB_DRIVES
@@ -21,28 +20,26 @@ import java.io.File
  */
 class RemovableDrives(private val context: Context, rootfs: File, private val scope: CoroutineScope) {
 
+    private val storage = context.getSystemService(StorageManager::class.java)
     private val media = File(rootfs, "media")
     // One update at a time: two would race on the same links.
     private val writer = Dispatchers.IO.limitedParallelism(1)
 
-    private val receiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = update()
+    // USB drives are mounted invisible to apps, and Android sends no ACTION_MEDIA_* for them.
+    private val callback by lazy {
+        object : StorageManager.StorageVolumeCallback() {
+            override fun onStateChanged(volume: StorageVolume) = update()
+        }
     }
 
+    // shortcut: Android 10 has no volume callback, its drives are those of the session's start.
     fun start() {
         update()
-        context.registerReceiver(receiver, IntentFilter().apply {
-            addAction(Intent.ACTION_MEDIA_MOUNTED)
-            addAction(Intent.ACTION_MEDIA_UNMOUNTED)
-            addAction(Intent.ACTION_MEDIA_EJECT)
-            addAction(Intent.ACTION_MEDIA_REMOVED)
-            addAction(Intent.ACTION_MEDIA_BAD_REMOVAL)
-            addDataScheme("file")
-        })
+        if (Build.VERSION.SDK_INT >= 30) storage.registerStorageVolumeCallback(context.mainExecutor, callback)
     }
 
     fun stop() {
-        context.unregisterReceiver(receiver)
+        if (Build.VERSION.SDK_INT >= 30) storage.unregisterStorageVolumeCallback(callback)
     }
 
     private fun update() {
@@ -54,7 +51,7 @@ class RemovableDrives(private val context: Context, rootfs: File, private val sc
         // The binding exists only with all-files access (Burrow.guestCommand).
         if (!Environment.isExternalStorageManager()) return emptyMap()
         val drives = linkedMapOf<String, String>()
-        for (volume in context.getSystemService(StorageManager::class.java).storageVolumes) {
+        for (volume in storage.storageVolumes) {
             val uuid = volume.uuid ?: continue
             if (!volume.isRemovable) continue
             if (volume.state != Environment.MEDIA_MOUNTED && volume.state != Environment.MEDIA_MOUNTED_READ_ONLY) continue
