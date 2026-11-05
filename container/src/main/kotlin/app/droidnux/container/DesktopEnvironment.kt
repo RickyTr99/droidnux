@@ -107,6 +107,13 @@ object DesktopEnvironment {
     const val NETWORK_REQUEST = "wanted"
     private const val SYSTEM_BUS_SOCKET = "/run/dbus/system_bus_socket"
 
+    /**
+     * For guest jobs outside the session (apt): the session's system bus is
+     * stopped with it while the desktop is paused, and a package script that
+     * asks it something (flatpak's remote-list) would wait until it resumes.
+     */
+    const val NO_SYSTEM_BUS = "export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/droidnux-no-bus"
+
     /** Plasma on the app's Wayland compositor, with KDE's everyday apps. */
     private val PLASMA_PACKAGES = listOf(
         "plasma-workspace", "plasma-desktop", "kwin-wayland", "breeze", "xkb-data",
@@ -168,6 +175,7 @@ object DesktopEnvironment {
         return """
         set -e
         export DEBIAN_FRONTEND=noninteractive
+        $NO_SYSTEM_BUS
         apt-get update
         # The slim image keeps no man pages, nor their directories: some packages'
         # scripts copy theirs there (Gaia Sky's .deb into man6) and fail without them.

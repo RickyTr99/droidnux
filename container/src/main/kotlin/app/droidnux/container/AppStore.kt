@@ -95,6 +95,7 @@ object AppStore {
     private val HEADER = """
         set -e
         export DEBIAN_FRONTEND=noninteractive
+        ${DesktopEnvironment.NO_SYSTEM_BUS}
         # A job cancelled halfway leaves packages unpacked but not set up.
         dpkg --configure -a
     """.trimIndent()
