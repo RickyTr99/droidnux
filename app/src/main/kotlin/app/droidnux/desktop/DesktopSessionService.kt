@@ -86,9 +86,9 @@ class DesktopSessionService : Service() {
             }.also { registerReceiver(it, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) }
         }
         if (network == null) network = NetworkReporter(this, rootfs, scope).also { it.start() }
-        if (drives == null) drives = RemovableDrives(this, rootfs, scope).also { it.start() }
         SessionPause.file(this).delete() // left by a process that died paused
         val settings = DesktopSettings.load(this)
+        if (drives == null) drives = RemovableDrives(this, rootfs, settings.user, scope).also { it.start() }
         val verbose = BuildConfig.DIAGNOSTIC || settings.logs
         val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, settings.user, verbose))
         val password = Account.password(this).orEmpty()

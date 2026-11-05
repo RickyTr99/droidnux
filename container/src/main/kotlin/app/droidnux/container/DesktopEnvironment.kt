@@ -62,6 +62,9 @@ object DesktopEnvironment {
     private const val IM_PROGRAM = "$GUEST_LIB_DIR/droidnux-im"
     private const val IM_DESKTOP_FILE = "$PLASMA_DEFAULTS/droidnux-im.desktop"
 
+    /** Adds the XDG folders to Dolphin's places, once ([PLACES]). */
+    private const val PLACES_SCRIPT = "$GUEST_LIB_DIR/droidnux-places"
+
     /** Opens KDE's wallet with the password before and moves it to the new one (WALLET). */
     private const val WALLET_SCRIPT = "$GUEST_LIB_DIR/droidnux-wallet"
 
@@ -118,6 +121,8 @@ object DesktopEnvironment {
         "kscreen",
         // The desktop's user administers with sudo (USER_SESSION).
         "sudo",
+        // Documents, Pictures, Music... in the user's language (USER_DIRS).
+        "xdg-user-dirs",
         // KDE's wallet moved to a new password over D-Bus (WALLET).
         "python3-gi",
         // Digest::SHA, for the wallet's key (USER_SESSION); perl-base lacks it.
@@ -220,6 +225,7 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PLASMA_DEFAULTS/kwalletrc", PLASMA_KWALLETRC.toByteArray())
         writeFile(rootfs, WALLET_SCRIPT, WALLET.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, UPOWER_SCRIPT, UPOWER.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, PLACES_SCRIPT, PLACES.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, APP_GROUPS_SCRIPT, APP_GROUPS.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, BWRAP_SCRIPT, BWRAP.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, FLATPAK_GL_SCRIPT, FLATPAK_GL.toByteArray(), mode = 0x1ED)
@@ -254,6 +260,11 @@ object DesktopEnvironment {
      * password before it (empty line if it did not change): KDE's wallet
      * moves to the new one, and [WALLET_MOVED_MARKER] says so.
      */
+    /** The places of [user]'s Dolphin in [rootfs], when they are a real file there (never through a guest link). */
+    fun userPlaces(rootfs: File, user: String): File? =
+        File(rootfs.canonicalFile, "home/${user.ifEmpty { DESKTOP_USER }}/.local/share/user-places.xbel")
+            .takeIf { it.isFile && it.canonicalPath == it.path }
+
     fun sessionCommand(layout: String, user: String = "", verbose: Boolean = false): String =
         "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_LOCALE=${glibcLocale()} " +
             (if (user.isNotEmpty()) "DROIDNUX_USER=$user " else "") +
@@ -427,6 +438,75 @@ object DesktopEnvironment {
         if [ -d $GUEST_SDCARD ] && [ ! -e "${'$'}HOME/Android" ] && [ ! -L "${'$'}HOME/Android" ]; then
             ln -s $GUEST_SDCARD "${'$'}HOME/Android"
         fi
+    """.trimIndent()
+
+    /** Session script part: the XDG folders, in the user's language, and in Dolphin's places. */
+    private val USER_DIRS = """
+        if command -v xdg-user-dirs-update > /dev/null; then
+            # Firefox's downloads stay where they went before the package came.
+            [ -f "${'$'}config/user-dirs.dirs" ] || [ ! -d "${'$'}HOME/Downloads" ] ||
+                echo 'XDG_DOWNLOAD_DIR="${'$'}HOME/Downloads"' > "${'$'}config/user-dirs.dirs"
+            xdg-user-dirs-update && $PLACES_SCRIPT
+        fi
+    """.trimIndent()
+
+    /**
+     * KDE adds the XDG folders to a new user's places; the desktop's first
+     * ones were made without xdg-user-dirs. Once, so a place the user
+     * removes stays removed.
+     */
+    private val PLACES = """
+        #!/usr/bin/python3
+        # Written by DroidNux: adds the XDG folders to Dolphin's places once,
+        # as KDE does for a new user.
+        import os
+        import subprocess
+        import time
+        import urllib.parse
+        from xml.dom import minidom
+
+        home = os.environ["HOME"]
+        places = os.path.join(home, ".local/share/user-places.xbel")
+        marker = os.path.join(home, ".local/share/droidnux/xdg-places")
+        # KDE's own items in its order: English titles, which it translates (isSystemItem).
+        ITEMS = [("DESKTOP", "Desktop", "user-desktop"), ("DOCUMENTS", "Documents", "folder-documents"),
+                 ("DOWNLOAD", "Downloads", "folder-downloads"), ("MUSIC", "Music", "folder-music"),
+                 ("PICTURES", "Pictures", "folder-pictures"), ("VIDEOS", "Videos", "folder-videos")]
+        ITEM = ('<bookmark href="%s"><title>%s</title><info>'
+                '<metadata owner="http://freedesktop.org"><bookmark:icon name="%s"/></metadata>'
+                '<metadata owner="http://www.kde.org"><ID>%s</ID><isSystemItem>true</isSystemItem></metadata>'
+                '</info></bookmark>')
+        NAMESPACES = 'xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"'
+
+
+        def url(path):
+            return "file://" + urllib.parse.quote(path)
+
+
+        # Without the file KDE makes its own, with these folders.
+        if not os.path.exists(marker) and os.path.isfile(places) and not os.path.islink(places):
+            doc = minidom.parse(places)
+            root = doc.documentElement
+            bookmarks = root.getElementsByTagName("bookmark")
+            hrefs = {b.getAttribute("href") for b in bookmarks}
+            after = next((b for b in bookmarks if b.getAttribute("href") == url(home)), None)
+            stamp = int(time.time())
+            for n, (key, title, icon) in enumerate(ITEMS):
+                path = subprocess.run(["xdg-user-dir", key], capture_output=True, text=True).stdout.strip()
+                if not path or path == home or not os.path.isdir(path) or url(path) in hrefs:
+                    continue
+                item = ITEM % (url(path), title, icon, "%d/%d" % (stamp, n))
+                node = minidom.parseString("<xbel %s>%s</xbel>" % (NAMESPACES, item)).documentElement.firstChild
+                node = doc.importNode(node, True)
+                root.insertBefore(node, after.nextSibling if after else None)
+                after = node
+            temporary = places + ".droidnux"
+            with open(temporary, "w", encoding="utf-8") as f:
+                doc.writexml(f, encoding="UTF-8")
+            os.replace(temporary, places)
+        if os.path.isfile(places):
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            open(marker, "w").close()
     """.trimIndent()
 
     /** Session script part, inside D-Bus: sound, and the apps for System Monitor. */
@@ -703,6 +783,7 @@ ${LOCALE_ENV.prependIndent("            ")}
             [ -f "${'$'}config/startkderc" ] || printf '[General]\nsystemdBoot=false\n' > "${'$'}config/startkderc"
 
 ${SDCARD_LINK.prependIndent("            ")}
+${USER_DIRS.prependIndent("            ")}
 
             exec dbus-run-session "${'$'}0" --in-dbus
         fi
