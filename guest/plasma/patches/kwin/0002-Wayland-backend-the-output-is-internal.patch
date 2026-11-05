@@ -1,0 +1,18 @@
+Subject: [PATCH] Wayland backend: the output is the internal display
+
+Nested in DroidNux's compositor, KWin's output is the device's own screen.
+As an internal output it gets the internal brightness device powerdevil
+registers (kde_external_brightness_v1): Plasma's brightness controls the
+backlight DroidNux maps to Android's.
+---
+diff --git a/src/backends/wayland/wayland_output.cpp b/src/backends/wayland/wayland_output.cpp
+--- a/src/backends/wayland/wayland_output.cpp
++++ b/src/backends/wayland/wayland_output.cpp
+@@ -111,6 +111,7 @@
+     setInformation(Information{
+         .name = name,
+         .model = name,
+         .capabilities = Capability::Dpms,
++        .internal = true,
+     });
+ 

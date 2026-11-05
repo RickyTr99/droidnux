@@ -46,7 +46,7 @@ class Burrow(context: Context) {
             File(cgroups, CGROUP_MARKER).createNewFile()
             add("-b"); add("${cgroups.absolutePath}:/sys/fs/cgroup")
             // Android's screen as a backlight, for Plasma's brightness (DesktopEnvironment.backlightDevice).
-            add("-b"); add("${DesktopEnvironment.backlightDevice(rootfs).parentFile!!.absolutePath}:/sys/class/backlight")
+            add("-b"); add("${DesktopEnvironment.backlightClass(rootfs).also { DesktopEnvironment.backlightDevice(rootfs) }.absolutePath}:/sys/class/backlight")
             // The device's shared storage, once the user allows access to all files.
             if (Environment.isExternalStorageManager()) {
                 add("-b"); add("${Environment.getExternalStorageDirectory().absolutePath}:$GUEST_SDCARD")

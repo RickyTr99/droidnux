@@ -855,17 +855,30 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         writeFile(rootfs, NETWORK_STATE, fields.entries.joinToString("") { "${it.key}=${it.value}\n" }.toByteArray())
     }
 
+    /** The guest's /sys/class/backlight (Burrow binds it there), holding [backlightDevice]. */
+    fun backlightClass(rootfs: File): File = File(rootfs, BACKLIGHT_DIR)
+
     /**
-     * Android's screen as the backlight powerdevil's helper finds in /sys/class/backlight
-     * (Burrow binds the parent there): brightness from 0 to [BACKLIGHT_MAX], which the
-     * desktop's process writes and watches. Made if missing.
+     * Android's screen as the backlight powerdevil's helper finds in /sys/class/backlight:
+     * brightness from 0 to [BACKLIGHT_MAX], which the desktop's process writes and watches.
+     * Laid out as sysfs has it, a class entry linking to the device (powerdevil takes the
+     * link's target), with the uevent and subsystem udev asks for. Made if missing.
      */
-    fun backlightDevice(rootfs: File): File = File(rootfs, "$BACKLIGHT_DIR/droidnux").apply {
-        mkdirs()
-        for ((name, value) in listOf("max_brightness" to "$BACKLIGHT_MAX", "type" to "raw")) {
-            val file = File(this, name)
-            if (!file.isFile) file.writeText("$value\n")
+    fun backlightDevice(rootfs: File): File {
+        val device = File(backlightClass(rootfs), ".device/droidnux").apply { mkdirs() }
+        for ((name, value) in listOf("max_brightness" to "$BACKLIGHT_MAX\n", "type" to "raw\n", "uevent" to "")) {
+            val file = File(device, name)
+            if (!file.isFile) file.writeText(value)
         }
+        link(File(device, "subsystem"), "../../../../class/backlight")
+        link(File(backlightClass(rootfs), "droidnux"), ".device/droidnux")
+        return device
+    }
+
+    private fun link(file: File, target: String) {
+        if (runCatching { Os.readlink(file.path) }.getOrNull() == target) return
+        file.delete()
+        Os.symlink(target, file.path)
     }
 
     /** The system bus: everyone may talk to everyone (one user, in a container). */
