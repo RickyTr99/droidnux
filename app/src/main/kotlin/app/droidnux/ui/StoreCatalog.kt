@@ -185,8 +185,8 @@ data class StoreItem(
 ) {
     val flathub: Boolean get() = packages.first().startsWith(AppStore.FLATPAK)
 
-    /** The store icon's name (see AppStore.downloadIcons). */
-    val icon: String get() = app?.icon ?: packages.first()
+    /** The store icon's name (see AppStore.downloadIcons); a Flathub app's is its AppStream id, the [key]. */
+    val icon: String get() = app?.icon ?: if (flathub) key else packages.first()
 
     companion object {
         fun curated(catalog: Map<String, AppCatalog.App>): List<StoreItem> = StoreCatalog.APPS.map { app ->
@@ -206,10 +206,9 @@ data class StoreItem(
             val order = compareBy<AppCatalog.App>({ it.screenshots.isEmpty() }, { it.name.lowercase() })
             val rest = byPackage.values.filter { it.pkg !in taken }.sortedWith(order)
                 .map { StoreItem(it.pkg, it.name, it.summary, listOf(it.pkg), StoreCategory.of(it.categories), catalog = it) }
-            val flatpaks = flathub.associateBy { it.id }
-            fun flatpakItem(app: AppCatalog.App) = (AppStore.FLATPAK + app.id).let {
-                StoreItem(it, app.name, app.summary, listOf(it), StoreCategory.of(app.categories), catalog = app)
-            }
+            val flatpaks = flathub.associateBy { it.id.removeSuffix(".desktop") }
+            fun flatpakItem(app: AppCatalog.App) =
+                StoreItem(AppStore.FLATPAK + app.id, app.name, app.summary, listOf(AppStore.FLATPAK + app.pkg), StoreCategory.of(app.categories), catalog = app)
             val debian = (curated + rest).map { item ->
                 val id = item.catalog?.id?.removeSuffix(".desktop")
                 flatpaks[id]?.let { item.copy(alternative = flatpakItem(it)) } ?: item

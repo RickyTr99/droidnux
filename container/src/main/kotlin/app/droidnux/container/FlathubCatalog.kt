@@ -8,8 +8,9 @@ import java.io.InputStream
 import java.util.zip.GZIPInputStream
 
 /**
- * Flathub's AppStream catalog of the apps built for arm64, as [AppCatalog.App]s whose id and
- * package are the Flatpak id ("org.kde.krita"). Read once a week into a small index, like
+ * Flathub's AppStream catalog of the apps built for arm64, as [AppCatalog.App]s whose id is the
+ * AppStream one ("org.kde.kmplot.desktop" for some, which also names the icon) and whose package
+ * is the Flatpak id ("org.kde.kmplot"). Read once a week into a small index, like
  * Debian's ([AppCatalog]); icons are downloaded one by one ([iconUrl]).
  */
 object FlathubCatalog {
@@ -17,7 +18,7 @@ object FlathubCatalog {
     private const val CATALOG_URL = "https://dl.flathub.org/repo/appstream/aarch64/appstream.xml.gz"
     private const val ICONS_URL = "https://dl.flathub.org/repo/appstream/aarch64/icons/128x128/"
 
-    private const val FORMAT = 1
+    private const val FORMAT = 2
     private const val MAX_AGE_MS = 7L * 24 * 3600 * 1000
     private const val SCREENSHOT_WIDTH = 752
     private const val MAX_SCREENSHOTS = 6
@@ -46,7 +47,7 @@ object FlathubCatalog {
                     for (app in apps) {
                         out.write(
                             listOf(
-                                app.id, app.name, app.summary, app.categories.joinToString(";"), app.screenshots.joinToString(" "),
+                                app.id, app.pkg, app.name, app.summary, app.categories.joinToString(";"), app.screenshots.joinToString(" "),
                                 app.keywords, app.developer, app.homepage.orEmpty(), app.description.replace('\n', NEWLINE),
                             ).joinToString("\t"),
                         )
@@ -62,10 +63,10 @@ object FlathubCatalog {
         return index.bufferedReader().useLines { lines ->
             lines.drop(1).mapNotNull { line ->
                 val f = line.split('\t')
-                if (f.size < 9) return@mapNotNull null
+                if (f.size < 10) return@mapNotNull null
                 AppCatalog.App(
-                    f[0], f[0], f[1], f[2], f[3].split(';').filter { it.isNotEmpty() }, f[4].split(' ').filter { it.isNotEmpty() },
-                    f[5], f[6], f[7].ifEmpty { null }, f[8].replace(NEWLINE, '\n'),
+                    f[0], f[1], f[2], f[3], f[4].split(';').filter { it.isNotEmpty() }, f[5].split(' ').filter { it.isNotEmpty() },
+                    f[6], f[7], f[8].ifEmpty { null }, f[9].replace(NEWLINE, '\n'),
                 )
             }.toList()
         }
@@ -103,6 +104,11 @@ object FlathubCatalog {
                                 "developer_name" -> c.developers.putIfAbsent(lang, text)
                                 "url" -> if (parser.getAttributeValue(null, "type") == "homepage") c.homepage = text
                             }
+                        }
+                        path.size == 3 && tag == "bundle" && parser.getAttributeValue(null, "type") == "flatpak" -> {
+                            // "app/org.kde.kmplot/aarch64/stable"
+                            c.bundle = parser.nextText().trim().split('/').getOrNull(1)?.takeIf(AppStore::isFlatpakId)
+                            path.removeAt(path.size - 1)
                         }
                         path.size == 3 && tag == "description" -> {
                             for ((l, text) in markup(parser, lang)) c.descriptions[l] = text
@@ -183,6 +189,7 @@ object FlathubCatalog {
 
     private class Component(val type: String) {
         var id = ""
+        var bundle: String? = null
         var homepage: String? = null
         val names = HashMap<String, String>()
         val summaries = HashMap<String, String>()
@@ -197,7 +204,7 @@ object FlathubCatalog {
             if (type != "desktop-application" && type != "desktop" || id.isEmpty()) return null
             val name = pick(names, language) ?: return null
             return AppCatalog.App(
-                id, id, clean(name), clean(pick(summaries, language).orEmpty()), categories, screenshots,
+                id, bundle ?: id, clean(name), clean(pick(summaries, language).orEmpty()), categories, screenshots,
                 clean(keywords.distinct().joinToString(" ")), clean(pick(developers, language).orEmpty()),
                 homepage?.takeIf { it.startsWith("https://") || it.startsWith("http://") },
                 pick(descriptions, language).orEmpty(),

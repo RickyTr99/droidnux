@@ -75,8 +75,11 @@ data class AptProgress(
 /** An apt job of the store, waiting for the one before it, running, or failed. */
 sealed interface StoreJob {
     data object Queued : StoreJob
-    /** [done] of [total] steps (downloads and setups) once apt knows them, 0 of 0 before. */
-    data class Running(val removing: Boolean, val done: Int = 0, val total: Int = 0) : StoreJob
+    /**
+     * [done] of [total] steps (apt's downloads and setups, Flatpak's operations) once known, 0 of 0
+     * before; [part] of the step under way, when Flatpak tells it.
+     */
+    data class Running(val removing: Boolean, val done: Int = 0, val total: Int = 0, val part: Float = 0f) : StoreJob
     data class Failed(val message: String) : StoreJob
 }
 
@@ -268,7 +271,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val error = apt.withLock {
                 set(StoreJob.Running(remove))
-                withContext(Dispatchers.IO) { runApt(key, packages, remove) { done, total -> set(StoreJob.Running(remove, done, total)) } }
+                withContext(Dispatchers.IO) { runApt(key, packages, remove) { done, total, part -> set(StoreJob.Running(remove, done, total, part)) } }
             }
             refreshPackages()
             if (error != null) {
@@ -293,7 +296,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Runs apt in the container; null when it succeeded, else the reason. */
-    private fun runApt(key: String, packages: List<String>, remove: Boolean, progress: (Int, Int) -> Unit): String? {
+    private fun runApt(key: String, packages: List<String>, remove: Boolean, progress: (Int, Int, Float) -> Unit): String? {
         val script = if (remove) {
             AppStore.removeScript(packages, DesktopEnvironment.desktopPackages)
         } else {
@@ -306,8 +309,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         var last = ""
         var total = 0
         var done = 0
+        var part = 0f
         try {
             process.inputStream.bufferedReader().forEachLine { line ->
+                FLATPAK_STEP.find(line)?.let {
+                    done = it.groupValues[1].toInt() - 1
+                    total = it.groupValues[2].toInt()
+                    part = (it.groupValues[3].toIntOrNull() ?: 0) / 100f
+                }
                 when {
                     line == AppStore.DONE_MARKER -> ok = true
                     line.startsWith(AppStore.KEEP_MARKER) -> kept = line.substringAfterLast(' ')
@@ -317,7 +326,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 APT_SUMMARY.find(line)?.let { total += 2 * (it.groupValues[1].toInt() + it.groupValues[2].toInt()) }
                 APT_REMOVE.find(line)?.let { if (remove) total = it.groupValues[1].toInt() }
                 if (line.isNotBlank()) last = line
-                progress(done.coerceAtMost(total), total)
+                progress(done.coerceAtMost(total), total, part)
             }
             process.waitFor()
         } catch (e: java.io.IOException) {
@@ -658,6 +667,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val GPU_NAME = Regex("""Adreno \(TM\) (\d+)""")
         val APT_SUMMARY = Regex("""(\d+) upgraded, (\d+) newly installed""")
         val APT_REMOVE = Regex("""(\d+) to remove""")
+        /** "Installing 2/3… ████   45%  1.2 MB/s" (also Updating, Uninstalling); the percent comes later. */
+        val FLATPAK_STEP = Regex("""^(?:Installing|Updating|Uninstalling) (\d+)/(\d+)\S*(?:.*?(\d+)%)?""")
         /** "Need to get 95.4 MB of archives." (or "12.3 MB/95.4 MB" when some are cached: the first is to fetch). */
         val APT_NEED = Regex("""^Need to get ([\d.,]+) ([kMG]?)B""")
         /** The size at the end of "Get:12 http://… libfoo arm64 1.2-3 [123 kB]". */

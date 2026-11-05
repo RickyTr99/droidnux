@@ -37,7 +37,8 @@ object AppStore {
         $HEADER
         command -v flatpak > /dev/null || $APT install -y --no-install-recommends flatpak || { $APT update && $APT install -y --no-install-recommends flatpak; }
         flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-        flatpak install --system --noninteractive -y flathub ${ids.joinToString(" ")}
+        # Not --noninteractive: that drops the "Installing 1/3… 45%" lines the store's progress reads.
+        flatpak install --system -y flathub ${ids.joinToString(" ")} < /dev/null
         $glScript || true
         echo $DONE_MARKER
     """.trimIndent()

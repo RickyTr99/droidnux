@@ -1768,6 +1768,11 @@ ${Component.FLATPAK_GL.joinToString("\n") { "        ${it.branch} ${it.url} ${it
                     target = at(args[0])
                     mount_point(target, True)
                     mount("/" + name[2:], target)
+                    # Burrow's own binding of /dev/shm does not come with /dev; bwrap's --dev has one
+                    # (CEF apps like ONLYOFFICE abort without it).
+                    if name == "--dev" and os.path.isdir("/dev/shm"):
+                        mount_point(target + "/shm", True)
+                        mount("/dev/shm", target + "/shm")
                 elif name in ("--tmpfs", "--dir", "--mqueue"):
                     target = at(args[0])
                     m = mode(0o755)

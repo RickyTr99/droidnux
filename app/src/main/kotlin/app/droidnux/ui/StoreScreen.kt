@@ -776,7 +776,7 @@ private fun JobStatus(job: StoreJob) {
         )
         val bar = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp))
         when {
-            job is StoreJob.Running && job.total > 0 -> LinearProgressIndicator(progress = { job.done.toFloat() / job.total }, modifier = bar)
+            job is StoreJob.Running && job.total > 0 -> LinearProgressIndicator(progress = { (job.done + job.part).coerceAtMost(job.total.toFloat()) / job.total }, modifier = bar)
             job is StoreJob.Running -> LinearProgressIndicator(bar)
             else -> Unit
         }

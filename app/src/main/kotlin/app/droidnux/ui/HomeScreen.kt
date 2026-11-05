@@ -79,6 +79,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.union
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -257,7 +260,8 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
             // The pill follows the pages, under the finger too.
             position = { pager.currentPage + pager.currentPageOffsetFraction },
             badge = if (updates) Tab.SETTINGS else null,
-            modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.safeDrawing)
+            // Not safeDrawing: with the IME in it the bar would ride up on the keyboard.
+            modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
                 .padding(bottom = if (isCompact()) 12.dp else 24.dp),
         ) { if (it != tab) select(it) }
     }
