@@ -1,5 +1,8 @@
 package app.droidnux.ui
 
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SegmentedButton
 import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
@@ -187,10 +190,10 @@ private fun packageItem(found: app.droidnux.container.AppStore.Found) =
 
 /** The store's apps that are installed, and the packages installed from its search. */
 private fun installedItems(state: AppState): List<StoreItem> {
-    val items = state.storeItems.filter { item ->
-        item.packages.first() in state.packages && (item.app != null || item.key in state.storePackages)
-    }
-    val shown = items.mapTo(HashSet()) { it.key }
+    fun installed(item: StoreItem) = item.packages.first() in state.packages && (item.app != null || item.key in state.storePackages)
+    // An app installed from Flathub is listed as its Debian entry, whose page has both.
+    val items = state.storeItems.filter { item -> installed(item) || item.alternative?.let(::installed) == true }
+    val shown = items.flatMapTo(HashSet()) { listOfNotNull(it.key, it.alternative?.key) }
     return items + state.storePackages.filter { it in state.packages && it !in shown }.map { packageItem(app.droidnux.container.AppStore.Found(it, "")) }
 }
 
@@ -499,8 +502,18 @@ private fun StoreRow(item: StoreItem, state: AppState, viewModel: AppViewModel, 
             Column(Modifier.weight(1f)) {
                 Text(item.name, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 val summary = summaryOf(item)
-                if (summary.isNotEmpty()) {
-                    Text(summary, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Only Flathub has it; an app without the label comes from Debian.
+                    if (item.flathub) {
+                        Text(
+                            stringResource(R.string.store_source_flathub), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clip(RoundedCornerShape(6.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest)
+                                .padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                    if (summary.isNotEmpty()) {
+                        Text(summary, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
             StoreActions(item, job, installed, launcher, state, viewModel, nav, compact = true)
@@ -511,9 +524,17 @@ private fun StoreRow(item: StoreItem, state: AppState, viewModel: AppViewModel, 
 
 // -- An app ------------------------------------------------------------------------------------
 
-/** An app's page: what it is, its screenshots, its description, where it comes from. */
+/**
+ * An app's page: what it is, its screenshots, its description, where it comes from. An app on
+ * Debian and Flathub has a choice of the two: Debian's first, unless Flathub's is the installed one.
+ */
 @Composable
-private fun AppPage(item: StoreItem, state: AppState, viewModel: AppViewModel, padding: PaddingValues, nav: StoreNav) {
+private fun AppPage(page: StoreItem, state: AppState, viewModel: AppViewModel, padding: PaddingValues, nav: StoreNav) {
+    val alternative = page.alternative
+    var useFlathub by rememberSaveable(page.key) {
+        mutableStateOf(alternative != null && alternative.packages.first() in state.packages && page.packages.first() !in state.packages)
+    }
+    val item = if (useFlathub && alternative != null) alternative else page
     val job = state.storeJobs[item.key]
     val installed = item.packages.first() in state.packages
     val launcher = launcherOf(item, installed, viewModel)
@@ -523,6 +544,17 @@ private fun AppPage(item: StoreItem, state: AppState, viewModel: AppViewModel, p
     val uri = LocalUriHandler.current
     val actions = @Composable {
         Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.widthIn(max = 360.dp).animateContentSize()) {
+            if (alternative != null) {
+                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                    for ((index, flathub) in listOf(false, true).withIndex()) {
+                        SegmentedButton(
+                            selected = useFlathub == flathub,
+                            onClick = { useFlathub = flathub },
+                            shape = SegmentedButtonDefaults.itemShape(index, 2),
+                        ) { Text(stringResource(if (flathub) R.string.store_source_flathub else R.string.store_vendor_debian)) }
+                    }
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { StoreActions(item, job, installed, launcher, state, viewModel, nav) }
             if (job != null) JobStatus(job)
         }
@@ -587,7 +619,7 @@ private fun AppPage(item: StoreItem, state: AppState, viewModel: AppViewModel, p
         item(key = "info") {
             Column(Modifier.widthIn(max = 840.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SectionHeader(stringResource(R.string.store_info))
-                InfoLine(stringResource(R.string.store_package), item.packages.joinToString(", "))
+                InfoLine(stringResource(R.string.store_package), item.packages.joinToString(", ") { it.removePrefix(app.droidnux.container.AppStore.FLATPAK) })
                 catalog?.developer?.takeIf { it.isNotEmpty() }?.let { InfoLine(stringResource(R.string.store_developer), it) }
                 catalog?.homepage?.let { url ->
                     InfoLine(stringResource(R.string.store_homepage), url.removePrefix("https://").removePrefix("http://").trimEnd('/')) { uri.openUri(url) }

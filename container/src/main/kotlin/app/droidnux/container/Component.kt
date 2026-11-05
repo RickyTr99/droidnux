@@ -35,13 +35,13 @@ data class Component(
             guestPath = DesktopEnvironment.MESA_PREFIX,
         )
 
-        /** KSvg and KIconThemes with fewer file lookups, KWin passing on the scroll source, and system monitor plugins for Android: guest/plasma. */
+        /** KSvg and KIconThemes with fewer file lookups, KWin passing on the scroll source and taking the backlight, and system monitor plugins for Android: guest/plasma. */
         val PLASMA = Component(
             id = "plasma",
-            version = "6.13.0-dn5",
-            url = "$RELEASES/plasma-6.13.0-dn5/droidnux-plasma-6.13.0-dn5-arm64.tar.xz",
-            sha256 = "c8e0a982719aa8962054786c67f5030212862b2bccdb6817d373f4aa94ed1e4b",
-            sizeBytes = 2_130_800,
+            version = "6.13.0-dn6",
+            url = "$RELEASES/plasma-6.13.0-dn6/droidnux-plasma-6.13.0-dn6-arm64.tar.xz",
+            sha256 = "1bea0a7bfcb263cb2491bb2d3fef39a47fd6c62224df315a57d212d996ca3e30",
+            sizeBytes = 2_128_544,
             guestPath = DesktopEnvironment.PLASMA_PREFIX,
         )
 

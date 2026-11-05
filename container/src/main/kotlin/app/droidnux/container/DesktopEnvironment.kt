@@ -82,7 +82,7 @@ object DesktopEnvironment {
     const val BACKLIGHT_MAX = 1000
 
     /** Installs DroidNux's Mesa as Flatpak's GL extension ([FLATPAK_GL]). */
-    private const val FLATPAK_GL_SCRIPT = "$GUEST_LIB_DIR/droidnux-flatpak-gl"
+    const val FLATPAK_GL_SCRIPT = "$GUEST_LIB_DIR/droidnux-flatpak-gl"
 
     /** Copies Plasma's wallpaper for the app's home screen ([WALLPAPER]). */
     private const val WALLPAPER_SCRIPT = "$GUEST_LIB_DIR/droidnux-wallpaper"
@@ -329,7 +329,10 @@ object DesktopEnvironment {
             for dir in /usr/share/icons/breeze-dark/apps/48 /usr/share/icons/breeze/apps/48 \
                 /usr/share/icons/hicolor/scalable/apps /usr/share/icons/hicolor/256x256/apps \
                 /usr/share/icons/hicolor/128x128/apps /usr/share/icons/hicolor/64x64/apps \
-                /usr/share/icons/hicolor/48x48/apps /usr/share/pixmaps; do
+                /usr/share/icons/hicolor/48x48/apps /usr/share/pixmaps \
+                /var/lib/flatpak/exports/share/icons/hicolor/scalable/apps /var/lib/flatpak/exports/share/icons/hicolor/128x128/apps \
+                /home/*/.local/share/flatpak/exports/share/icons/hicolor/scalable/apps \
+                /home/*/.local/share/flatpak/exports/share/icons/hicolor/128x128/apps; do
                 for ext in svg png; do
                     [ -f "${'$'}dir/${'$'}1.${'$'}ext" ] && { echo "${'$'}dir/${'$'}1.${'$'}ext"; return; }
                 done
@@ -345,7 +348,9 @@ object DesktopEnvironment {
             esac
         }
 
-        for f in /usr/local/share/applications/*.desktop /usr/share/applications/*.desktop; do
+        # Flatpak's apps too, system-wide and the desktop user's.
+        for f in /usr/local/share/applications/*.desktop /usr/share/applications/*.desktop \
+            /var/lib/flatpak/exports/share/applications/*.desktop /home/*/.local/share/flatpak/exports/share/applications/*.desktop; do
             [ -f "${'$'}f" ] || continue
             id=${'$'}(basename "${'$'}f" .desktop)
             awk -F= -v lang="${'$'}lang" '
@@ -455,7 +460,8 @@ object DesktopEnvironment {
             while read -r id; do
                 case "${'$'}id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
                 p=${'$'}(pgrep -x ${'$'}LAUNCH_AFTER | head -1)
-                for d in /usr/local/share/applications /usr/share/applications; do
+                for d in /usr/local/share/applications /usr/share/applications \
+                    "${'$'}HOME/.local/share/flatpak/exports/share/applications" /var/lib/flatpak/exports/share/applications; do
                     [ -f "${'$'}d/${'$'}id.desktop" ] || continue
                     # In a subshell that exits at once: the app is orphaned and reaped
                     # by the runtime, not left a zombie of this loop.
@@ -1548,14 +1554,17 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
     // Written by earlier versions: an autoconfig script hiding Firefox's
     // "sandbox disabled" bar, and what only XFCE and proot used.
     /**
-     * [FLATPAK_GL_SCRIPT]: the extension for each runtime branch the user has, downloaded
-     * and installed in the user's installation once per build (a stamp with its SHA-256).
+     * [FLATPAK_GL_SCRIPT]: the extension for each runtime branch installed, downloaded and
+     * installed once per build (a stamp with its SHA-256): in the user's installation from
+     * the session, system-wide from the store (as root).
      */
     private val FLATPAK_GL = """
         #!/bin/sh
         # Written by DroidNux: our Mesa as Flatpak's GL extension (org.freedesktop.Platform.GL.droidnux),
         # for each branch of the Freedesktop runtime installed, as Flathub has no build of it.
         command -v flatpak > /dev/null || exit 0
+        scope=--user
+        [ "${'$'}(id -u)" != 0 ] || scope=--system
         stamps=${'$'}{XDG_DATA_HOME:-${'$'}HOME/.local/share}/flatpak/.droidnux-gl
         while read -r branch url sha; do
             [ -n "${'$'}sha" ] && flatpak info org.freedesktop.Platform//${'$'}branch > /dev/null 2>&1 || continue
@@ -1563,7 +1572,7 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
             file=${'$'}(mktemp --suffix=.flatpak) || exit 1
             if python3 -c 'import shutil, sys, urllib.request; shutil.copyfileobj(urllib.request.urlopen(sys.argv[1], timeout=60), open(sys.argv[2], "wb"))' "${'$'}url" "${'$'}file" &&
                 echo "${'$'}sha  ${'$'}file" | sha256sum -c --status &&
-                flatpak install --user --noninteractive --reinstall -y --bundle "${'$'}file"; then
+                flatpak install ${'$'}scope --noninteractive --reinstall -y --bundle "${'$'}file"; then
                 mkdir -p "${'$'}(dirname "${'$'}stamps")" && echo "${'$'}sha" > "${'$'}stamps-${'$'}branch"
                 echo "Flatpak: DroidNux's GL extension for ${'$'}branch installed"
             fi

@@ -1,18 +1,76 @@
-Subject: [PATCH] Wayland backend: the output is the internal display
+Subject: [PATCH] Wayland backend: the output is the internal display, with its backlight
 
 Nested in DroidNux's compositor, KWin's output is the device's own screen.
 As an internal output it gets the internal brightness device powerdevil
-registers (kde_external_brightness_v1): Plasma's brightness controls the
+registers (kde_external_brightness_v1), and passes the brightness Plasma
+sets on to it, as the DRM backend does: Plasma's brightness controls the
 backlight DroidNux maps to Android's.
 ---
-diff --git a/src/backends/wayland/wayland_output.cpp b/src/backends/wayland/wayland_output.cpp
+--- a/src/backends/wayland/wayland_output.h
++++ b/src/backends/wayland/wayland_output.h
+@@ -82,6 +82,8 @@
+     void setDpmsMode(DpmsMode mode) override;
+     void updateDpmsMode(DpmsMode dpmsMode);
+     void updateEnabled(bool enabled);
++    void setBrightnessDevice(BrightnessDevice *device) override;
++    void applyChanges(const OutputConfiguration &config) override;
+ 
+     void present(const std::shared_ptr<OutputFrame> &frame);
+     void setPrimaryBuffer(wl_buffer *buffer);
 --- a/src/backends/wayland/wayland_output.cpp
 +++ b/src/backends/wayland/wayland_output.cpp
-@@ -111,6 +111,7 @@
-     setInformation(Information{
+@@ -8,6 +8,8 @@
+ */
+ #include "wayland_output.h"
+ #include "compositor.h"
++#include "core/brightnessdevice.h"
++#include "core/outputconfiguration.h"
+ #include "core/outputlayer.h"
+ #include "core/renderbackend.h"
+ #include "core/renderloop_p.h"
+@@ -112,6 +114,7 @@
          .name = name,
          .model = name,
          .capabilities = Capability::Dpms,
 +        .internal = true,
      });
  
+     m_turnOffTimer.setSingleShot(true);
+@@ -332,6 +335,37 @@
+     setState(next);
+ }
+ 
++void WaylandOutput::setBrightnessDevice(BrightnessDevice *device)
++{
++    Output::setBrightnessDevice(device);
++    Information info = m_information;
++    info.capabilities = device ? Capability::Dpms | Capability::BrightnessControl : Capability::Dpms;
++    setInformation(info);
++    if (device && device->observedBrightness().has_value()) {
++        // The screen's brightness as the device has it, the first time.
++        State next = m_state;
++        next.brightnessSetting = *device->observedBrightness();
++        next.currentBrightness = next.brightnessSetting;
++        setState(next);
++    }
++}
++
++void WaylandOutput::applyChanges(const OutputConfiguration &config)
++{
++    Output::applyChanges(config);
++    const auto props = config.constChangeSet(this);
++    if (!props || !props->brightness) {
++        return;
++    }
++    State next = m_state;
++    next.brightnessSetting = *props->brightness;
++    next.currentBrightness = next.brightnessSetting;
++    setState(next);
++    if (m_brightnessDevice) {
++        m_brightnessDevice->setBrightness(next.brightnessSetting);
++    }
++}
++
+ void WaylandOutput::handleConfigure(const QSize &size, XdgShellSurface::States states, quint32 serial)
+ {
+     if (!m_ready) {

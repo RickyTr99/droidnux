@@ -199,6 +199,7 @@
     <string name="store_media">Multimedia</string>
     <string name="store_internet">Internet</string>
     <string name="store_vendor_debian">Debian</string>
+    <string name="store_source_flathub" translatable="false">Flathub</string>
     <string name="store_vendor_microsoft">Microsoft · official repository</string>
     <string name="store_open">Open</string>
     <string name="store_remove">Remove</string>

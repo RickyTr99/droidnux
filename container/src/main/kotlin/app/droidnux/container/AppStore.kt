@@ -21,6 +21,34 @@ object AppStore {
     /** Printed by [removeScript] instead of removing a package the desktop needs: the line ends with its name. */
     const val KEEP_MARKER = "DROIDNUX_STORE_KEEP"
 
+    /** A Flathub app as a store package: "flatpak:org.kde.krita". */
+    const val FLATPAK = "flatpak:"
+
+    private fun flatpakIds(packages: List<String>) =
+        packages.filter { it.startsWith(FLATPAK) }.map { it.removePrefix(FLATPAK) }.filter(::isFlatpakId)
+
+    fun isFlatpakId(id: String) = Regex("""[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2,}""").matches(id)
+
+    /**
+     * Flathub's apps, system-wide (the store runs as root), Flatpak and the remote set up the
+     * first time; then DroidNux's GL extension for their runtime (DesktopEnvironment's FLATPAK_GL).
+     */
+    private fun flatpakInstallScript(ids: List<String>, glScript: String) = """
+        $HEADER
+        command -v flatpak > /dev/null || $APT install -y --no-install-recommends flatpak || { $APT update && $APT install -y --no-install-recommends flatpak; }
+        flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+        flatpak install --system --noninteractive -y flathub ${ids.joinToString(" ")}
+        $glScript || true
+        echo $DONE_MARKER
+    """.trimIndent()
+
+    private fun flatpakRemoveScript(ids: List<String>) = """
+        set -e
+        flatpak uninstall --system --noninteractive -y ${ids.joinToString(" ")}
+        flatpak uninstall --system --noninteractive -y --unused || true
+        echo $DONE_MARKER
+    """.trimIndent()
+
     /** Vendor repositories, by the package that comes from them. */
     private val REPOSITORIES = mapOf("code" to "microsoft")
 
@@ -69,6 +97,7 @@ object AppStore {
      * translations for [language]; needs network. Ends with [DONE_MARKER].
      */
     fun installScript(packages: List<String>, language: String): String {
+        flatpakIds(packages).takeIf { it.isNotEmpty() }?.let { return flatpakInstallScript(it, DesktopEnvironment.FLATPAK_GL_SCRIPT) }
         val names = packages.filter(::isPackageName)
         require(names.isNotEmpty()) { "no package to install" }
         val lang = language.takeIf { Regex("[a-z]{2,3}").matches(it) } ?: "en"
@@ -98,6 +127,7 @@ object AppStore {
      * Refuses (with [KEEP_MARKER]) when that would take any of [keep] away.
      */
     fun removeScript(packages: List<String>, keep: List<String>): String {
+        flatpakIds(packages).takeIf { it.isNotEmpty() }?.let { return flatpakRemoveScript(it) }
         val list = packages.filter(::isPackageName).joinToString(" ")
         require(list.isNotEmpty()) { "no package to remove" }
         return """
@@ -190,10 +220,13 @@ object AppStore {
         temp.renameTo(file)
     }
 
-    /** Packages dpkg has installed in [rootfs], read from its status file. */
+    /** Packages dpkg has installed in [rootfs], read from its status file, and Flatpak's apps as [FLATPAK] ones. */
     fun installedPackages(rootfs: File): Set<String> {
-        val status = guestFile(rootfs, "var/lib/dpkg/status") ?: return emptySet()
         val installed = HashSet<String>()
+        for (dir in flatpakAppDirs(rootfs)) {
+            dir.list()?.filter(::isFlatpakId)?.mapTo(installed) { FLATPAK + it }
+        }
+        val status = guestFile(rootfs, "var/lib/dpkg/status") ?: return installed
         var name = ""
         status.forEachLine { line ->
             when {
@@ -209,7 +242,8 @@ object AppStore {
      * dependencies does (keepassxc is only a dependency on keepassxc-full).
      */
     fun desktopId(rootfs: File, pkg: String): String? =
-        launcherOf(rootfs, pkg) ?: dependencies(rootfs, pkg).firstNotNullOfOrNull { launcherOf(rootfs, it) }
+        if (pkg.startsWith(FLATPAK)) pkg.removePrefix(FLATPAK).takeIf(::isFlatpakId) else launcherOf(rootfs, pkg)
+            ?: dependencies(rootfs, pkg).firstNotNullOfOrNull { launcherOf(rootfs, it) }
 
     /** The packages [pkg] depends on, from dpkg's status file. */
     private fun dependencies(rootfs: File, pkg: String): List<String> {
@@ -238,6 +272,15 @@ object AppStore {
     }
 
     private val LAUNCHER = Regex("""/usr/share/applications/([A-Za-z0-9._-]+)\.desktop""")
+
+    /** Where Flatpak keeps its apps: system-wide and in each user's home. */
+    private fun flatpakAppDirs(rootfs: File): List<File> {
+        val homes = guestDir(rootfs, "home")?.listFiles().orEmpty().map { "home/${it.name}/.local/share/flatpak/app" }
+        return (listOf("var/lib/flatpak/app") + homes).mapNotNull { guestDir(rootfs, it) }
+    }
+
+    private fun guestDir(rootfs: File, path: String): File? =
+        File(rootfs.canonicalFile, path).takeIf { it.isDirectory && it.canonicalPath == it.path }
 
     // Read only real files inside the rootfs, never through a guest link.
     private fun guestFile(rootfs: File, path: String): File? =

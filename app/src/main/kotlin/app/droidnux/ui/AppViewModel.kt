@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.droidnux.R
 import app.droidnux.container.AppCatalog
+import app.droidnux.container.FlathubCatalog
 import app.droidnux.container.AppStore
 import app.droidnux.container.CommandResult
 import app.droidnux.container.Component
@@ -365,12 +366,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(storeCatalog = CatalogState.LOADING) }
         catalogJob = viewModelScope.launch {
             val dir = File(getApplication<Application>().filesDir, "store")
-            val catalog = withContext(Dispatchers.IO) { runCatching { AppCatalog.load(dir, Locale.getDefault().language) } }.getOrNull()
+            val language = Locale.getDefault().language
+            val catalog = withContext(Dispatchers.IO) { runCatching { AppCatalog.load(dir, language) } }.getOrNull()
             if (catalog == null) {
                 _state.update { it.copy(storeCatalog = CatalogState.FAILED) }
                 return@launch
             }
-            val items = withContext(Dispatchers.Default) { StoreItem.all(catalog) }
+            // Debian's alone if Flathub's cannot be had.
+            val flathub = withContext(Dispatchers.IO) { runCatching { FlathubCatalog.load(dir, language) } }.getOrDefault(emptyList())
+            val items = withContext(Dispatchers.Default) { StoreItem.all(catalog, flathub) }
             _state.update { it.copy(storeItems = items, storeCatalog = CatalogState.READY) }
         }
     }
@@ -443,9 +447,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** The store's icon called [name] (off the main thread), null until downloaded. */
-    fun storeIcon(name: String): Bitmap? = storeBitmaps.get("store:$name") ?: File(storeIconsDir, "$name.png").takeIf { it.isFile }
-        ?.let { BitmapFactory.decodeFile(it.path) }?.also { storeBitmaps.put("store:$name", it) }
+    /** The store's icon called [name] (off the main thread), null until downloaded; a Flathub app's ("flatpak:<id>") on demand. */
+    fun storeIcon(name: String): Bitmap? {
+        storeBitmaps.get("store:$name")?.let { return it }
+        val id = name.removePrefix(AppStore.FLATPAK).takeIf { it != name && AppStore.isFlatpakId(it) }
+        val file = File(storeIconsDir, if (id != null) "flatpak-$id.png" else "$name.png")
+        if (id != null && !file.isFile) runCatching { AppStore.download(FlathubCatalog.iconUrl(id), file) }
+        return file.takeIf { it.isFile }?.let { BitmapFactory.decodeFile(it.path) }?.also { storeBitmaps.put("store:$name", it) }
+    }
 
     /** First run: installs whatever is missing, in order, and stops at the first failure. */
     fun runSetup(apps: List<String> = _state.value.setup?.apps.orEmpty()) {

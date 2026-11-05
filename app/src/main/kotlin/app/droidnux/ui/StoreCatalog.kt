@@ -3,6 +3,7 @@ package app.droidnux.ui
 import androidx.compose.ui.graphics.vector.ImageVector
 import app.droidnux.R
 import app.droidnux.container.AppCatalog
+import app.droidnux.container.AppStore
 
 /**
  * The store's categories, each with the freedesktop categories it shows as filters
@@ -168,7 +169,8 @@ object StoreCatalog {
 /**
  * What the store shows: one of its own apps ([app]), with Debian's catalog entry for it when
  * there is one ([catalog]), or an app of the catalog alone. [key] names its apt jobs: the
- * store's id, or the package.
+ * store's id, or the package. A Flathub app's package is "flatpak:<id>" ([flathub]): alone, or
+ * as the [alternative] of a Debian one.
  */
 data class StoreItem(
     val key: String,
@@ -179,7 +181,10 @@ data class StoreItem(
     val category: StoreCategory,
     val app: StoreApp? = null,
     val catalog: AppCatalog.App? = null,
+    val alternative: StoreItem? = null,
 ) {
+    val flathub: Boolean get() = packages.first().startsWith(AppStore.FLATPAK)
+
     /** The store icon's name (see AppStore.downloadIcons). */
     val icon: String get() = app?.icon ?: packages.first()
 
@@ -188,16 +193,29 @@ data class StoreItem(
             StoreItem(app.id, app.name, null, app.packages, app.category, app, catalog[app.icon] ?: catalog[app.packages.first()])
         }
 
-        /** The store's apps, then the rest of the catalog: those with screenshots first, by name. */
-        fun all(catalog: List<AppCatalog.App>): List<StoreItem> {
+        /**
+         * The store's apps, then the rest of Debian's catalog, then Flathub's apps Debian lacks: those
+         * with screenshots first, by name. An app on both (the same AppStream id) has Flathub's as
+         * its [alternative].
+         */
+        fun all(catalog: List<AppCatalog.App>, flathub: List<AppCatalog.App> = emptyList()): List<StoreItem> {
             val byPackage = LinkedHashMap<String, AppCatalog.App>()
             for (app in catalog) byPackage.putIfAbsent(app.pkg, app)
             val curated = curated(byPackage)
             val taken = StoreCatalog.APPS.flatMapTo(HashSet()) { it.packages }
-            val rest = byPackage.values.filter { it.pkg !in taken }
-                .sortedWith(compareBy({ it.screenshots.isEmpty() }, { it.name.lowercase() }))
+            val order = compareBy<AppCatalog.App>({ it.screenshots.isEmpty() }, { it.name.lowercase() })
+            val rest = byPackage.values.filter { it.pkg !in taken }.sortedWith(order)
                 .map { StoreItem(it.pkg, it.name, it.summary, listOf(it.pkg), StoreCategory.of(it.categories), catalog = it) }
-            return curated + rest
+            val flatpaks = flathub.associateBy { it.id }
+            fun flatpakItem(app: AppCatalog.App) = (AppStore.FLATPAK + app.id).let {
+                StoreItem(it, app.name, app.summary, listOf(it), StoreCategory.of(app.categories), catalog = app)
+            }
+            val debian = (curated + rest).map { item ->
+                val id = item.catalog?.id?.removeSuffix(".desktop")
+                flatpaks[id]?.let { item.copy(alternative = flatpakItem(it)) } ?: item
+            }
+            val paired = debian.mapNotNullTo(HashSet()) { it.alternative?.catalog?.id }
+            return debian + flathub.filter { it.id !in paired }.sortedWith(order).map(::flatpakItem)
         }
 
         /**
