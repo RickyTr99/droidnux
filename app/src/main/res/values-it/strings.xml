@@ -101,6 +101,9 @@
     <string name="wizard_space_needed">Spazio richiesto</string>
     <string name="wizard_space_needed_value">circa 2,1 GB</string>
     <string name="wizard_space_free">Spazio libero</string>
+    <string name="wizard_space_short">Spazio insufficiente</string>
+    <string name="wizard_space_short_text">Libera almeno %1$s</string>
+    <string name="wizard_space_open">Apri Archiviazione</string>
     <string name="wizard_distro">Distribuzione</string>
     <string name="wizard_desktop">Desktop</string>
     <string name="distro_debian">Debian 13</string>

@@ -174,6 +174,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val rootfs get() = container.installer.rootfsDir(_state.value.distro)
 
+    /** Plasma's wallpaper, which the home screen shows (DesktopEnvironment.wallpaperFile). */
+    val wallpaperFile: File get() = DesktopEnvironment.wallpaperFile(rootfs)
+
     init {
         viewModelScope.launch {
             val cached = withContext(Dispatchers.IO) {

@@ -402,11 +402,14 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
     val compact = isCompact()
     val side = if (compact) 16.dp else 48.dp
     var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
-    // Reloaded whenever the screen comes back, and when the desktop's process writes a new one
-    // (it does on leaving the desktop, often after this screen is back). Decoding takes a few frames.
+    // The desktop's wallpaper; its last picture, windows and all, only while it is paused
+    // (or before a session copied the wallpaper). Reloaded whenever the screen comes back,
+    // and when the file is written anew (the picture on leaving the desktop, often after
+    // this screen is back). Decoding takes a few frames.
     val scope = rememberCoroutineScope()
-    LifecycleResumeEffect(Unit) {
-        val file = DesktopActivity.thumbnailFile(context)
+    LifecycleResumeEffect(state.sessionPaused) {
+        val wallpaper = viewModel.wallpaperFile
+        val file = if (!state.sessionPaused && wallpaper.isFile) wallpaper else DesktopActivity.thumbnailFile(context)
         fun load() = scope.launch {
             thumbnail = withContext(Dispatchers.IO) { if (file.isFile) blurred(file.path) else null }
         }
@@ -907,8 +910,11 @@ private fun appColumns(compact: Boolean, width: Dp): Int = if (compact) 4 else (
  * nothing per frame and works on every Android version.
  */
 private fun blurred(path: String): Bitmap? {
-    // A light blur: a few pixels at a quarter of the size, the screen stretches it smoothly.
-    val quarter = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = 4 }) ?: return null
+    // A light blur: a few pixels at about a quarter of the screen's size (a photo may be far larger), the screen stretches it smoothly.
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }.also { BitmapFactory.decodeFile(path, it) }
+    var sample = 4
+    while (bounds.outWidth / (sample * 2) >= 700) sample *= 2
+    val quarter = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
     return boxBlur(quarter, radius = 3, passes = 2)
 }
 

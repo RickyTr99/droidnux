@@ -49,8 +49,14 @@ data class Component(
 
         /** [MESA] as Flatpak's GL extension, one per Freedesktop runtime branch (guest/mesa/flatpak.sh): the session installs it. */
         val FLATPAK_GL = listOf(
-            FlatpakExtension("25.08", "", ""),
-            FlatpakExtension("26.08", "", ""),
+            FlatpakExtension(
+                "25.08", "$RELEASES/mesa-26.2.5-dn6/droidnux-mesa-26.2.5-dn6-flatpak-25.08-arm64.flatpak",
+                "f19a5ad34583bed8eecf1312d6605fd0106c68b21e6a7876415e2d515e807def",
+            ),
+            FlatpakExtension(
+                "26.08", "$RELEASES/mesa-26.2.5-dn6/droidnux-mesa-26.2.5-dn6-flatpak-26.08-arm64.flatpak",
+                "0bf6f781197bfffda188ad4ca13a8807bde058b68dedadfbd0f56457e3f0b0ab",
+            ),
         )
     }
 }

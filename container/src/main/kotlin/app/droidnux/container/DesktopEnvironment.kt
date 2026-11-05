@@ -84,6 +84,10 @@ object DesktopEnvironment {
     /** Installs DroidNux's Mesa as Flatpak's GL extension ([FLATPAK_GL]). */
     private const val FLATPAK_GL_SCRIPT = "$GUEST_LIB_DIR/droidnux-flatpak-gl"
 
+    /** Copies Plasma's wallpaper for the app's home screen ([WALLPAPER]). */
+    private const val WALLPAPER_SCRIPT = "$GUEST_LIB_DIR/droidnux-wallpaper"
+    private const val WALLPAPER_FILE = "/tmp/.droidnux-wallpaper"
+
     /** bubblewrap for Flatpak, on what Burrow emulates ([BWRAP]). */
     private const val BWRAP_SCRIPT = "$GUEST_LIB_DIR/droidnux-bwrap"
 
@@ -219,6 +223,7 @@ object DesktopEnvironment {
         writeFile(rootfs, APP_GROUPS_SCRIPT, APP_GROUPS.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, BWRAP_SCRIPT, BWRAP.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, FLATPAK_GL_SCRIPT, FLATPAK_GL.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, WALLPAPER_SCRIPT, WALLPAPER.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, SYSTEM_BUS_CONF, SYSTEM_BUS.toByteArray())
         writeFile(rootfs, "$SYSTEM_SERVICES_DIR/$BACKLIGHT_HELPER.service", SYSTEM_SERVICES.toByteArray())
         writeFile(rootfs, POLKIT_SCRIPT, POLKIT.toByteArray(), mode = 0x1ED)
@@ -433,6 +438,7 @@ object DesktopEnvironment {
         fi
         # The apps' processes for System Monitor.
         $APP_GROUPS_SCRIPT &
+        $WALLPAPER_SCRIPT &
         [ -z "${'$'}FLATPAK_GL_DRIVERS" ] || $FLATPAK_GL_SCRIPT &
     """.trimIndent()
 
@@ -880,6 +886,79 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         file.delete()
         Os.symlink(target, file.path)
     }
+
+    /** Plasma's wallpaper as the last session copied it, for the home screen; it may be missing. */
+    fun wallpaperFile(rootfs: File): File = File(rootfs, WALLPAPER_FILE.removePrefix("/"))
+
+    /**
+     * [WALLPAPER_SCRIPT]: the desktop's wallpaper image copied to [WALLPAPER_FILE] whenever it
+     * changes. Its path is a guest one (often through ~/Android, a link to the shared storage),
+     * which the app would have to resolve itself.
+     */
+    private val WALLPAPER = """
+        #!/usr/bin/python3
+        # Written by DroidNux: Plasma's wallpaper, copied to $WALLPAPER_FILE for the app's home screen.
+        import glob
+        import os
+        import re
+        import shutil
+
+        from gi.repository import Gio, GLib
+
+        CONFIG = os.path.expanduser("~/.config/plasma-org.kde.plasma.desktop-appletsrc")
+        OUT = "$WALLPAPER_FILE"
+        copied = [None]
+
+
+        def image():
+            path = "Next"  # the look and feel's
+            try:
+                with open(CONFIG) as f:
+                    section = ""
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("["):
+                            section = line
+                        elif line.startswith("Image=") and section.endswith("[Wallpaper][org.kde.image][General]"):
+                            path = line[6:]
+                            break
+            except OSError:
+                pass
+            if path.startswith("file://"):
+                path = path[7:]
+            if not path.startswith("/"):
+                path = "/usr/share/wallpapers/" + path
+            if os.path.isdir(path):
+                # A wallpaper package: its largest image.
+                def pixels(p):
+                    m = re.match(r"(\d+)x(\d+)", os.path.basename(p))
+                    return int(m.group(1)) * int(m.group(2)) if m else 0
+                images = glob.glob(path + "/contents/images/*")
+                path = max(images, key=pixels) if images else ""
+            return path
+
+
+        def update(*_):
+            path = image()
+            try:
+                key = (path, os.stat(path).st_mtime)
+            except OSError:
+                return
+            if key == copied[0]:
+                return
+            try:
+                shutil.copyfile(path, OUT + ".part")
+                os.replace(OUT + ".part", OUT)
+                copied[0] = key
+            except OSError:
+                pass
+
+
+        update()
+        monitor = Gio.File.new_for_path(CONFIG).monitor_file(Gio.FileMonitorFlags.WATCH_MOVES, None)
+        monitor.connect("changed", update)
+        GLib.MainLoop().run()
+    """.trimIndent() + "\n"
 
     /** The system bus: everyone may talk to everyone (one user, in a container). */
     private val SYSTEM_BUS = """
