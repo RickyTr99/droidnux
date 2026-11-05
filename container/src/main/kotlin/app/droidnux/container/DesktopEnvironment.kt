@@ -237,6 +237,7 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/contents/layouts/org.kde.plasma.desktop-layout.js", PLASMA_LAYOUT.toByteArray())
         writeFile(rootfs, PLASMA_BATTERY_UPDATE, PLASMA_BATTERY.toByteArray())
         writeFile(rootfs, FIREFOX_PREFS_PATH, FIREFOX_PREFS.toByteArray())
+        writeFile(rootfs, CHROMIUM_FLAGS_PATH, CHROMIUM_FLAGS.toByteArray())
         OBSOLETE_FILES.forEach { removeFile(rootfs, it) }
     }
 
@@ -1542,6 +1543,16 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
     """.trimIndent() + "\n"
 
     /** Default prefs of Debian's Firefox ESR (browser/defaults/preferences, next to Debian's own). */
+    /** Read by Debian's chromium launcher. */
+    private const val CHROMIUM_FLAGS_PATH = "/etc/chromium.d/droidnux"
+
+    // Chromium's sandbox needs user namespaces or its set-user-ID helper, neither of which
+    // Android allows (Electron apps: ELECTRON_DISABLE_SANDBOX in the session).
+    private val CHROMIUM_FLAGS = """
+        # Written by DroidNux: Android gives apps no user namespaces for Chromium's sandbox.
+        export CHROMIUM_FLAGS="${'$'}CHROMIUM_FLAGS --no-sandbox"
+    """.trimIndent() + "\n"
+
     private const val FIREFOX_PREFS_PATH = "/usr/lib/firefox-esr/browser/defaults/preferences/droidnux.js"
 
     // VA-API decoding through the app costs Firefox more CPU than software (it
