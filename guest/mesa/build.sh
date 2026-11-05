@@ -16,9 +16,10 @@
 #
 # Under flatpak-builder (FLATPAK_DEST set, guest/mesa/flatpak.sh) it builds the
 # Flatpak GL extension org.freedesktop.Platform.GL.droidnux instead: installed
-# straight into FLATPAK_DEST with the layout of the runtime's GL extensions,
-# vendor "mesa" as the runtime's own, no VA driver (its socket is in the
-# session's /tmp, which Flatpak's sandbox does not share) and no archive.
+# straight into FLATPAK_DEST with the layout of the runtime's GL extensions, no
+# VA driver (its socket is in the session's /tmp, which Flatpak's sandbox does
+# not share) and no archive. Names stay "droidnux", apart from the runtime's
+# GL.default, which stays enabled as the software fallback.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -26,9 +27,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 WORK=$(mkdir -p "$1" && cd "$1" && pwd)
 OUT=$(mkdir -p "$2" && cd "$2" && pwd)
 if [ -n "${FLATPAK_DEST:-}" ]; then
-    PREFIX=$FLATPAK_DEST LIBDIR=lib VENDOR=mesa
+    PREFIX=$FLATPAK_DEST LIBDIR=lib
 else
-    PREFIX=/opt/droidnux/mesa LIBDIR=lib/aarch64-linux-gnu VENDOR=droidnux
+    PREFIX=/opt/droidnux/mesa LIBDIR=lib/aarch64-linux-gnu
 fi
 SRC=$WORK/mesa-$MESA_VERSION
 TARBALL=$WORK/mesa-$MESA_VERSION.tar.xz
@@ -75,7 +76,7 @@ meson setup "$SRC/build" "$SRC" \
     -Dvulkan-drivers=freedreno -Dfreedreno-kmds=msm,kgsl \
     -Dgallium-drivers=zink \
     -Dopengl=true -Dglx=dri -Degl=enabled -Dgles1=disabled -Dgles2=enabled \
-    -Dglvnd=enabled -Dglvnd-vendor-name=$VENDOR \
+    -Dglvnd=enabled -Dglvnd-vendor-name=droidnux \
     -Dgbm=enabled -Dllvm=disabled -Dvalgrind=disabled -Dlibunwind=disabled \
     -Dvideo-codecs= -Dtools= -Dvulkan-layers= -Dbuild-tests=false
 ninja -C "$SRC/build"
@@ -85,6 +86,8 @@ if [ -n "${FLATPAK_DEST:-}" ]; then
     # Where the runtime's merge-dirs look (as org.freedesktop.Platform.GL.default has them).
     mkdir -p "$PREFIX/vulkan"
     ln -s ../share/vulkan/icd.d "$PREFIX/vulkan/icd.d"
+    # GL.default has a freedreno_icd too (Turnip without KGSL): merged, one would hide the other.
+    mv "$PREFIX/share/vulkan/icd.d/freedreno_icd.aarch64.json" "$PREFIX/share/vulkan/icd.d/droidnux_icd.aarch64.json"
     ln -s share/glvnd "$PREFIX/glvnd"
     rm -rf "$PREFIX/include" "$PREFIX/lib/pkgconfig"
     echo "$MESA_VERSION-dn$DROIDNUX_REVISION" > "$PREFIX/droidnux-mesa.version"
