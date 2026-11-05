@@ -31,9 +31,18 @@ build-options:
   prefix: /usr/lib/aarch64-linux-gnu/GL/droidnux
   # build.sh downloads Mesa's release and checks its SHA-256.
   build-args: [--share=network]
+# Python modules Mesa's build needs and the SDK lacks, for the build only.
+cleanup: [/.build-python]
 modules:
+  - name: build-python
+    buildsystem: simple
+    build-commands:
+      - pip3 install --no-cache-dir --target=\$FLATPAK_DEST/.build-python pyyaml packaging
   - name: mesa
     buildsystem: simple
+    build-options:
+      env:
+        PYTHONPATH: /usr/lib/aarch64-linux-gnu/GL/droidnux/.build-python
     build-commands:
       - test "\$FLATPAK_DEST" = /usr/lib/aarch64-linux-gnu/GL/droidnux
       - sh build.sh "\$PWD/work" "\$PWD/out"
