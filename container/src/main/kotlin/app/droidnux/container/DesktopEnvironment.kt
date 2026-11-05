@@ -1865,6 +1865,11 @@ ${Component.FLATPAK_GL.joinToString("\n") { "        ${it.branch} ${it.url} ${it
                     env.pop(name, None)
                 if os.path.exists("/dev/kgsl-3d0") and os.path.isfile(root + GL_EXTENSION + "/droidnux-mesa.version"):
                     env.update(GL_EXTENSION_VARIABLES)
+                    # The runtime's Vulkan loader first: apps bundling Chromium's older one (ONLYOFFICE,
+                    # LD_LIBRARY_PATH=./) leave Zink without an instance, and GLX without a visual.
+                    loader = "/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
+                    if os.path.isfile(root + loader):
+                        env["LD_PRELOAD"] = " ".join(filter(None, (loader, env.get("LD_PRELOAD"))))
                 else:
                     env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
 
