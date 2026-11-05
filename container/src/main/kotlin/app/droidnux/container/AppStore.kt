@@ -47,6 +47,12 @@ object AppStore {
         set -e
         flatpak uninstall --system --noninteractive -y ${ids.joinToString(" ")}
         flatpak uninstall --system --noninteractive -y --unused || true
+        # Our GL extension is pinned (FLATPAK_GL): it goes with the last runtime of its branch.
+        for b in ${'$'}(flatpak list --system --runtime --columns=application,branch | awk '${'$'}1 == "org.freedesktop.Platform.GL.droidnux" { print ${'$'}2 }'); do
+            flatpak info --system org.freedesktop.Platform//${'$'}b > /dev/null 2>&1 && continue
+            flatpak uninstall --system --noninteractive -y org.freedesktop.Platform.GL.droidnux//${'$'}b || true
+            flatpak pin --system --remove runtime/org.freedesktop.Platform.GL.droidnux/${'$'}(flatpak --default-arch)/${'$'}b || true
+        done
         echo $DONE_MARKER
     """.trimIndent()
 

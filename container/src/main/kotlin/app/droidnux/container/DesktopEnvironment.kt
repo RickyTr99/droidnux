@@ -1579,7 +1579,10 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         stamps=${'$'}{XDG_DATA_HOME:-${'$'}HOME/.local/share}/flatpak/.droidnux-gl
         while read -r branch url sha; do
             [ -n "${'$'}sha" ] && flatpak info org.freedesktop.Platform//${'$'}branch > /dev/null 2>&1 || continue
-            [ "${'$'}(cat "${'$'}stamps-${'$'}branch" 2> /dev/null)" != "${'$'}sha" ] || continue
+            # Pinned: nothing uses an extension chosen by FLATPAK_GL_DRIVERS, so "uninstall --unused" would take it.
+            ref=runtime/org.freedesktop.Platform.GL.droidnux/${'$'}(flatpak --default-arch)/${'$'}branch
+            flatpak pin ${'$'}scope "${'$'}ref" 2> /dev/null
+            [ "${'$'}(cat "${'$'}stamps-${'$'}branch" 2> /dev/null)" != "${'$'}sha" ] || ! flatpak info ${'$'}scope "${'$'}ref" > /dev/null 2>&1 || continue
             file=${'$'}(mktemp --suffix=.flatpak) || exit 1
             if python3 -c 'import shutil, sys, urllib.request; shutil.copyfileobj(urllib.request.urlopen(sys.argv[1], timeout=60), open(sys.argv[2], "wb"))' "${'$'}url" "${'$'}file" &&
                 echo "${'$'}sha  ${'$'}file" | sha256sum -c --status &&
