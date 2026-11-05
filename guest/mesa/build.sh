@@ -13,13 +13,23 @@
 # (llvmpipe stays as the fallback). The GL vendor libraries are named
 # "droidnux" (libGLX_droidnux, libEGL_droidnux) for the same reason; the app's
 # session selects them.
+#
+# Under flatpak-builder (FLATPAK_DEST set, guest/mesa/flatpak.sh) it builds the
+# Flatpak GL extension org.freedesktop.Platform.GL.droidnux instead: installed
+# straight into FLATPAK_DEST with the layout of the runtime's GL extensions,
+# vendor "mesa" as the runtime's own, no VA driver (its socket is in the
+# session's /tmp, which Flatpak's sandbox does not share) and no archive.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/version.sh"
 WORK=$(mkdir -p "$1" && cd "$1" && pwd)
 OUT=$(mkdir -p "$2" && cd "$2" && pwd)
-PREFIX=/opt/droidnux/mesa
+if [ -n "${FLATPAK_DEST:-}" ]; then
+    PREFIX=$FLATPAK_DEST LIBDIR=lib VENDOR=mesa
+else
+    PREFIX=/opt/droidnux/mesa LIBDIR=lib/aarch64-linux-gnu VENDOR=droidnux
+fi
 SRC=$WORK/mesa-$MESA_VERSION
 TARBALL=$WORK/mesa-$MESA_VERSION.tar.xz
 
@@ -59,16 +69,27 @@ done
 # fallbacks: freedreno would pull libarchive and libxml2 for its debug tools).
 # GBM (and EGL on it) for nested compositors such as KWin on the Wayland front-end.
 meson setup "$SRC/build" "$SRC" \
-    --prefix="$PREFIX" --libdir=lib/aarch64-linux-gnu \
+    --prefix="$PREFIX" --libdir="$LIBDIR" \
     --buildtype=release -Db_ndebug=true -Dstrip=true --wrap-mode=nofallback \
     -Dplatforms=x11,wayland \
     -Dvulkan-drivers=freedreno -Dfreedreno-kmds=msm,kgsl \
     -Dgallium-drivers=zink \
     -Dopengl=true -Dglx=dri -Degl=enabled -Dgles1=disabled -Dgles2=enabled \
-    -Dglvnd=enabled -Dglvnd-vendor-name=droidnux \
+    -Dglvnd=enabled -Dglvnd-vendor-name=$VENDOR \
     -Dgbm=enabled -Dllvm=disabled -Dvalgrind=disabled -Dlibunwind=disabled \
     -Dvideo-codecs= -Dtools= -Dvulkan-layers= -Dbuild-tests=false
 ninja -C "$SRC/build"
+
+if [ -n "${FLATPAK_DEST:-}" ]; then
+    meson install -C "$SRC/build" --no-rebuild --quiet
+    # Where the runtime's merge-dirs look (as org.freedesktop.Platform.GL.default has them).
+    mkdir -p "$PREFIX/vulkan"
+    ln -s ../share/vulkan/icd.d "$PREFIX/vulkan/icd.d"
+    ln -s share/glvnd "$PREFIX/glvnd"
+    rm -rf "$PREFIX/include" "$PREFIX/lib/pkgconfig"
+    echo "$MESA_VERSION-dn$DROIDNUX_REVISION" > "$PREFIX/droidnux-mesa.version"
+    exit 0
+fi
 
 STAGE=$WORK/stage
 rm -rf "$STAGE"

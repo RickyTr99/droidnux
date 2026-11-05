@@ -563,6 +563,12 @@ object DesktopEnvironment {
             if [ -d /etc/sudoers.d ]; then
                 echo "${'$'}user ${'$'}sudo" > /etc/sudoers.d/droidnux && chmod 440 /etc/sudoers.d/droidnux
             fi
+            # Flatpak runs "bwrap" from PATH, also outside the session (apt's triggers, sudo, adb):
+            # ours, with the distro's moved aside, as dpkg keeps it through bubblewrap's updates.
+            if [ "${'$'}(readlink /usr/bin/bwrap)" != $BWRAP_SCRIPT ]; then
+                dpkg-divert --local --rename --divert /usr/bin/bwrap.distrib --add /usr/bin/bwrap > /dev/null &&
+                    ln -sf $BWRAP_SCRIPT /usr/bin/bwrap
+            fi
             # A system bus with UPower on it, as root: Plasma shows Android's battery.
             mkdir -p ${SYSTEM_BUS_SOCKET.substringBeforeLast('/')} && rm -f $SYSTEM_BUS_SOCKET
             if dbus-daemon --config-file=$SYSTEM_BUS_CONF --fork --nopidfile; then
@@ -601,8 +607,6 @@ ${USER_SESSION.prependIndent("        ")}
             # Electron apps (VS Code, Discord, Obsidian): Chromium's sandbox needs user
             # namespaces or its set-user-ID helper, neither of which Android allows.
             export ELECTRON_DISABLE_SANDBOX=1
-            # Flatpak's apps: Android has no user namespaces for bwrap's sandbox.
-            export FLATPAK_BWRAP=$BWRAP_SCRIPT
             # Their menu entries, as Flatpak's profile.d script would add after a login.
             export XDG_DATA_DIRS=${'$'}HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:${'$'}{XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 ${GPU_ENV.prependIndent("            ")}
@@ -1376,8 +1380,8 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         # calls, then runs the command in it.
         #
         # Not a security boundary (no more than Burrow): namespaces, seccomp filters
-        # (--seccomp) and read-only mounts are not applied. Flatpak runs its apps with
-        # it (FLATPAK_BWRAP, set by the session).
+        # (--seccomp) and read-only mounts are not applied. It replaces the distro's
+        # /usr/bin/bwrap (diverted by the session), so Flatpak runs its apps with it.
         import ctypes
         import json
         import os
