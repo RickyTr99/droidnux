@@ -12,6 +12,7 @@ import android.net.Uri
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.os.FileObserver
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -45,6 +46,7 @@ import app.droidnux.display.AudioFocus
 import app.droidnux.display.AudioVolume
 import app.droidnux.display.Presenter
 import app.droidnux.display.DisplayServer
+import java.io.File
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -248,8 +250,50 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private fun scaleOf(intent: Intent?) =
         (intent?.getFloatExtra(EXTRA_SCALE, desktopScale) ?: desktopScale).coerceIn(MIN_SCALE, MAX_SCALE)
 
+    /** Android's brightness, from the session's menu or Plasma's slider; the permission is asked only from the menu. */
+    private fun setBrightness(brightness: Float, ask: Boolean) {
+        if (Settings.System.canWrite(this)) {
+            Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE,
+                Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
+            Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, Brightness.toSetting(brightness))
+            return
+        }
+        window.attributes = window.attributes.apply { screenBrightness = brightness }
+        if (ask && !askedWriteSettings) {
+            askedWriteSettings = true
+            startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.fromParts("package", packageName, null)))
+        }
+    }
+
+    // Plasma's brightness slider: powerdevil's helper writes the backlight's brightness (DesktopEnvironment.backlightDevice).
+    private val backlight by lazy { DesktopEnvironment.backlightDevice(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)) }
+    @Volatile private var backlightValue = -1
+    private val backlightWatch by lazy {
+        object : FileObserver(backlight, CLOSE_WRITE) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path != "brightness") return
+                val value = runCatching { File(backlight, path).readText().trim().toInt() }.getOrNull() ?: return
+                if (value == backlightValue) return
+                backlightValue = value
+                runCatching { File(backlight, "actual_brightness").writeText("$value\n") }
+                runOnUiThread { setBrightness(value.toFloat() / DesktopEnvironment.BACKLIGHT_MAX, ask = false) }
+            }
+        }
+    }
+
+    /** The backlight at [brightness] (0 to 1), as the session's menu shows it. */
+    private fun writeBacklight(brightness: Float) {
+        val value = (brightness * DesktopEnvironment.BACKLIGHT_MAX).roundToInt().coerceIn(0, DesktopEnvironment.BACKLIGHT_MAX)
+        backlightValue = value
+        for (name in listOf("brightness", "actual_brightness")) {
+            runCatching { File(backlight, name).writeText("$value\n") }.onFailure { Log.w(TAG, "backlight: $it") }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        writeBacklight(menuListener.brightness())
+        backlightWatch.startWatching()
         // Back to a paused desktop: it continues.
         SessionPause.resume(this)
         reloadSettings()
@@ -260,6 +304,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onPause() {
+        backlightWatch.stopWatching()
         saveThumbnail()
         handler.removeCallbacks(overlayUpdater)
         clipboard.removePrimaryClipChangedListener(clipboardListener)
@@ -741,17 +786,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             ?: Brightness.toSlider(Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128))
 
         override fun onBrightnessChanged(brightness: Float) {
-            if (Settings.System.canWrite(this@DesktopActivity)) {
-                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE,
-                    Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
-                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, Brightness.toSetting(brightness))
-                return
-            }
-            window.attributes = window.attributes.apply { screenBrightness = brightness }
-            if (!askedWriteSettings) {
-                askedWriteSettings = true
-                startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.fromParts("package", packageName, null)))
-            }
+            setBrightness(brightness, ask = true)
+            writeBacklight(brightness)
         }
 
         // Android's media volume, which is also the desktop's (AudioVolume).

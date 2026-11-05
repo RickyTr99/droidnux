@@ -46,8 +46,17 @@ data class Component(
         )
 
         val ALL = listOf(MESA, PLASMA)
+
+        /** [MESA] as Flatpak's GL extension, one per Freedesktop runtime branch (guest/mesa/flatpak.sh): the session installs it. */
+        val FLATPAK_GL = listOf(
+            FlatpakExtension("25.08", "", ""),
+            FlatpakExtension("26.08", "", ""),
+        )
     }
 }
+
+/** A Flatpak bundle of the extension for runtime [branch], at [url]. */
+data class FlatpakExtension(val branch: String, val url: String, val sha256: String)
 
 /** Installs [Component]s into a rootfs, replacing older versions atomically. */
 class ComponentInstaller(private val downloadDir: File) {

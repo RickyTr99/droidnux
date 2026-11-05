@@ -50,6 +50,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.InteractionSource
@@ -125,6 +126,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -139,6 +141,11 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -636,7 +643,8 @@ private fun Halo(color: Color, period: Int) {
 
 /**
  * The favorites, in the user's order, in a dock. In edit mode each app has a remove badge and moves
- * where it is dragged; "Add" picks more.
+ * where it is dragged, or with a keyboard or controller: Enter (A) lifts the focused one, the arrows
+ * move it, Enter or Escape (B) puts it down; "Add" picks more.
  */
 @Composable
 private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier) {
@@ -647,6 +655,8 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
     var order by remember(state.homeApps, apps.keys) { mutableStateOf(state.homeApps.filter { it in apps }) }
     var dragged by remember { mutableStateOf<String?>(null) }
     var drag by remember { mutableStateOf(Offset.Zero) }
+    // The app lifted from the keyboard or a controller.
+    var moving by remember { mutableStateOf<String?>(null) }
     BackHandler(enabled = editing) { editing = false }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -685,14 +695,19 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                     val app = apps[id] ?: return@forEach
                     key(id) {
                         val index = order.indexOf(id)
-                        val lifted = dragged == id
+                        val lifted = dragged == id || moving == id
+                        var focused by remember { mutableStateOf(false) }
+                        fun putDown() {
+                            moving = null
+                            viewModel.setHomeApps(order)
+                        }
                         val target by animateDpOffsetAsState(origin(index), label = "tile")
-                        val position = if (lifted) origin(index) else target
+                        val position = if (dragged == id) origin(index) else target
                         val scale by animateFloatAsState(if (lifted) 1.04f else 1f, label = "lift")
                         Box(
                             Modifier.offset(position.x, position.y).size(cell, height).zIndex(if (lifted) 1f else 0f)
                                 .graphicsLayer {
-                                    if (lifted) {
+                                    if (dragged == id) {
                                         translationX = drag.x
                                         translationY = drag.y - 6.dp.toPx()
                                     }
@@ -720,12 +735,44 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                                                 }
                                             }
                                         }
+                                            .onFocusChanged {
+                                                focused = it.isFocused
+                                                if (!it.isFocused && moving == id) putDown()
+                                            }
+                                            .onKeyEvent { event ->
+                                                val down = event.type == KeyEventType.KeyDown
+                                                when (event.key) {
+                                                    Key.Enter, Key.NumPadEnter, Key.DirectionCenter, Key.ButtonA, Key.Spacebar -> {
+                                                        if (down) if (moving == id) putDown() else moving = id
+                                                        true
+                                                    }
+                                                    // On release, as Back would leave edit mode on its own release.
+                                                    Key.Escape, Key.ButtonB, Key.Back -> (moving == id).also { if (it && !down) putDown() }
+                                                    Key.DirectionLeft, Key.DirectionRight, Key.DirectionUp, Key.DirectionDown -> {
+                                                        if (moving != id) return@onKeyEvent false
+                                                        if (down) {
+                                                            val step = when (event.key) {
+                                                                Key.DirectionLeft -> -1
+                                                                Key.DirectionRight -> 1
+                                                                Key.DirectionUp -> -columns
+                                                                else -> columns
+                                                            }
+                                                            val from = order.indexOf(id)
+                                                            val to = (from + step).coerceIn(0, order.size - 1)
+                                                            if (to != from) order = order.toMutableList().apply { add(to, removeAt(from)) }
+                                                        }
+                                                        true
+                                                    }
+                                                    else -> false
+                                                }
+                                            }
+                                            .focusable()
                                     } else {
                                         Modifier
                                     },
                                 ),
                         ) {
-                            AppTile(app, viewModel, height, iconSize = if (compact) 52.dp else 56.dp, editing = editing, lifted = lifted)
+                            AppTile(app, viewModel, height, iconSize = if (compact) 52.dp else 56.dp, editing = editing, lifted = lifted || focused)
                             if (editing) {
                                 IconButton(
                                     onClick = { viewModel.setHomeApps(order - id) },
