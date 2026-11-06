@@ -88,7 +88,6 @@
     <string name="settings_session_menu">Menu in sessione</string>
     <string name="settings_menu_back">Indietro</string>
     <string name="settings_menu_shortcut">Ctrl+Alt+Spazio</string>
-    <string name="settings_menu_swipe">Scorri dal bordo</string>
     <string name="settings_menu_none">Nessuna scorciatoia</string>
     <string name="settings_menu_position">Posizione</string>
     <string name="settings_menu_top">In alto</string>
@@ -96,7 +95,6 @@
     <string name="settings_keyboard_kind">Tastiera</string>
     <string name="settings_keyboard_full">Completa</string>
     <string name="settings_keyboard_android">Android</string>
-    <string name="settings_haptics">Vibrazione</string>
     <string name="settings_screen_on">Schermo sempre acceso</string>
     <string name="settings_startup">Avvio</string>
     <string name="settings_open_at_start">Apri il desktop all\'avvio</string>

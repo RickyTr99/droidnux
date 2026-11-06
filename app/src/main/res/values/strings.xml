@@ -91,7 +91,6 @@
     <string name="settings_session_menu">Session menu</string>
     <string name="settings_menu_back">Back</string>
     <string name="settings_menu_shortcut">Ctrl+Alt+Space</string>
-    <string name="settings_menu_swipe">Swipe from the edge</string>
     <string name="settings_menu_none">No shortcut</string>
     <string name="settings_menu_position">Position</string>
     <string name="settings_menu_top">Top</string>
@@ -99,7 +98,6 @@
     <string name="settings_keyboard_kind">Keyboard</string>
     <string name="settings_keyboard_full">Full</string>
     <string name="settings_keyboard_android">Android</string>
-    <string name="settings_haptics">Vibration</string>
     <string name="settings_screen_on">Keep the screen on</string>
     <string name="settings_startup">Startup</string>
     <string name="settings_open_at_start">Open the desktop at start</string>

@@ -1127,7 +1127,6 @@ private fun SettingsTab(
                 listOfNotNull(
                     stringResource(R.string.settings_menu_back).takeIf { settings.menuBack },
                     stringResource(R.string.settings_menu_shortcut).takeIf { settings.menuShortcut },
-                    stringResource(R.string.settings_menu_swipe).takeIf { settings.menuSwipe },
                 ).joinToString(", ").ifEmpty { stringResource(R.string.settings_menu_none) }
             Category.STATS -> stringResource(if (settings.stats) settings.statsStyle.label else R.string.stats_off)
             Category.ACCOUNT -> settings.user
@@ -1467,14 +1466,12 @@ private fun AppPage(settings: DesktopSettings, save: ((DesktopSettings) -> Deskt
     PageSection(R.string.settings_session_menu)
     SwitchRow(R.string.settings_menu_back, settings.menuBack) { on -> save { it.copy(menuBack = on) } }
     SwitchRow(R.string.settings_menu_shortcut, settings.menuShortcut) { on -> save { it.copy(menuShortcut = on) } }
-    SwitchRow(R.string.settings_menu_swipe, settings.menuSwipe) { on -> save { it.copy(menuSwipe = on) } }
     ChoiceRow(R.string.settings_menu_position, settings.menuBottom, R.string.settings_menu_top, R.string.settings_menu_bottom) { bottom ->
         save { it.copy(menuBottom = bottom) }
     }
     ChoiceRow(R.string.settings_keyboard_kind, settings.androidKeyboard, R.string.settings_keyboard_full, R.string.settings_keyboard_android) { android ->
         save { it.copy(androidKeyboard = android) }
     }
-    SwitchRow(R.string.settings_haptics, settings.haptics) { on -> save { it.copy(haptics = on) } }
     PageSection(R.string.settings_startup)
     SwitchRow(R.string.settings_open_at_start, settings.openAtStart) { on -> save { it.copy(openAtStart = on) } }
 }

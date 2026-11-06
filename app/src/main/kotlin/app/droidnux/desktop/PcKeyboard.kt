@@ -57,9 +57,6 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
 
     val isShown: Boolean get() = shown
 
-    /** A vibration on each key (DesktopSettings.haptics). */
-    var haptics = true
-
     /** Full-screen layer, transparent to touches outside the panel. */
     val view = FrameLayout(context).apply {
         visibility = View.GONE
@@ -294,7 +291,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
                         val over = onTarget()
                         if (over != overTarget) {
                             overTarget = over
-                            if (over && haptics) bubble.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                            if (over) bubble.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                             val scale = if (over) 1.2f else 1f
                             closeTarget.animate().scaleX(scale).scaleY(scale).setDuration(SHORT_MS).start()
                         }
@@ -533,7 +530,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> false
             else -> return true
         }
-        if (press && haptics) key.view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        if (press) key.view.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
         key.pressed = press
         when (key.kind) {
             Kind.MODIFIER, Kind.FN -> onModifier(key.code.takeIf { it != 0 } ?: FN, press)

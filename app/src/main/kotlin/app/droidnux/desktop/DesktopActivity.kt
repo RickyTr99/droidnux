@@ -226,7 +226,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private fun reloadSettings() {
         val settings = DesktopSettings.load(this)
         prefs = settings
-        pcKeyboard.haptics = settings.haptics
         menu.atBottom = settings.menuBottom
         if (settings.keepScreenOn) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -646,7 +645,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             if (event.actionMasked == MotionEvent.ACTION_MOVE) DisplayServer.pointer(event.x * scale, event.y * scale)
             return true
         }
-        if (menuSwipe(event)) return true
         if (trackpadMode) {
             showCursor(true)
             // A finger crossing the screen moves the pointer across the desktop, before its acceleration.
@@ -661,36 +659,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             sendTouch(event)
         }
         return true
-    }
-
-    /** Where a finger that went down on the top edge started (y), while it may still be the menu's swipe. */
-    private var swipeFrom = -1f
-
-    /**
-     * A finger swiping down from the top edge opens the menu (when the settings ask for it).
-     * Its touch reaches the desktop until then, so a tap on the edge still works; once it
-     * is the swipe the desktop gets a cancel. True when the event is the swipe's.
-     */
-    private fun menuSwipe(event: MotionEvent): Boolean {
-        val density = resources.displayMetrics.density
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN ->
-                swipeFrom = if (prefs.menuSwipe && !menu.isOpen && event.y <= SWIPE_EDGE_DP * density) event.y else -1f
-            MotionEvent.ACTION_POINTER_DOWN -> swipeFrom = -1f
-            MotionEvent.ACTION_MOVE -> if (swipeFrom >= 0f && event.y - swipeFrom >= SWIPE_DP * density) {
-                swipeFrom = -2f // the swipe's, until the finger leaves
-                val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
-                if (trackpadMode) screenTouchpad.onEvent(cancel, 1f / scale) else sendTouch(cancel)
-                cancel.recycle()
-                toggleMenu()
-                return true
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (swipeFrom == -2f) {
-                swipeFrom = -1f
-                return true
-            }
-        }
-        return swipeFrom == -2f
     }
 
     /** The fingers as touch points, for KWin and its apps to handle (taps, gestures, scrolling). */
@@ -972,9 +940,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val TAP_FOCUS_MS = 150L
         /** How long after a resize a brightness from KWin counts as its saved setting coming back, not the user. */
         private const val RESIZE_SETTLE_MS = 2000L
-        /** The menu's swipe: from this close to the top edge, at least this far down. */
-        private const val SWIPE_EDGE_DP = 24
-        private const val SWIPE_DP = 48
 
         /** The desktop on screen, if any (main thread only). */
         private var current: DesktopActivity? = null
