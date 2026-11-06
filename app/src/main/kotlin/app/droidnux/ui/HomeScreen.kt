@@ -714,17 +714,7 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
-            SectionHeader(
-                stringResource(R.string.home_quick) + if (editing) " · " + stringResource(R.string.home_edit_hint) else "",
-                Modifier.weight(1f),
-            )
-            if (editing) {
-                Button(onClick = { editing = false }, modifier = Modifier.height(36.dp), contentPadding = PaddingValues(horizontal = 18.dp)) {
-                    Text(stringResource(R.string.home_done))
-                }
-            } else {
-                TextButton(onClick = { editing = true }) { Text(stringResource(R.string.home_edit)) }
-            }
+            SectionHeader(stringResource(R.string.home_quick) + if (editing) " · " + stringResource(R.string.home_edit_hint) else "")
         }
         val compact = isCompact()
         BoxWithConstraints(
@@ -740,10 +730,12 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
             val stepX = with(density) { (cell + gap).toPx() }
             val stepY = with(density) { (height + gap).toPx() }
             fun origin(index: Int) = DpOffset((cell + gap) * (index % columns), (height + gap) * (index / columns))
-            // "Add" while editing, or in place of an empty dock.
+            // After the apps: "Edit", or "Add" and "Done" while editing; "Add" alone in place of an empty dock.
             val add = editing || order.isEmpty()
-            val count = order.size + if (add) 1 else 0
-            Box(Modifier.fillMaxWidth().height(height * ((count + columns - 1) / columns) + gap * ((count - 1) / columns))) {
+            val pencil = !editing && order.isNotEmpty()
+            val count = order.size + if (editing) 2 else 1
+            val boxHeight by animateDpAsState(height * ((count + columns - 1) / columns) + gap * ((count - 1) / columns), label = "dock")
+            Box(Modifier.fillMaxWidth().height(boxHeight)) {
                 order.forEach { id ->
                     val app = apps[id] ?: return@forEach
                     key(id) {
@@ -840,26 +832,10 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                         }
                     }
                 }
-                if (add) {
-                    val last by animateDpOffsetAsState(origin(order.size), label = "last")
-                    Column(
-                        Modifier.offset(last.x, last.y).size(cell, height).clip(CardShape).clickable { adding = true },
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Box(
-                            Modifier.size(if (compact) 52.dp else 56.dp).border(2.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp)),
-                            contentAlignment = Alignment.Center,
-                        ) { Icon(Icons.Plus, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        Text(
-                            stringResource(R.string.home_add),
-                            fontSize = if (compact) 12.sp else 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            modifier = Modifier.padding(top = 8.dp),
-                        )
-                    }
-                }
+                val iconSize = if (compact) 52.dp else 56.dp
+                DockAction(pencil, origin(order.size), cell, height, iconSize, Icons.Edit, R.string.home_edit, filled = false) { editing = true }
+                DockAction(add, origin(order.size), cell, height, iconSize, Icons.Plus, R.string.home_add, filled = false) { adding = true }
+                DockAction(editing, origin(order.size + 1), cell, height, iconSize, Icons.Selected, R.string.home_done, filled = true) { editing = false }
             }
         }
     }
@@ -1027,6 +1003,45 @@ private fun shortcut(context: Context, app: LinuxApp, icon: Bitmap?): ShortcutIn
             Intent(context, MainActivity::class.java).setAction(MainActivity.ACTION_LAUNCH).putExtra(MainActivity.EXTRA_APP, app.id),
         )
         .build()
+
+/** A tile after the favorites (edit, add, done) at [at]: it grows in when [visible] and shrinks away after. */
+@Composable
+private fun DockAction(
+    visible: Boolean,
+    at: DpOffset,
+    width: Dp,
+    height: Dp,
+    iconSize: Dp,
+    icon: ImageVector,
+    label: Int,
+    filled: Boolean,
+    onClick: () -> Unit,
+) {
+    val shown by animateFloatAsState(if (visible) 1f else 0f, label = "action")
+    if (!visible && shown == 0f) return
+    val position by animateDpOffsetAsState(at, label = "actionAt")
+    val colors = MaterialTheme.colorScheme
+    Column(
+        Modifier.offset(position.x, position.y).size(width, height)
+            .graphicsLayer { alpha = shown; scaleX = 0.8f + 0.2f * shown; scaleY = scaleX }
+            .clip(CardShape).clickable(enabled = visible, onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            Modifier.size(iconSize).clip(RoundedCornerShape(16.dp))
+                .then(if (filled) Modifier.background(colors.primary) else Modifier.border(2.dp, colors.outlineVariant, RoundedCornerShape(16.dp))),
+            contentAlignment = Alignment.Center,
+        ) { Icon(icon, null, tint = if (filled) colors.onPrimary else colors.onSurfaceVariant) }
+        Text(
+            stringResource(label),
+            fontSize = if (isCompact()) 12.sp else 14.sp,
+            color = if (filled) colors.primary else colors.onSurfaceVariant,
+            maxLines = 1,
+            modifier = Modifier.padding(top = 8.dp),
+        )
+    }
+}
 
 /**
  * An app, [height] tall: tap starts it in the desktop, long press offers the favorites and a shortcut on
