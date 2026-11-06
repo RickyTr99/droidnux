@@ -555,7 +555,6 @@ fun PasswordDialog(onDismiss: () -> Unit) {
         title = { Text(stringResource(R.string.settings_password_change)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.settings_password_text), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (current != null) {
                     field(old, { old = it; wrong = false }, R.string.settings_password_current,
                         R.string.settings_password_wrong.takeIf { wrong }, false)

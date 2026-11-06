@@ -1684,12 +1684,6 @@ private fun InputRows(settings: DesktopSettings, save: ((DesktopSettings) -> Des
         Text(layoutName(settings.layout), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
     }
     SystemKeysRow()
-    Text(
-        stringResource(R.string.settings_next_session),
-        fontSize = 13.sp,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 4.dp, top = 4.dp),
-    )
     if (choosingLayout) {
         LayoutDialog(settings.layout, onDismiss = { choosingLayout = false }) { layout ->
             save { it.copy(layout = layout) }
@@ -1701,10 +1695,7 @@ private fun InputRows(settings: DesktopSettings, save: ((DesktopSettings) -> Des
 @Composable
 private fun AccountPage(settings: DesktopSettings) {
     var changingPassword by remember { mutableStateOf(false) }
-    InfoRow(
-        stringResource(R.string.wizard_account_password),
-        text = stringResource(R.string.settings_password_summary, settings.user),
-    ) {
+    InfoRow(stringResource(R.string.wizard_account_password)) {
         FilledTonalButton(onClick = { changingPassword = true }) { Text(stringResource(R.string.action_change)) }
     }
     if (changingPassword) PasswordDialog(onDismiss = { changingPassword = false })

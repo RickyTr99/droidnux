@@ -104,7 +104,6 @@
     <string name="settings_touch">Touch</string>
     <string name="settings_keyboard">Keyboard</string>
     <string name="settings_layout">Keyboard layout</string>
-    <string name="settings_next_session">From the next desktop start.</string>
     <string name="layout_system">From the system · %1$s</string>
     <string name="system_desktop_ok">Up to date</string>
     <string name="system_desktop_update">This version of the app adds packages</string>
@@ -210,17 +209,15 @@
     <string name="stats_max">max %1$s</string>
     <string name="stats_of">of %1$s</string>
     <string name="settings_account">Account</string>
-    <string name="settings_password_summary">%1$s · used by sudo and KDE’s wallet</string>
     <string name="settings_password_change">Change the password</string>
-    <string name="settings_password_text">From the next desktop start. Also updates KDE’s wallet.</string>
     <string name="settings_password_current">Current password</string>
     <string name="settings_password_new">New password</string>
     <string name="settings_password_wrong">Wrong password</string>
     <string name="action_change">Change</string>
     <string name="action_save">Save</string>
     <string name="settings_system_keys">System keys</string>
-    <string name="settings_system_keys_on">Meta, Alt+Tab and system shortcuts go to the desktop</string>
-    <string name="settings_system_keys_off">Android intercepts Meta, Alt+Tab and other shortcuts. Turn on DroidNux’s accessibility service.</string>
+    <string name="settings_system_keys_on">On</string>
+    <string name="settings_system_keys_off">Off</string>
     <string name="action_turn_on">Turn on</string>
     <string name="keys_service_label">DroidNux keys</string>
     <string name="keys_service_description">Gives the Linux desktop the keyboard shortcuts Android keeps for itself (Meta, Alt+Tab, Ctrl+Esc), only while the desktop is on screen. It reads nothing else.</string>
@@ -390,11 +387,8 @@
     <string name="settings_group_desktop">Desktop</string>
     <string name="settings_group_system">System</string>
     <string name="settings_diagnostics_text">System checks and logs</string>
-    <string name="diagnostics_spike_text">Test of the buffers shared with the GPU</string>
     <string name="diagnostics_desktop_log">Desktop install log</string>
     <string name="diagnostics_log">Log</string>
-    <string name="diagnostics_log_text">Session, graphics driver and install</string>
     <string name="diagnostics_detailed_logs">Detailed logs</string>
-    <string name="diagnostics_detailed_logs_text">Desktop and graphics driver, from the next session. Uses more battery</string>
     <string name="action_share">Share</string>
 </resources>

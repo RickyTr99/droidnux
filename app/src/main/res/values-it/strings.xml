@@ -101,7 +101,6 @@
     <string name="settings_touch">Tocco</string>
     <string name="settings_keyboard">Tastiera</string>
     <string name="settings_layout">Layout della tastiera</string>
-    <string name="settings_next_session">Dal prossimo avvio del desktop.</string>
     <string name="layout_system">Dal sistema · %1$s</string>
     <string name="system_desktop_ok">Aggiornato</string>
     <string name="system_desktop_update">Questa versione dell’app aggiunge pacchetti</string>
@@ -207,17 +206,15 @@
     <string name="stats_max">max %1$s</string>
     <string name="stats_of">di %1$s</string>
     <string name="settings_account">Account</string>
-    <string name="settings_password_summary">%1$s · usata da sudo e dal portafoglio di KDE</string>
     <string name="settings_password_change">Cambia la password</string>
-    <string name="settings_password_text">Dal prossimo avvio del desktop. Aggiorna anche il portafoglio di KDE.</string>
     <string name="settings_password_current">Password attuale</string>
     <string name="settings_password_new">Nuova password</string>
     <string name="settings_password_wrong">Password sbagliata</string>
     <string name="action_change">Cambia</string>
     <string name="action_save">Salva</string>
     <string name="settings_system_keys">Tasti di sistema</string>
-    <string name="settings_system_keys_on">Meta, Alt+Tab e scorciatoie di sistema al desktop</string>
-    <string name="settings_system_keys_off">Android intercetta Meta, Alt+Tab e altre scorciatoie. Attiva il servizio di accessibilità di DroidNux.</string>
+    <string name="settings_system_keys_on">Attivi</string>
+    <string name="settings_system_keys_off">Spenti</string>
     <string name="action_turn_on">Attiva</string>
     <string name="keys_service_label">Tasti di DroidNux</string>
     <string name="keys_service_description">Passa al desktop Linux le scorciatoie da tastiera che Android tiene per sé (Meta, Alt+Tab, Ctrl+Esc), solo mentre il desktop è sullo schermo. Non legge nient’altro.</string>
@@ -387,11 +384,8 @@
     <string name="settings_group_system">Sistema</string>
     <string name="settings_diagnostics_text">Prove del sistema e log</string>
     <string name="section_container">Container</string>
-    <string name="diagnostics_spike_text">Prova dei buffer condivisi con la GPU</string>
     <string name="diagnostics_desktop_log">Log dell’installazione del desktop</string>
     <string name="diagnostics_log">Log</string>
-    <string name="diagnostics_log_text">Sessione, driver grafico e installazione</string>
     <string name="diagnostics_detailed_logs">Log dettagliati</string>
-    <string name="diagnostics_detailed_logs_text">Desktop e driver grafico, dalla prossima sessione. Aumenta i consumi</string>
     <string name="action_share">Condividi</string>
 </resources>

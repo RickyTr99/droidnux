@@ -46,12 +46,11 @@ fun DiagnosticsPage(
     var sharing by remember { mutableStateOf(false) }
     InfoRow(
         stringResource(R.string.diagnostics_detailed_logs),
-        text = stringResource(R.string.diagnostics_detailed_logs_text),
         onClick = { save { it.copy(logs = !it.logs) } },
     ) {
         Switch(checked = settings.logs, onCheckedChange = { checked -> save { it.copy(logs = checked) } })
     }
-    InfoRow(stringResource(R.string.diagnostics_log), text = stringResource(R.string.diagnostics_log_text)) {
+    InfoRow(stringResource(R.string.diagnostics_log)) {
         FilledTonalButton(
             onClick = {
                 sharing = true
@@ -87,7 +86,7 @@ fun DiagnosticsPage(
     SectionHeader(stringResource(R.string.section_display), Modifier.padding(top = 20.dp, bottom = 4.dp))
     Mono(state.display ?: stringResource(R.string.status_checking))
     if (installed) {
-        InfoRow(stringResource(R.string.action_buffer_spike), text = stringResource(R.string.diagnostics_spike_text)) {
+        InfoRow(stringResource(R.string.action_buffer_spike)) {
             FilledTonalButton(onClick = { context.startActivity(Intent(context, BufferSpikeActivity::class.java)) }) {
                 Text(stringResource(R.string.store_open))
             }
