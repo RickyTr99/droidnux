@@ -84,7 +84,6 @@ import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -479,7 +478,7 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
         }
     }
     Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState())) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Hero(state, viewModel, side, thumbnail, Modifier.entrance(entrance, 0))
             Column(
                 Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
@@ -933,10 +932,10 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
     var text by rememberSaveable { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     BackHandler(enabled = text.isNotEmpty()) { text = ""; focusManager.clearFocus() }
-    // The results scroll up above the keyboard as they are typed.
+    // The results scroll up above the keyboard (the window shrinks for it) as far as the page goes, no further.
     val results = remember { BringIntoViewRequester() }
     LaunchedEffect(text) { if (text.isNotEmpty()) results.bringIntoView() }
-    Column(modifier.bringIntoViewRequester(results), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val compact = isCompact()
         Row(
             Modifier.fillMaxWidth().height(40.dp),
@@ -961,7 +960,7 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
             )
             return@Column
         }
-        BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) { // The dock's inset: columns line up.
+        BoxWithConstraints(Modifier.fillMaxWidth().bringIntoViewRequester(results).padding(horizontal = 6.dp)) { // The dock's inset: columns line up.
             val columns = appColumns(compact, maxWidth)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 shown.chunked(columns).forEach { row ->
@@ -1069,8 +1068,8 @@ private fun DockAction(
     grow: Boolean = true,
     onClick: () -> Unit,
 ) {
-    // Slower in than out: a tile appearing in place of another needs time to read.
-    val shown by animateFloatAsState(if (visible) 1f else 0f, if (visible) tween(350) else spring(), label = "action")
+    // Unhurried both ways: a tile appearing in place of another needs time to read.
+    val shown by animateFloatAsState(if (visible) 1f else 0f, tween(350), label = "action")
     if (!visible && shown == 0f) return
     val position by animateDpOffsetAsState(at, label = "actionAt")
     val colors = MaterialTheme.colorScheme
