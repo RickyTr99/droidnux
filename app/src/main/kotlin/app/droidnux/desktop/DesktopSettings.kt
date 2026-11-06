@@ -79,7 +79,7 @@ data class DesktopSettings(
                 statsItemsByStyle = StatsStyle.entries.mapNotNull { style ->
                     props.getProperty("statsItems.${style.key}")?.let { keys ->
                         val chosen = keys.split(',').mapNotNull(StatsItem::of)
-                        style to StatsItem.entries.filter { it in chosen }
+                        style to chosen.distinct()
                     }
                 }.toMap(),
                 statsOpacity = props.getProperty("statsOpacity")?.toFloatOrNull()?.coerceIn(MIN_STATS_OPACITY, 1f) ?: defaults.statsOpacity,

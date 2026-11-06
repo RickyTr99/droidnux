@@ -57,8 +57,7 @@ enum class StatsPosition(val key: String, val label: Int, val gravity: Int) {
     }
 }
 
-/** What the statistics can show, in the order they show it. */
-// shortcut: a fixed order, no reordering as in MoonVibe; add a drag to reorder if the order should be the user's.
+/** What the statistics can show, in their order until the user drags them into another. */
 enum class StatsItem(val key: String, val label: Int, val icon: Int) {
     FPS("fps", R.string.stats_item_fps, R.drawable.ic_menu_stats),
     FRAME("frame", R.string.stats_item_frame, R.drawable.ic_stats_frame),

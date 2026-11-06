@@ -75,6 +75,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -166,9 +169,11 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.viewinterop.AndroidView
@@ -207,6 +212,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -254,17 +260,20 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
-            // Room for the bar floating over the bottom of every page.
+            // Room for the bar floating over the bottom of every page, and for the system's bar (or the keyboard) under it:
+            // inside the pages' scrolling, so they run on to the screen's edge.
+            val system = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()
             val padding = if (isCompact()) {
-                PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 100.dp)
+                PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 100.dp + system)
             } else {
-                PaddingValues(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 120.dp)
+                PaddingValues(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 120.dp + system)
             }
+            val insets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
             when (Tab.entries[page]) {
                 // The Home runs under the status bar: its picture reaches the top edge.
                 Tab.HOME -> HomeTab(state, viewModel, updates, entrance, onUpdates = { category = Category.COMPONENTS; select(Tab.SETTINGS) })
-                Tab.STORE -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) { StoreTab(state, viewModel, padding) }
-                Tab.SETTINGS -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
+                Tab.STORE -> Box(Modifier.windowInsetsPadding(insets)) { StoreTab(state, viewModel, padding) }
+                Tab.SETTINGS -> Box(Modifier.windowInsetsPadding(insets)) {
                     SettingsTab(
                         state, viewModel, padding, category, updates,
                         onCategory = { category = it },
@@ -1118,7 +1127,7 @@ private fun SettingsTab(
             when (it) {
                 Category.SCREEN -> ScreenPage(settings, screen, ::save)
                 Category.INPUT -> InputPage(settings, ::save)
-                Category.STATS -> StatsPage(settings, screen, ::save)
+                Category.STATS -> StatsPage(settings, screen, viewModel.wallpaperFile, ::save)
                 Category.ACCOUNT -> AccountPage(settings)
                 Category.COMPONENTS -> ComponentsPage(state, viewModel)
                 Category.ANDROID -> SystemChecks(state.gpu)
@@ -1162,8 +1171,16 @@ private fun SettingsTab(
         }
     } else {
         val current = category ?: Category.SCREEN
-        Row(Modifier.fillMaxSize().padding(padding), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
-            Column(Modifier.width(320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        // The bottom padding inside the scrolling columns: they run on under the floating bar.
+        val direction = LocalLayoutDirection.current
+        val bottom = padding.calculateBottomPadding()
+        Row(
+            Modifier.fillMaxSize().padding(
+                start = padding.calculateStartPadding(direction), top = padding.calculateTopPadding(), end = padding.calculateEndPadding(direction),
+            ),
+            horizontalArrangement = Arrangement.spacedBy(40.dp),
+        ) {
+            Column(Modifier.width(320.dp).verticalScroll(rememberScrollState()).padding(bottom = bottom), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
                     stringResource(R.string.tab_settings), fontSize = 28.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
@@ -1179,7 +1196,7 @@ private fun SettingsTab(
                 label = "page",
                 modifier = Modifier.weight(1f),
             ) { page ->
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = bottom), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(stringResource(page.title), fontSize = 22.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
                     Box(Modifier.widthIn(max = 760.dp)) { pageContent(page) }
                 }
@@ -1422,7 +1439,7 @@ private fun ScreenPage(settings: DesktopSettings, screen: android.graphics.Rect,
 
 /** The statistics over the desktop, as MoonVibe's: the style over a preview of the screen, then where, how opaque and what it shows. */
 @Composable
-private fun StatsPage(settings: DesktopSettings, screen: android.graphics.Rect, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+private fun StatsPage(settings: DesktopSettings, screen: android.graphics.Rect, wallpaper: File, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
     val style = settings.statsStyle
     var opacity by remember { mutableFloatStateOf(settings.statsOpacity) }
     InfoRow(stringResource(R.string.stats_show), onClick = { save { it.copy(stats = !it.stats) } }) {
@@ -1438,7 +1455,7 @@ private fun StatsPage(settings: DesktopSettings, screen: android.graphics.Rect, 
             ) { Text(stringResource(each.label)) }
         }
     }
-    StatsPreview(settings.copy(statsOpacity = opacity), screen)
+    StatsPreview(settings.copy(statsOpacity = opacity), screen, wallpaper)
     var choosingPosition by remember { mutableStateOf(false) }
     Box {
         InfoRow(stringResource(R.string.stats_position), onClick = { choosingPosition = true }) {
@@ -1474,27 +1491,74 @@ private fun StatsPage(settings: DesktopSettings, screen: android.graphics.Rect, 
         ),
         Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
     )
-    val shown = settings.statsItems(style)
-    for (item in StatsItem.entries) {
-        fun toggle() = save {
-            val items = it.statsItems(style)
-            it.copy(statsItemsByStyle = it.statsItemsByStyle + (style to StatsItem.entries.filter { each -> (each in items) != (each == item) }))
-        }
+    // The shown ones in their order, dragged by their handle; the hidden ones after, a switch away from the end of it.
+    val saved = settings.statsItems(style)
+    var order by remember(style, saved) { mutableStateOf(saved) }
+    var dragged by remember { mutableStateOf<StatsItem?>(null) }
+    var drag by remember { mutableFloatStateOf(0f) }
+    var step by remember { mutableFloatStateOf(1f) }
+    val gap = with(LocalDensity.current) { 8.dp.toPx() }
+    fun store(items: List<StatsItem>) = save { it.copy(statsItemsByStyle = it.statsItemsByStyle + (style to items)) }
+    for (item in order + StatsItem.entries.filter { it !in order }) key(item) {
+        val shown = item in order
+        val lifted = dragged == item
+        val scale by animateFloatAsState(if (lifted) 1.02f else 1f, label = "lift")
+        fun toggle() = store(if (shown) order - item else order + item)
+        // shortcut: the other rows jump to their new place instead of sliding; animate them if it looks rough.
         InfoRow(
             stringResource(item.label),
+            Modifier.onSizeChanged { step = it.height + gap }.zIndex(if (lifted) 1f else 0f).graphicsLayer {
+                translationY = if (lifted) drag else 0f
+                scaleX = scale
+                scaleY = scale
+            },
             icon = ImageVector.vectorResource(item.icon),
             iconTint = MaterialTheme.colorScheme.primary,
             onClick = ::toggle,
         ) {
-            Switch(checked = item in shown, onCheckedChange = { toggle() })
+            Switch(checked = shown, onCheckedChange = { toggle() })
+            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                if (shown) {
+                    Icon(
+                        Icons.Grip, stringResource(R.string.stats_reorder), tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxSize().padding(8.dp).pointerInput(item) {
+                            detectDragGestures(
+                                onDragStart = { dragged = item; drag = 0f },
+                                onDragEnd = { dragged = null; drag = 0f; store(order) },
+                                onDragCancel = { dragged = null; drag = 0f; order = saved },
+                            ) { change, amount ->
+                                change.consume()
+                                drag += amount.y
+                                // The place under the row's middle, as the list is now.
+                                val from = order.indexOf(item)
+                                val to = (from + (drag / step).roundToInt()).coerceIn(0, order.lastIndex)
+                                if (to != from) {
+                                    order = order.toMutableList().apply { add(to, removeAt(from)) }
+                                    drag -= (to - from) * step
+                                }
+                            }
+                        },
+                    )
+                }
+            }
         }
     }
 }
 
 /** The statistics over a screen of the device's shape, drawn at their real size and shrunk to fit. */
 @Composable
-private fun StatsPreview(settings: DesktopSettings, screen: android.graphics.Rect) {
+private fun StatsPreview(settings: DesktopSettings, screen: android.graphics.Rect, wallpaper: File) {
     val density = LocalDensity.current
+    // Plasma's wallpaper, at about the preview's size; plain before a session copied it.
+    val picture by produceState<Bitmap?>(null, wallpaper) {
+        value = withContext(Dispatchers.IO) {
+            if (!wallpaper.isFile) return@withContext null
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }.also { BitmapFactory.decodeFile(wallpaper.path, it) }
+            var sample = 1
+            while (bounds.outWidth / (sample * 2) >= 1000) sample *= 2
+            BitmapFactory.decodeFile(wallpaper.path, BitmapFactory.Options().apply { inSampleSize = sample })
+        }
+    }
     val width = with(density) { screen.width().toDp() }
     val height = with(density) { screen.height().toDp() }
     BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
@@ -1504,6 +1568,7 @@ private fun StatsPreview(settings: DesktopSettings, screen: android.graphics.Rec
             Modifier.width(shown).aspectRatio(width / height).clip(CardShape).background(MaterialTheme.colorScheme.surfaceContainerHighest),
             contentAlignment = Alignment.Center,
         ) {
+            picture?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
             AndroidView(
                 factory = { StatsOverlay(it) },
                 update = {
