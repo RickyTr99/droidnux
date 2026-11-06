@@ -717,8 +717,8 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
             SectionHeader(stringResource(R.string.home_quick))
             AnimatedVisibility(
                 editing,
-                enter = fadeIn() + slideInHorizontally { -it / 4 },
-                exit = fadeOut() + slideOutHorizontally { -it / 4 },
+                enter = fadeIn() + scaleIn(initialScale = 0.4f),
+                exit = fadeOut() + scaleOut(targetScale = 0.4f),
             ) {
                 Text(
                     stringResource(R.string.home_edit_hint),
@@ -850,7 +850,8 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                     }
                 }
                 val iconSize = if (compact) 52.dp else 56.dp
-                DockAction(pencil, origin(order.size), cell, height, iconSize, Icons.Edit, R.string.home_edit, filled = false) { editing = true }
+                // Only fades: "Add" grows in its place, and two tiles scaling there at once bounce.
+                DockAction(pencil, origin(order.size), cell, height, iconSize, Icons.Edit, R.string.home_edit, filled = false, grow = false) { editing = true }
                 DockAction(add, origin(order.size), cell, height, iconSize, Icons.Plus, R.string.home_add, filled = false) { adding = true }
                 DockAction(editing, origin(order.size + 1), cell, height, iconSize, Icons.Selected, R.string.home_done, filled = true) { editing = false }
             }
@@ -1021,7 +1022,7 @@ private fun shortcut(context: Context, app: LinuxApp, icon: Bitmap?): ShortcutIn
         )
         .build()
 
-/** A tile after the favorites (edit, add, done) at [at]: it grows in when [visible] and shrinks away after. */
+/** A tile after the favorites (edit, add, done) at [at]: it fades in when [visible], growing if [grow], and away after. */
 @Composable
 private fun DockAction(
     visible: Boolean,
@@ -1032,6 +1033,7 @@ private fun DockAction(
     icon: ImageVector,
     label: Int,
     filled: Boolean,
+    grow: Boolean = true,
     onClick: () -> Unit,
 ) {
     val shown by animateFloatAsState(if (visible) 1f else 0f, label = "action")
@@ -1040,7 +1042,7 @@ private fun DockAction(
     val colors = MaterialTheme.colorScheme
     Column(
         Modifier.offset(position.x, position.y).size(width, height)
-            .graphicsLayer { alpha = shown; scaleX = 0.8f + 0.2f * shown; scaleY = scaleX }
+            .graphicsLayer { alpha = shown; if (grow) { scaleX = 0.4f + 0.6f * shown; scaleY = scaleX } }
             .clip(CardShape).clickable(enabled = visible, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
