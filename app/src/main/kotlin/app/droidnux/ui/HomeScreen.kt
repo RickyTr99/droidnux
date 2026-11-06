@@ -61,6 +61,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -132,6 +133,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -1190,7 +1192,7 @@ private fun SettingsTab(
             AnimatedContent(
                 current,
                 transitionSpec = {
-                    (fadeIn(tween(240, 90)) + slideInVertically(tween(300, 90, Emphasized)) { it / 30 }) togetherWith
+                    (fadeIn(tween(200, 30)) + slideInVertically(tween(280, 30, Emphasized)) { it / 30 }) togetherWith
                         (fadeOut(tween(90)) + slideOutVertically(tween(90)) { -it / 60 })
                 },
                 label = "page",
@@ -1323,6 +1325,11 @@ private fun CategoryRow(
         label = "icon",
     )
     val press = remember { MutableInteractionSource() }
+    // Beside its page (no chevron) a row is chosen on touch down, as the bar's tabs; on a phone a scroll may start on it.
+    if (!chevron) {
+        val choose by rememberUpdatedState(onClick)
+        LaunchedEffect(press) { press.interactions.collect { if (it is PressInteraction.Press) choose() } }
+    }
     Row(
         Modifier.pressScale(press, 0.97f).fillMaxWidth().heightIn(min = 72.dp).clip(shape).background(background)
             .selectable(selected, press, LocalIndication.current, onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
