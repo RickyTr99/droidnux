@@ -374,6 +374,8 @@
     <string name="install_apps_failed">Non installate: %1$s. Riprova dallo Store.</string>
     <string name="tab_home">Home</string>
     <string name="home_search">Cerca tra le app</string>
+    <string name="home_search_short">Cerca</string>
+    <string name="home_search_clear">Cancella la ricerca</string>
     <string name="home_stop">Ferma il desktop</string>
     <string name="settings_components">Componenti</string>
     <string name="settings_components_ok">Aggiornati</string>

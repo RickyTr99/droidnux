@@ -378,6 +378,8 @@
     <string name="install_apps_failed">Not installed: %1$s. Try again from the Store.</string>
     <string name="tab_home">Home</string>
     <string name="home_search">Search apps</string>
+    <string name="home_search_short">Search</string>
+    <string name="home_search_clear">Clear the search</string>
     <string name="home_stop">Stop the desktop</string>
     <string name="settings_components">Components</string>
     <string name="settings_components_ok">Up to date</string>

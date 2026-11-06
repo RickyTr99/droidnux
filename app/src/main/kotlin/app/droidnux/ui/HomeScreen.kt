@@ -84,6 +84,7 @@ import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -105,6 +106,9 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -195,7 +199,9 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -473,7 +479,7 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
         }
     }
     Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(Modifier.fillMaxSize().imePadding().verticalScroll(rememberScrollState())) {
             Hero(state, viewModel, side, thumbnail, Modifier.entrance(entrance, 0))
             Column(
                 Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
@@ -715,17 +721,14 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
             SectionHeader(stringResource(R.string.home_quick))
+            // Clipped past the header, so the sliding text never crosses it.
             AnimatedVisibility(
                 editing,
-                enter = fadeIn() + scaleIn(initialScale = 0.4f),
-                exit = fadeOut() + scaleOut(targetScale = 0.4f),
+                modifier = Modifier.padding(start = 12.dp).clipToBounds(),
+                enter = fadeIn() + slideInHorizontally { -it / 4 },
+                exit = fadeOut() + slideOutHorizontally { -it / 4 },
             ) {
-                Text(
-                    stringResource(R.string.home_edit_hint),
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = 12.dp),
-                )
+                Text(stringResource(R.string.home_edit_hint), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         val compact = isCompact()
@@ -886,31 +889,62 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
     }
 }
 
-/** Every app, programs before the desktop's settings; the magnifier opens a filter. */
+/** A small pill to type a filter in, outlined in the accent while it has focus. */
+@Composable
+private fun SearchField(text: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
+    val colors = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val focused by interaction.collectIsFocusedAsState()
+    val outline by animateColorAsState(if (focused) colors.primary else Color.Transparent, label = "searchOutline")
+    BasicTextField(
+        value = text,
+        onValueChange = onChange,
+        singleLine = true,
+        interactionSource = interaction,
+        textStyle = TextStyle(color = colors.onSurface, fontSize = 15.sp),
+        cursorBrush = SolidColor(colors.primary),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        modifier = modifier.height(40.dp),
+        decorationBox = { field ->
+            Row(
+                Modifier.fillMaxSize().clip(RoundedCornerShape(20.dp)).background(colors.surfaceContainerLow)
+                    .border(2.dp, outline, RoundedCornerShape(20.dp)).padding(start = 14.dp, end = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(Icons.Search, null, Modifier.size(18.dp), tint = if (focused) colors.primary else colors.onSurfaceVariant)
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                    if (text.isEmpty()) Text(stringResource(R.string.home_search_short), color = colors.onSurfaceVariant, fontSize = 15.sp, maxLines = 1)
+                    field()
+                }
+                if (text.isNotEmpty()) {
+                    IconButton(onClick = { onChange("") }, modifier = Modifier.size(32.dp)) {
+                        Icon(Icons.Close, stringResource(R.string.home_search_clear), Modifier.size(12.dp), tint = colors.onSurfaceVariant)
+                    }
+                }
+            }
+        },
+    )
+}
+
+/** Every app, programs before the desktop's settings; the small field beside the header filters them. */
 @Composable
 private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier) {
-    var query by rememberSaveable { mutableStateOf<String?>(null) }
-    BackHandler(enabled = query != null) { query = null }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
-            SectionHeader(stringResource(R.string.home_all_apps), Modifier.weight(1f))
-            IconButton(onClick = { query = if (query == null) "" else null }) {
-                Icon(if (query == null) Icons.Search else Icons.Close, stringResource(R.string.home_search), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        val text = query
-        if (text != null) {
-            val focus = remember { FocusRequester() }
-            LaunchedEffect(Unit) { focus.requestFocus() }
-            OutlinedTextField(
-                value = text,
-                onValueChange = { query = it },
-                placeholder = { Text(stringResource(R.string.home_search)) },
-                leadingIcon = { Icon(Icons.Search, null) },
-                singleLine = true,
-                shape = RoundedCornerShape(28.dp),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus),
-            )
+    var text by rememberSaveable { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+    BackHandler(enabled = text.isNotEmpty()) { text = ""; focusManager.clearFocus() }
+    // The results scroll up above the keyboard as they are typed.
+    val results = remember { BringIntoViewRequester() }
+    LaunchedEffect(text) { if (text.isNotEmpty()) results.bringIntoView() }
+    Column(modifier.bringIntoViewRequester(results), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        val compact = isCompact()
+        Row(
+            Modifier.fillMaxWidth().height(40.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            SectionHeader(stringResource(R.string.home_all_apps), if (compact) Modifier else Modifier.weight(1f))
+            SearchField(text, { text = it }, if (compact) Modifier.weight(1f) else Modifier.width(280.dp))
         }
         val apps = state.apps
         if (apps == null) {
@@ -918,16 +952,15 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
             return@Column
         }
         val (settings, programs) = apps.partition { "Settings" in it.categories }
-        val shown = (programs + settings).filter { text.isNullOrBlank() || it.name.contains(text.trim(), ignoreCase = true) }
+        val shown = (programs + settings).filter { text.isBlank() || it.name.contains(text.trim(), ignoreCase = true) }
         if (shown.isEmpty()) {
             Text(
-                stringResource(R.string.store_no_results, text.orEmpty().trim()),
+                stringResource(R.string.store_no_results, text.trim()),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(vertical = 16.dp),
             )
             return@Column
         }
-        val compact = isCompact()
         BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) { // The dock's inset: columns line up.
             val columns = appColumns(compact, maxWidth)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1036,7 +1069,8 @@ private fun DockAction(
     grow: Boolean = true,
     onClick: () -> Unit,
 ) {
-    val shown by animateFloatAsState(if (visible) 1f else 0f, label = "action")
+    // Slower in than out: a tile appearing in place of another needs time to read.
+    val shown by animateFloatAsState(if (visible) 1f else 0f, if (visible) tween(350) else spring(), label = "action")
     if (!visible && shown == 0f) return
     val position by animateDpOffsetAsState(at, label = "actionAt")
     val colors = MaterialTheme.colorScheme
