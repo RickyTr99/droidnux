@@ -256,7 +256,7 @@ private enum class Category(val title: Int, val icon: ImageVector, val group: In
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(state: AppState, viewModel: AppViewModel) {
-    // The pages side by side: a swipe moves between them, a tab slides to its page.
+    // The pages side by side: only a tab moves between them, sliding to its page.
     val pager = rememberPagerState { Tab.entries.size }
     val tab = Tab.entries[pager.targetPage]
     val scope = rememberCoroutineScope()
@@ -280,7 +280,7 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
     }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
+        HorizontalPager(pager, Modifier.fillMaxSize(), userScrollEnabled = false) { page ->
             // Room for the bar floating over the bottom of every page, and for the system's bar (or the keyboard) under it:
             // inside the pages' scrolling, so they run on to the screen's edge.
             val system = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()
