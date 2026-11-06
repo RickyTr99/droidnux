@@ -141,6 +141,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
@@ -508,7 +509,10 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, picture: Bi
     val frozen by animateFloatAsState(if (paused) 1f else 0f, tween(400), label = "frozen")
     Box(
         modifier.fillMaxWidth().onGloballyPositioned { bounds = it.boundsInRoot() }
-            .clickable(onClickLabel = stringResource(R.string.action_open_desktop), onClick = open),
+            // No state layer: over the whole picture a hovering mouse lit it all. The button
+            // below is the same action for the keyboard and the controller.
+            .focusProperties { canFocus = false }
+            .clickable(null, indication = null, onClickLabel = stringResource(R.string.action_open_desktop), onClick = open),
     ) {
         if (picture != null) {
             Image(
