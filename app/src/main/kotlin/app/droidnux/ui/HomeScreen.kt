@@ -714,7 +714,19 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
-            SectionHeader(stringResource(R.string.home_quick) + if (editing) " · " + stringResource(R.string.home_edit_hint) else "")
+            SectionHeader(stringResource(R.string.home_quick))
+            AnimatedVisibility(
+                editing,
+                enter = fadeIn() + slideInHorizontally { -it / 4 },
+                exit = fadeOut() + slideOutHorizontally { -it / 4 },
+            ) {
+                Text(
+                    stringResource(R.string.home_edit_hint),
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(start = 12.dp),
+                )
+            }
         }
         val compact = isCompact()
         BoxWithConstraints(
@@ -818,10 +830,15 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                                 ),
                         ) {
                             AppTile(app, viewModel, height, iconSize = if (compact) 52.dp else 56.dp, editing = editing, lifted = lifted || focused)
-                            if (editing) {
+                            androidx.compose.animation.AnimatedVisibility(
+                                editing,
+                                modifier = Modifier.align(Alignment.TopEnd),
+                                enter = fadeIn() + scaleIn(initialScale = 0.4f),
+                                exit = fadeOut() + scaleOut(targetScale = 0.4f),
+                            ) {
                                 IconButton(
                                     onClick = { viewModel.setHomeApps(order - id) },
-                                    modifier = Modifier.align(Alignment.TopEnd).size(36.dp),
+                                    modifier = Modifier.size(36.dp),
                                 ) {
                                     Box(
                                         Modifier.size(24.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest),
