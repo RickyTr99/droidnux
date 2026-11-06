@@ -328,13 +328,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         clipboard.removePrimaryClipChangedListener(clipboardListener)
         super.onPause()
     }
-
-    override fun onStop() {
-        // Out of sight, the desktop pauses as the menu's Pause does, and continues on return (onResume).
-        if (DisplayServer.running && !sessionEnded && !ending && !isChangingConfigurations) SessionPause.pause(this)
-        super.onStop()
-    }
-
     @Deprecated("Android 12 and older; newer versions use the OnBackInvokedCallback")
     override fun onBackPressed() = onBack()
 
@@ -680,8 +673,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private var lastInputTouch = false
     /** The session is over: no picture of what is left of the desktop. */
     private var sessionEnded = false
-    /** End was chosen: stopped processes would not see the session end, so no pause. */
-    private var ending = false
     /** When the first finger touched the desktop and when the last one left (uptime ms). */
     private var lastFingerDown = 0L
     private var lastFingerUp = 0L
@@ -839,10 +830,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
 
         // The picture first: once the session stops, the pause has no desktop to take it from.
-        override fun onExit() {
-            ending = true
-            saveThumbnail { DesktopSessionService.stop(this@DesktopActivity) }
-        }
+        override fun onExit() = saveThumbnail { DesktopSessionService.stop(this@DesktopActivity) }
 
         override fun onClosed() {
             surfaceView.requestFocus()
