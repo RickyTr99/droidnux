@@ -5,6 +5,11 @@ import app.droidnux.ui.theme.ThemeColor
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
 import android.app.ActivityOptions
+import android.app.KeyguardManager
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
+import android.os.Build
+import android.os.CancellationSignal
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -1704,18 +1709,47 @@ private fun InputRows(settings: DesktopSettings, save: ((DesktopSettings) -> Des
 
 @Composable
 private fun AccountPage(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    val context = LocalContext.current
     var changingName by remember { mutableStateOf(false) }
     var changingPassword by remember { mutableStateOf(false) }
-    InfoRow(stringResource(R.string.wizard_account_name)) {
-        Text(settings.user, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
+    // The password in clear, after the fingerprint or the screen lock; hidden again when the app leaves the screen.
+    var shown by remember { mutableStateOf<String?>(null) }
+    LifecycleResumeEffect(Unit) { onPauseOrDispose { shown = null } }
+    InfoRow(stringResource(R.string.wizard_account_name), text = settings.user) {
         FilledTonalButton(onClick = { changingName = true }) { Text(stringResource(R.string.action_change)) }
     }
-    InfoRow(stringResource(R.string.wizard_account_password)) {
+    InfoRow(stringResource(R.string.wizard_account_password), text = shown ?: "••••••••") {
+        IconButton(onClick = {
+            if (shown != null) shown = null else unlock(context, context.getString(R.string.settings_password_show)) {
+                shown = Account.password(context)
+            }
+        }) {
+            Icon(
+                if (shown != null) Icons.VisibilityOff else Icons.Visibility,
+                contentDescription = stringResource(if (shown != null) R.string.settings_password_hide else R.string.settings_password_show),
+                tint = if (shown != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         FilledTonalButton(onClick = { changingPassword = true }) { Text(stringResource(R.string.action_change)) }
     }
     // The session script renames the account, and moves its home, when the desktop next starts.
     if (changingName) NameDialog(settings.user, onDismiss = { changingName = false }) { name -> save { it.copy(user = name) } }
     if (changingPassword) PasswordDialog(onDismiss = { changingPassword = false })
+}
+
+/** Runs [onUnlocked] after the fingerprint, face or screen lock; at once on a device with no lock to ask for. */
+private fun unlock(context: Context, title: String, onUnlocked: () -> Unit) {
+    if (!context.getSystemService(KeyguardManager::class.java).isDeviceSecure) return onUnlocked()
+    val prompt = BiometricPrompt.Builder(context).setTitle(title).apply {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+        } else {
+            @Suppress("DEPRECATION") setDeviceCredentialAllowed(true)
+        }
+    }.build()
+    prompt.authenticate(CancellationSignal(), context.mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
+        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = onUnlocked()
+    })
 }
 
 @Composable

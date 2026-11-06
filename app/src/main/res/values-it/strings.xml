@@ -385,6 +385,8 @@
     <string name="settings_diagnostics_text">Prove del sistema e log</string>
     <string name="settings_info">Info</string>
     <string name="settings_name_change">Cambia nome</string>
+    <string name="settings_password_show">Mostra la password</string>
+    <string name="settings_password_hide">Nascondi la password</string>
     <string name="info_version">Versione</string>
     <string name="info_creator">Creatore</string>
     <string name="info_source">Codice</string>
