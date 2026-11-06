@@ -1,0 +1,32 @@
+wsi/wayland: wait for rendering before presenting when the driver has no implicit sync
+
+Patch 0001 makes the X11 WSI wait for an image's fence on drivers without
+implicit sync (Turnip on KGSL). The Wayland WSI did not: Zink's clients under
+KWin, and KWin itself presenting to DroidNux's compositor, sent buffers the
+GPU was still drawing, and the compositor (then Android, which latches
+unsignaled buffers) showed them half rendered: old and new frames mixed,
+heavy frames (full resolution) the most. Wait as the X11 WSI does, unless
+the swapchain has explicit sync.
+
+--- a/src/vulkan/wsi/wsi_common_wayland.c
++++ b/src/vulkan/wsi/wsi_common_wayland.c
+@@ -3309,6 +3309,19 @@
+    if (chain->retired)
+       return VK_ERROR_OUT_OF_DATE_KHR;
+ 
++   /* Without implicit sync (KGSL) and without explicit sync, the compositor
++    * cannot tell when rendering is done: wait for the image's fence, as the
++    * X11 WSI does (patch 0001).
++    */
++   if (chain->base.wsi->no_implicit_sync && !chain->base.image_info.explicit_sync) {
++      MESA_TRACE_SCOPE("wait fence");
++      VkResult result = chain->base.wsi->WaitForFences(chain->base.device, 1,
++                                                       &chain->base.fences[image_index],
++                                                       true, UINT64_MAX);
++      if (result != VK_SUCCESS)
++         return VK_ERROR_OUT_OF_DATE_KHR;
++   }
++
+    struct wsi_wl_surface *wsi_wl_surface = chain->wsi_wl_surface;
+    bool mode_fifo = chain->base.present_mode == VK_PRESENT_MODE_FIFO_KHR;
+ 

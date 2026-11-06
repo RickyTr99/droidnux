@@ -19,8 +19,15 @@ data class DesktopSettings(
     val trackpad: Boolean = false,
     /** X keyboard layout; empty: the one of Android's language. */
     val layout: String = "",
-    /** The frame counter in the top right corner of the desktop (debug builds). */
+    /** The statistics over the desktop (Stats.kt): shown, their style, and each style's place and values. */
     val stats: Boolean = false,
+    val statsStyle: StatsStyle = StatsStyle.BAR,
+    val statsPositions: Map<StatsStyle, StatsPosition> = emptyMap(),
+    val statsItemsByStyle: Map<StatsStyle, List<StatsItem>> = emptyMap(),
+    /** The card's background, 0.2 to 1. */
+    val statsOpacity: Float = 0.9f,
+    /** Values out of the normal range in the error color. */
+    val statsWarnings: Boolean = true,
     /** The session's output in logcat, and KWin's and Mesa's debug messages; off: only the file to send. */
     val logs: Boolean = false,
     /** The shrunk keyboard's button: on the left edge instead of the right, and how far down (0 top, 1 bottom). */
@@ -28,7 +35,23 @@ data class DesktopSettings(
     val keyboardButtonY: Float = 1f,
     /** The Linux account's name, empty until the user chose one; see [Account]. */
     val user: String = "",
+    /** The app's theme color (ui/theme/ThemeColor); empty: the default. */
+    val themeColor: String = "",
+    /** What opens the session's menu: Back (gesture or key), Ctrl+Alt+Space. */
+    val menuBack: Boolean = true,
+    val menuShortcut: Boolean = true,
+    /** The menu's bar at the bottom of the screen instead of the top. */
+    val menuBottom: Boolean = false,
+    /** The keyboard the menu and text fields open: Android's instead of the full one (PcKeyboard). */
+    val androidKeyboard: Boolean = false,
+    /** The screen stays on while the desktop is shown. */
+    val keepScreenOn: Boolean = false,
+    /** The app opens straight into the desktop. */
+    val openAtStart: Boolean = false,
 ) {
+    fun statsPosition(style: StatsStyle) = statsPositions[style] ?: style.defaultPosition
+    fun statsItems(style: StatsStyle) = statsItemsByStyle[style] ?: style.defaultItems
+
     /** The layout the session uses. */
     fun xkbLayout(): String = layout.ifEmpty {
         val locale = Locale.getDefault()
@@ -42,6 +65,7 @@ data class DesktopSettings(
     companion object {
         const val MIN_UI_SCALE = 0.75f
         const val MAX_UI_SCALE = 2f
+        const val MIN_STATS_OPACITY = 0.2f
 
         /** Layouts offered in the settings (XKB names). */
         val LAYOUTS = listOf("us", "gb", "it", "de", "fr", "es", "pt")
@@ -59,10 +83,29 @@ data class DesktopSettings(
                 trackpad = props.getProperty("trackpad")?.toBooleanStrictOrNull() ?: defaults.trackpad,
                 layout = props.getProperty("layout")?.takeIf { it in LAYOUTS } ?: defaults.layout,
                 stats = props.getProperty("stats")?.toBooleanStrictOrNull() ?: defaults.stats,
+                statsStyle = StatsStyle.of(props.getProperty("statsStyle")) ?: defaults.statsStyle,
+                statsPositions = StatsStyle.entries.mapNotNull { style ->
+                    StatsPosition.of(props.getProperty("statsPosition.${style.key}"))?.let { style to it }
+                }.toMap(),
+                statsItemsByStyle = StatsStyle.entries.mapNotNull { style ->
+                    props.getProperty("statsItems.${style.key}")?.let { keys ->
+                        val chosen = keys.split(',').mapNotNull(StatsItem::of)
+                        style to chosen.distinct()
+                    }
+                }.toMap(),
+                statsOpacity = props.getProperty("statsOpacity")?.toFloatOrNull()?.coerceIn(MIN_STATS_OPACITY, 1f) ?: defaults.statsOpacity,
+                statsWarnings = props.getProperty("statsWarnings")?.toBooleanStrictOrNull() ?: defaults.statsWarnings,
                 logs = props.getProperty("logs")?.toBooleanStrictOrNull() ?: defaults.logs,
                 keyboardButtonLeft = props.getProperty("keyboardButtonLeft")?.toBooleanStrictOrNull() ?: defaults.keyboardButtonLeft,
                 keyboardButtonY = props.getProperty("keyboardButtonY")?.toFloatOrNull()?.coerceIn(0f, 1f) ?: defaults.keyboardButtonY,
                 user = props.getProperty("user")?.takeIf { Account.isValidName(it) } ?: defaults.user,
+                themeColor = props.getProperty("themeColor") ?: defaults.themeColor,
+                menuBack = props.getProperty("menuBack")?.toBooleanStrictOrNull() ?: defaults.menuBack,
+                menuShortcut = props.getProperty("menuShortcut")?.toBooleanStrictOrNull() ?: defaults.menuShortcut,
+                menuBottom = props.getProperty("menuBottom")?.toBooleanStrictOrNull() ?: defaults.menuBottom,
+                androidKeyboard = props.getProperty("androidKeyboard")?.toBooleanStrictOrNull() ?: defaults.androidKeyboard,
+                keepScreenOn = props.getProperty("keepScreenOn")?.toBooleanStrictOrNull() ?: defaults.keepScreenOn,
+                openAtStart = props.getProperty("openAtStart")?.toBooleanStrictOrNull() ?: defaults.openAtStart,
             )
         }
 
@@ -75,10 +118,22 @@ data class DesktopSettings(
                 setProperty("trackpad", settings.trackpad.toString())
                 setProperty("layout", settings.layout)
                 setProperty("stats", settings.stats.toString())
+                setProperty("statsStyle", settings.statsStyle.key)
+                for ((style, position) in settings.statsPositions) setProperty("statsPosition.${style.key}", position.key)
+                for ((style, items) in settings.statsItemsByStyle) setProperty("statsItems.${style.key}", items.joinToString(",") { it.key })
+                setProperty("statsOpacity", settings.statsOpacity.toString())
+                setProperty("statsWarnings", settings.statsWarnings.toString())
                 setProperty("logs", settings.logs.toString())
                 setProperty("keyboardButtonLeft", settings.keyboardButtonLeft.toString())
                 setProperty("keyboardButtonY", settings.keyboardButtonY.toString())
                 setProperty("user", settings.user)
+                setProperty("themeColor", settings.themeColor)
+                setProperty("menuBack", settings.menuBack.toString())
+                setProperty("menuShortcut", settings.menuShortcut.toString())
+                setProperty("menuBottom", settings.menuBottom.toString())
+                setProperty("androidKeyboard", settings.androidKeyboard.toString())
+                setProperty("keepScreenOn", settings.keepScreenOn.toString())
+                setProperty("openAtStart", settings.openAtStart.toString())
             }
             val file = File(context.filesDir, FILE)
             val temp = File(context.filesDir, "$FILE.new")

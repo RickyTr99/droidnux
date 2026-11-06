@@ -28,26 +28,41 @@ data class Component(
         /** Turnip (Vulkan on Adreno through KGSL), Zink (OpenGL on Vulkan), GBM (KWin) and the VA-API driver: guest/mesa, guest/va. */
         val MESA = Component(
             id = "mesa",
-            version = "26.2.5-dn6",
-            url = "$RELEASES/mesa-26.2.5-dn6/droidnux-mesa-26.2.5-dn6-arm64.tar.xz",
-            sha256 = "be525fbaffee235acb0f5777fff4fb4b8a0ebd9c806beb9f1353cf4c63b447bd",
-            sizeBytes = 5_239_920,
+            version = "26.2.5-dn8",
+            url = "$RELEASES/mesa-26.2.5-dn8/droidnux-mesa-26.2.5-dn8-arm64.tar.xz",
+            sha256 = "c4f0818f251c18383b28779c6ba0055e3a2465fb7af5b2ae1c81bcfbe18aaa4e",
+            sizeBytes = 5_223_644,
             guestPath = DesktopEnvironment.MESA_PREFIX,
         )
 
-        /** KSvg and KIconThemes with fewer file lookups, KWin passing on the scroll source, and system monitor plugins for Android: guest/plasma. */
+        /** KSvg and KIconThemes with fewer file lookups, KWin passing on the scroll source and taking the backlight, and system monitor plugins for Android: guest/plasma. */
         val PLASMA = Component(
             id = "plasma",
-            version = "6.13.0-dn5",
-            url = "$RELEASES/plasma-6.13.0-dn5/droidnux-plasma-6.13.0-dn5-arm64.tar.xz",
-            sha256 = "c8e0a982719aa8962054786c67f5030212862b2bccdb6817d373f4aa94ed1e4b",
-            sizeBytes = 2_130_800,
+            version = "6.13.0-dn7",
+            url = "$RELEASES/plasma-6.13.0-dn7/droidnux-plasma-6.13.0-dn7-arm64.tar.xz",
+            sha256 = "eaaa434fca4482d64c4c8593b1869e56882039560e65588a7dbed33199bab263",
+            sizeBytes = 2_130_836,
             guestPath = DesktopEnvironment.PLASMA_PREFIX,
         )
 
         val ALL = listOf(MESA, PLASMA)
+
+        /** [MESA] as Flatpak's GL extension, one per Freedesktop runtime branch (guest/mesa/flatpak.sh): the session installs it. */
+        val FLATPAK_GL = listOf(
+            FlatpakExtension(
+                "25.08", "$RELEASES/mesa-26.2.5-dn8/droidnux-mesa-26.2.5-dn8-flatpak-25.08-arm64.flatpak",
+                "245b6217173633aaecddedc777a94110514722a76657ce7a899d61cd3b6a96f4",
+            ),
+            FlatpakExtension(
+                "26.08", "$RELEASES/mesa-26.2.5-dn8/droidnux-mesa-26.2.5-dn8-flatpak-26.08-arm64.flatpak",
+                "70879d160a919212b9bb2d78826970398ca900302c0e2efd27f5158dd3ca825e",
+            ),
+        )
     }
 }
+
+/** A Flatpak bundle of the extension for runtime [branch], at [url]. */
+data class FlatpakExtension(val branch: String, val url: String, val sha256: String)
 
 /** Installs [Component]s into a rootfs, replacing older versions atomically. */
 class ComponentInstaller(private val downloadDir: File) {

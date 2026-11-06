@@ -1,0 +1,30 @@
+zink: keep freed buffers longer, as KGSL allocations are slow
+
+KGSL zeroes and maps a buffer's pages when it is allocated, ~0.35 ms per
+MiB on the Adreno 740 (6-8 ms for a 2800x1752 texture). KWin allocates
+several such textures when a window is maximized or restored (the
+cross-fade snapshot, the window's new texture, the upload's staging
+buffer): with Zink's half-second cache each animation allocated them
+again, 25-40 ms in its first frames, and dropped 3-5 frames at 120 Hz.
+Keep freed buffers for a minute, at most 256 MiB of them.
+
+--- a/src/gallium/drivers/zink/zink_bo.c
++++ b/src/gallium/drivers/zink/zink_bo.c
+@@ -1366,10 +1366,14 @@ zink_bo_init(struct zink_screen *screen)
+    uint64_t total_mem = 0;
+    for (uint32_t i = 0; i < screen->info.mem_props.memoryHeapCount; ++i)
+       total_mem += screen->info.mem_props.memoryHeaps[i].size;
+-   /* Create managers. */
++   /* Create managers. KGSL allocations are slow (~0.35 ms per MiB: the
++    * kernel zeroes and maps the pages): a compositor reallocating window
++    * textures on a resize or an animation dropped frames. Keep freed buffers
++    * for a minute, within a bound.
++    */
+    pb_cache_init(&screen->pb.bo_cache, screen->info.mem_props.memoryTypeCount,
+-                 500000, 1.5f, 0,
+-                 total_mem / 8, offsetof(struct zink_bo, cache_entry), screen,
++                 60000000, 1.5f, 0,
++                 MIN2(total_mem / 8, 256 * 1024 * 1024), offsetof(struct zink_bo, cache_entry), screen,
+                  (void*)bo_destroy, (void*)bo_can_reclaim);
+ 
+    if (!pb_slabs_init(&screen->pb.bo_slabs,

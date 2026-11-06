@@ -62,6 +62,9 @@ object DesktopEnvironment {
     private const val IM_PROGRAM = "$GUEST_LIB_DIR/droidnux-im"
     private const val IM_DESKTOP_FILE = "$PLASMA_DEFAULTS/droidnux-im.desktop"
 
+    /** Adds the XDG folders to Dolphin's places, once ([PLACES]). */
+    private const val PLACES_SCRIPT = "$GUEST_LIB_DIR/droidnux-places"
+
     /** Opens KDE's wallet with the password before and moves it to the new one (WALLET). */
     private const val WALLET_SCRIPT = "$GUEST_LIB_DIR/droidnux-wallet"
 
@@ -72,6 +75,21 @@ object DesktopEnvironment {
     private const val BATTERY_FILE = "/run/droidnux-battery/state"
     private const val UPOWER_SCRIPT = "$GUEST_LIB_DIR/droidnux-upower"
     private const val SYSTEM_BUS_CONF = "$GUEST_LIB_DIR/system-bus.conf"
+    /** The system bus's services started on demand: powerdevil's backlight helper only ([SYSTEM_SERVICES]). */
+    private const val SYSTEM_SERVICES_DIR = "$GUEST_LIB_DIR/system-services"
+    private const val BACKLIGHT_HELPER = "org.kde.powerdevil.backlighthelper"
+    /** polkit for that helper ([POLKIT]). */
+    private const val POLKIT_SCRIPT = "$GUEST_LIB_DIR/droidnux-polkit"
+    /** Android's screen as a backlight (/sys/class/backlight/droidnux), in the rootfs: [backlightDevice]. */
+    private const val BACKLIGHT_DIR = "run/droidnux-backlight"
+    const val BACKLIGHT_MAX = 1000
+
+    /** Installs DroidNux's Mesa as Flatpak's GL extension ([FLATPAK_GL]). */
+    const val FLATPAK_GL_SCRIPT = "$GUEST_LIB_DIR/droidnux-flatpak-gl"
+
+    /** Copies Plasma's wallpaper for the app's home screen ([WALLPAPER]). */
+    private const val WALLPAPER_SCRIPT = "$GUEST_LIB_DIR/droidnux-wallpaper"
+    private const val WALLPAPER_FILE = "/tmp/.droidnux-wallpaper"
 
     /** bubblewrap for Flatpak, on what Burrow emulates ([BWRAP]). */
     private const val BWRAP_SCRIPT = "$GUEST_LIB_DIR/droidnux-bwrap"
@@ -89,6 +107,13 @@ object DesktopEnvironment {
     const val NETWORK_REQUEST = "wanted"
     private const val SYSTEM_BUS_SOCKET = "/run/dbus/system_bus_socket"
 
+    /**
+     * For guest jobs outside the session (apt): the session's system bus is
+     * stopped with it while the desktop is paused, and a package script that
+     * asks it something (flatpak's remote-list) would wait until it resumes.
+     */
+    const val NO_SYSTEM_BUS = "export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/droidnux-no-bus"
+
     /** Plasma on the app's Wayland compositor, with KDE's everyday apps. */
     private val PLASMA_PACKAGES = listOf(
         "plasma-workspace", "plasma-desktop", "kwin-wayland", "breeze", "xkb-data",
@@ -103,6 +128,8 @@ object DesktopEnvironment {
         "kscreen",
         // The desktop's user administers with sudo (USER_SESSION).
         "sudo",
+        // Documents, Pictures, Music... in the user's language (USER_DIRS).
+        "xdg-user-dirs",
         // KDE's wallet moved to a new password over D-Bus (WALLET).
         "python3-gi",
         // Digest::SHA, for the wallet's key (USER_SESSION); perl-base lacks it.
@@ -119,6 +146,8 @@ object DesktopEnvironment {
         "fonts-dejavu-core", "tzdata",
         // HTTPS for the desktop's tools (Flatpak's remotes, curl, git): the slim image has no CA certificates.
         "ca-certificates",
+        // ssh for git and editors' remote hosts (VS Code's Remote - SSH): the slim image has none.
+        "openssh-client",
         // Chinese, Japanese, Korean and emoji: without them web pages show empty boxes.
         "fonts-noto-cjk", "fonts-noto-color-emoji",
         // Android's language in the desktop's apps (SESSION generates the locale).
@@ -148,6 +177,7 @@ object DesktopEnvironment {
         return """
         set -e
         export DEBIAN_FRONTEND=noninteractive
+        $NO_SYSTEM_BUS
         apt-get update
         # The slim image keeps no man pages, nor their directories: some packages'
         # scripts copy theirs there (Gaia Sky's .deb into man6) and fail without them.
@@ -205,9 +235,14 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PLASMA_DEFAULTS/kwalletrc", PLASMA_KWALLETRC.toByteArray())
         writeFile(rootfs, WALLET_SCRIPT, WALLET.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, UPOWER_SCRIPT, UPOWER.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, PLACES_SCRIPT, PLACES.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, APP_GROUPS_SCRIPT, APP_GROUPS.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, BWRAP_SCRIPT, BWRAP.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, FLATPAK_GL_SCRIPT, FLATPAK_GL.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, WALLPAPER_SCRIPT, WALLPAPER.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, SYSTEM_BUS_CONF, SYSTEM_BUS.toByteArray())
+        writeFile(rootfs, "$SYSTEM_SERVICES_DIR/$BACKLIGHT_HELPER.service", SYSTEM_SERVICES.toByteArray())
+        writeFile(rootfs, POLKIT_SCRIPT, POLKIT.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, "$PLASMA_DEFAULTS/powerdevilrc", PLASMA_POWERDEVILRC.toByteArray())
         hidePowerProfiles(rootfs)
         touchTables(rootfs)
@@ -218,6 +253,7 @@ object DesktopEnvironment {
         writeFile(rootfs, "$PLASMA_LOOK_AND_FEEL/contents/layouts/org.kde.plasma.desktop-layout.js", PLASMA_LAYOUT.toByteArray())
         writeFile(rootfs, PLASMA_BATTERY_UPDATE, PLASMA_BATTERY.toByteArray())
         writeFile(rootfs, FIREFOX_PREFS_PATH, FIREFOX_PREFS.toByteArray())
+        writeFile(rootfs, CHROMIUM_FLAGS_PATH, CHROMIUM_FLAGS.toByteArray())
         OBSOLETE_FILES.forEach { removeFile(rootfs, it) }
     }
 
@@ -234,9 +270,16 @@ object DesktopEnvironment {
      * password before it (empty line if it did not change): KDE's wallet
      * moves to the new one, and [WALLET_MOVED_MARKER] says so.
      */
-    fun sessionCommand(layout: String, user: String = "", verbose: Boolean = false): String =
+    /** The places of [user]'s Dolphin in [rootfs], when they are a real file there (never through a guest link). */
+    fun userPlaces(rootfs: File, user: String): File? =
+        File(rootfs.canonicalFile, "home/${user.ifEmpty { DESKTOP_USER }}/.local/share/user-places.xbel")
+            .takeIf { it.isFile && it.canonicalPath == it.path }
+
+    /** [brightness]: Android's, 0 to 1 as the backlight has it, for KWin to start with. */
+    fun sessionCommand(layout: String, user: String = "", verbose: Boolean = false, brightness: Float? = null): String =
         "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_LOCALE=${glibcLocale()} " +
             (if (user.isNotEmpty()) "DROIDNUX_USER=$user " else "") +
+            (if (brightness != null) "DROIDNUX_BRIGHTNESS=${"%.3f".format(java.util.Locale.ROOT, brightness)} " else "") +
             (if (verbose) "DROIDNUX_VERBOSE=1 " else "") +
             "exec $SESSION_SCRIPT"
 
@@ -310,7 +353,10 @@ object DesktopEnvironment {
             for dir in /usr/share/icons/breeze-dark/apps/48 /usr/share/icons/breeze/apps/48 \
                 /usr/share/icons/hicolor/scalable/apps /usr/share/icons/hicolor/256x256/apps \
                 /usr/share/icons/hicolor/128x128/apps /usr/share/icons/hicolor/64x64/apps \
-                /usr/share/icons/hicolor/48x48/apps /usr/share/pixmaps; do
+                /usr/share/icons/hicolor/48x48/apps /usr/share/pixmaps \
+                /var/lib/flatpak/exports/share/icons/hicolor/scalable/apps /var/lib/flatpak/exports/share/icons/hicolor/128x128/apps \
+                /home/*/.local/share/flatpak/exports/share/icons/hicolor/scalable/apps \
+                /home/*/.local/share/flatpak/exports/share/icons/hicolor/128x128/apps; do
                 for ext in svg png; do
                     [ -f "${'$'}dir/${'$'}1.${'$'}ext" ] && { echo "${'$'}dir/${'$'}1.${'$'}ext"; return; }
                 done
@@ -326,7 +372,9 @@ object DesktopEnvironment {
             esac
         }
 
-        for f in /usr/local/share/applications/*.desktop /usr/share/applications/*.desktop; do
+        # Flatpak's apps too, system-wide and the desktop user's.
+        for f in /usr/local/share/applications/*.desktop /usr/share/applications/*.desktop \
+            /var/lib/flatpak/exports/share/applications/*.desktop /home/*/.local/share/flatpak/exports/share/applications/*.desktop; do
             [ -f "${'$'}f" ] || continue
             id=${'$'}(basename "${'$'}f" .desktop)
             awk -F= -v lang="${'$'}lang" '
@@ -404,6 +452,75 @@ object DesktopEnvironment {
         fi
     """.trimIndent()
 
+    /** Session script part: the XDG folders, in the user's language, and in Dolphin's places. */
+    private val USER_DIRS = """
+        if command -v xdg-user-dirs-update > /dev/null; then
+            # Firefox's downloads stay where they went before the package came.
+            [ -f "${'$'}config/user-dirs.dirs" ] || [ ! -d "${'$'}HOME/Downloads" ] ||
+                echo 'XDG_DOWNLOAD_DIR="${'$'}HOME/Downloads"' > "${'$'}config/user-dirs.dirs"
+            xdg-user-dirs-update && $PLACES_SCRIPT
+        fi
+    """.trimIndent()
+
+    /**
+     * KDE adds the XDG folders to a new user's places; the desktop's first
+     * ones were made without xdg-user-dirs. Once, so a place the user
+     * removes stays removed.
+     */
+    private val PLACES = """
+        #!/usr/bin/python3
+        # Written by DroidNux: adds the XDG folders to Dolphin's places once,
+        # as KDE does for a new user.
+        import os
+        import subprocess
+        import time
+        import urllib.parse
+        from xml.dom import minidom
+
+        home = os.environ["HOME"]
+        places = os.path.join(home, ".local/share/user-places.xbel")
+        marker = os.path.join(home, ".local/share/droidnux/xdg-places")
+        # KDE's own items in its order: English titles, which it translates (isSystemItem).
+        ITEMS = [("DESKTOP", "Desktop", "user-desktop"), ("DOCUMENTS", "Documents", "folder-documents"),
+                 ("DOWNLOAD", "Downloads", "folder-downloads"), ("MUSIC", "Music", "folder-music"),
+                 ("PICTURES", "Pictures", "folder-pictures"), ("VIDEOS", "Videos", "folder-videos")]
+        ITEM = ('<bookmark href="%s"><title>%s</title><info>'
+                '<metadata owner="http://freedesktop.org"><bookmark:icon name="%s"/></metadata>'
+                '<metadata owner="http://www.kde.org"><ID>%s</ID><isSystemItem>true</isSystemItem></metadata>'
+                '</info></bookmark>')
+        NAMESPACES = 'xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"'
+
+
+        def url(path):
+            return "file://" + urllib.parse.quote(path)
+
+
+        # Without the file KDE makes its own, with these folders.
+        if not os.path.exists(marker) and os.path.isfile(places) and not os.path.islink(places):
+            doc = minidom.parse(places)
+            root = doc.documentElement
+            bookmarks = root.getElementsByTagName("bookmark")
+            hrefs = {b.getAttribute("href") for b in bookmarks}
+            after = next((b for b in bookmarks if b.getAttribute("href") == url(home)), None)
+            stamp = int(time.time())
+            for n, (key, title, icon) in enumerate(ITEMS):
+                path = subprocess.run(["xdg-user-dir", key], capture_output=True, text=True).stdout.strip()
+                if not path or path == home or not os.path.isdir(path) or url(path) in hrefs:
+                    continue
+                item = ITEM % (url(path), title, icon, "%d/%d" % (stamp, n))
+                node = minidom.parseString("<xbel %s>%s</xbel>" % (NAMESPACES, item)).documentElement.firstChild
+                node = doc.importNode(node, True)
+                root.insertBefore(node, after.nextSibling if after else None)
+                after = node
+            temporary = places + ".droidnux"
+            with open(temporary, "w", encoding="utf-8") as f:
+                doc.writexml(f, encoding="UTF-8")
+            os.replace(temporary, places)
+        if os.path.isfile(places):
+            os.makedirs(os.path.dirname(marker), exist_ok=True)
+            open(marker, "w").close()
+    """.trimIndent()
+
     /** Session script part, inside D-Bus: sound, and the apps for System Monitor. */
     private val SESSION_SERVICES = """
         # Session services without systemd start here, on the session bus.
@@ -419,6 +536,8 @@ object DesktopEnvironment {
         fi
         # The apps' processes for System Monitor.
         $APP_GROUPS_SCRIPT &
+        $WALLPAPER_SCRIPT &
+        [ -z "${'$'}FLATPAK_GL_DRIVERS" ] || $FLATPAK_GL_SCRIPT &
     """.trimIndent()
 
     /** Session script part, inside D-Bus: apps the app starts, once the process LAUNCH_AFTER runs. */
@@ -434,7 +553,8 @@ object DesktopEnvironment {
             while read -r id; do
                 case "${'$'}id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
                 p=${'$'}(pgrep -x ${'$'}LAUNCH_AFTER | head -1)
-                for d in /usr/local/share/applications /usr/share/applications; do
+                for d in /usr/local/share/applications /usr/share/applications \
+                    "${'$'}HOME/.local/share/flatpak/exports/share/applications" /var/lib/flatpak/exports/share/applications; do
                     [ -f "${'$'}d/${'$'}id.desktop" ] || continue
                     # In a subshell that exits at once: the app is orphaned and reaped
                     # by the runtime, not left a zombie of this loop.
@@ -519,9 +639,14 @@ object DesktopEnvironment {
                 for f in .config .local .mozilla .thunderbird .ssh .gtkrc-2.0 .vscode; do
                     [ -e "/root/${'$'}f" ] && cp -a "/root/${'$'}f" "${'$'}home/"
                 done
+                [ -e "${'$'}home/.local" ] && chown -R "${'$'}user:" "${'$'}home/.local"
                 grep -rlI --exclude-dir=mozilla -e /root/ -e file:///root "${'$'}home/.config" "${'$'}home/.local/share/user-places.xbel" 2> /dev/null |
                     xargs -r sed -i "s|file:///root\b|file://${'$'}home|g; s|=/root/|=${'$'}home/|g; s|\"/root/|\"${'$'}home/|g"
             fi
+            # USB drives (Burrow's GUEST_USB_DRIVES) are root:external_storage 0770, a group the app
+            # has: its members see them writable (Dolphin, access()).
+            getent group 1077 > /dev/null || groupadd -g 1077 external_storage
+            id -G "${'$'}user" | grep -qw 1077 || usermod -a -G "${'$'}(getent group 1077 | cut -d: -f1)" "${'$'}user"
             home=${'$'}(getent passwd "${'$'}user" | cut -d: -f6)
             unset DROIDNUX_WALLET DROIDNUX_WALLET_BEFORE
             if [ -n "${'$'}pass" ]; then
@@ -541,7 +666,8 @@ object DesktopEnvironment {
                 wallets=${'$'}home/.local/share/kwalletd
                 mkdir -p "${'$'}wallets"
                 [ -s "${'$'}wallets/kdewallet.salt" ] || head -c 56 /dev/urandom > "${'$'}wallets/kdewallet.salt"
-                chown -R "${'$'}user:" "${'$'}home/.local"
+                # Only what mkdir made: ~/.local can hold a Flatpak repository of 100000 files.
+                chown "${'$'}user:" "${'$'}home/.local" "${'$'}home/.local/share" && chown -R "${'$'}user:" "${'$'}wallets"
                 walletkey() {
                     printf %s "${'$'}1" | perl -MDigest::SHA=hmac_sha512 -e '
                         local ${'$'}/; my ${'$'}key = <STDIN>; open my ${'$'}f, "<", ${'$'}ARGV[0] or die "salt: ${'$'}!\n"; binmode ${'$'}f;
@@ -561,11 +687,18 @@ object DesktopEnvironment {
             if [ -d /etc/sudoers.d ]; then
                 echo "${'$'}user ${'$'}sudo" > /etc/sudoers.d/droidnux && chmod 440 /etc/sudoers.d/droidnux
             fi
+            # Flatpak runs "bwrap" from PATH, also outside the session (apt's triggers, sudo, adb):
+            # ours, with the distro's moved aside, as dpkg keeps it through bubblewrap's updates.
+            if [ "${'$'}(readlink /usr/bin/bwrap)" != $BWRAP_SCRIPT ]; then
+                dpkg-divert --local --rename --divert /usr/bin/bwrap.distrib --add /usr/bin/bwrap > /dev/null &&
+                    ln -sf $BWRAP_SCRIPT /usr/bin/bwrap
+            fi
             # A system bus with UPower on it, as root: Plasma shows Android's battery.
             mkdir -p ${SYSTEM_BUS_SOCKET.substringBeforeLast('/')} && rm -f $SYSTEM_BUS_SOCKET
             if dbus-daemon --config-file=$SYSTEM_BUS_CONF --fork --nopidfile; then
                 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=$SYSTEM_BUS_SOCKET
                 $UPOWER_SCRIPT &
+                $POLKIT_SCRIPT &
             fi
             # Burrow starts in /root: apps launched from Plasma (Konsole) inherit the directory.
             cd "${'$'}home" || true
@@ -596,17 +729,20 @@ ${USER_SESSION.prependIndent("        ")}
             # its children still demand F_SEAL_SHRINK: every tab crashes with
             # "Shared memory PlatformHandle is not safe to map" (Firefox 154+).
             export MOZ_SHM_NO_SEALS=1
+            # Its crash reporter (and Thunderbird's) hangs on a futex writing the minidump
+            # under Burrow, which leaves the crashed app frozen: crashes just end it.
+            export MOZ_CRASHREPORTER_DISABLE=1
             # Electron apps (VS Code, Discord, Obsidian): Chromium's sandbox needs user
             # namespaces or its set-user-ID helper, neither of which Android allows.
             export ELECTRON_DISABLE_SANDBOX=1
-            # Flatpak's apps: Android has no user namespaces for bwrap's sandbox.
-            export FLATPAK_BWRAP=$BWRAP_SCRIPT
             # Their menu entries, as Flatpak's profile.d script would add after a login.
             export XDG_DATA_DIRS=${'$'}HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:${'$'}{XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 ${GPU_ENV.prependIndent("            ")}
             if [ -n "${'$'}MESA_GPU" ]; then
                 # KWin renders into GBM buffers from the app (Mesa patch 0004).
                 export GBM_BACKENDS_PATH=${'$'}MESA/lib/aarch64-linux-gnu/gbm
+                # Flatpak's apps: our Mesa's extension where installed (FLATPAK_GL), the runtime's for software.
+                export FLATPAK_GL_DRIVERS=droidnux:default
             fi
             if [ -n "${'$'}DROIDNUX_VERBOSE" ]; then
                 # Diagnostic builds: the GPU devices, and all KWin, Qt's platform, EGL and Mesa say.
@@ -657,8 +793,13 @@ ${LOCALE_ENV.prependIndent("            ")}
                 xkbcomp -w 0 -xkb - /tmp/.droidnux-keymap.xkb || echo "keymap for ${'$'}layout failed"
             # Without systemd: Plasma starts its services itself.
             [ -f "${'$'}config/startkderc" ] || printf '[General]\nsystemdBoot=false\n' > "${'$'}config/startkderc"
+            # KWin applies the brightness it saved to the backlight, which is Android's: Android's instead.
+            if [ -n "${'$'}DROIDNUX_BRIGHTNESS" ] && [ -f "${'$'}config/kwinoutputconfig.json" ]; then
+                sed -i -E "s/(\"brightness\": *)[0-9.eE+-]+/\\1${'$'}DROIDNUX_BRIGHTNESS/" "${'$'}config/kwinoutputconfig.json"
+            fi
 
 ${SDCARD_LINK.prependIndent("            ")}
+${USER_DIRS.prependIndent("            ")}
 
             exec dbus-run-session "${'$'}0" --in-dbus
         fi
@@ -828,7 +969,106 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         writeFile(rootfs, NETWORK_STATE, fields.entries.joinToString("") { "${it.key}=${it.value}\n" }.toByteArray())
     }
 
-    /** The system bus: no services started on demand, and everyone may talk to everyone (one user, in a container). */
+    /** The guest's /sys/class/backlight (Burrow binds it there), holding [backlightDevice]. */
+    fun backlightClass(rootfs: File): File = File(rootfs, BACKLIGHT_DIR)
+
+    /**
+     * Android's screen as the backlight powerdevil's helper finds in /sys/class/backlight:
+     * brightness from 0 to [BACKLIGHT_MAX], which the desktop's process writes and watches.
+     * Laid out as sysfs has it, a class entry linking to the device (powerdevil takes the
+     * link's target), with the uevent and subsystem udev asks for. Made if missing.
+     */
+    fun backlightDevice(rootfs: File): File {
+        val device = File(backlightClass(rootfs), ".device/droidnux").apply { mkdirs() }
+        for ((name, value) in listOf("max_brightness" to "$BACKLIGHT_MAX\n", "type" to "raw\n", "uevent" to "")) {
+            val file = File(device, name)
+            if (!file.isFile) file.writeText(value)
+        }
+        link(File(device, "subsystem"), "../../../../class/backlight")
+        link(File(backlightClass(rootfs), "droidnux"), ".device/droidnux")
+        return device
+    }
+
+    private fun link(file: File, target: String) {
+        if (runCatching { Os.readlink(file.path) }.getOrNull() == target) return
+        file.delete()
+        Os.symlink(target, file.path)
+    }
+
+    /** Plasma's wallpaper as the last session copied it, for the home screen; it may be missing. */
+    fun wallpaperFile(rootfs: File): File = File(rootfs, WALLPAPER_FILE.removePrefix("/"))
+
+    /**
+     * [WALLPAPER_SCRIPT]: the desktop's wallpaper image copied to [WALLPAPER_FILE] whenever it
+     * changes. Its path is a guest one (often through ~/Android, a link to the shared storage),
+     * which the app would have to resolve itself.
+     */
+    private val WALLPAPER = """
+        #!/usr/bin/python3
+        # Written by DroidNux: Plasma's wallpaper, copied to $WALLPAPER_FILE for the app's home screen.
+        import glob
+        import os
+        import re
+        import shutil
+
+        from gi.repository import Gio, GLib
+
+        CONFIG = os.path.expanduser("~/.config/plasma-org.kde.plasma.desktop-appletsrc")
+        OUT = "$WALLPAPER_FILE"
+        copied = [None]
+
+
+        def image():
+            path = "Next"  # the look and feel's
+            try:
+                with open(CONFIG) as f:
+                    section = ""
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("["):
+                            section = line
+                        elif line.startswith("Image=") and section.endswith("[Wallpaper][org.kde.image][General]"):
+                            path = line[6:]
+                            break
+            except OSError:
+                pass
+            if path.startswith("file://"):
+                path = path[7:]
+            if not path.startswith("/"):
+                path = "/usr/share/wallpapers/" + path
+            if os.path.isdir(path):
+                # A wallpaper package: its largest image.
+                def pixels(p):
+                    m = re.match(r"(\d+)x(\d+)", os.path.basename(p))
+                    return int(m.group(1)) * int(m.group(2)) if m else 0
+                images = glob.glob(path + "/contents/images/*")
+                path = max(images, key=pixels) if images else ""
+            return path
+
+
+        def update(*_):
+            path = image()
+            try:
+                key = (path, os.stat(path).st_mtime)
+            except OSError:
+                return
+            if key == copied[0]:
+                return
+            try:
+                shutil.copyfile(path, OUT + ".part")
+                os.replace(OUT + ".part", OUT)
+                copied[0] = key
+            except OSError:
+                pass
+
+
+        update()
+        monitor = Gio.File.new_for_path(CONFIG).monitor_file(Gio.FileMonitorFlags.WATCH_MOVES, None)
+        monitor.connect("changed", update)
+        GLib.MainLoop().run()
+    """.trimIndent() + "\n"
+
+    /** The system bus: everyone may talk to everyone (one user, in a container). */
     private val SYSTEM_BUS = """
         <!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
          "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
@@ -839,6 +1079,7 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
           <auth>EXTERNAL</auth>
           <auth>ANONYMOUS</auth>
           <allow_anonymous/>
+          <servicedir>$SYSTEM_SERVICES_DIR</servicedir>
           <policy context="default">
             <allow user="*"/>
             <allow own="*"/>
@@ -846,6 +1087,61 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
             <allow receive_sender="*"/>
           </policy>
         </busconfig>
+    """.trimIndent() + "\n"
+
+    /** Plasma's brightness slider: powerdevil's helper writes [backlightDevice]. */
+    private val SYSTEM_SERVICES = """
+        [D-BUS Service]
+        Name=$BACKLIGHT_HELPER
+        Exec=/usr/lib/kf6/kauth/libexec/backlighthelper
+        User=root
+    """.trimIndent() + "\n"
+
+    /**
+     * polkit's authority, saying yes to the backlight helper's actions only: KAuth asks it
+     * before calling the helper, and the helper again. No polkitd: without logind it
+     * would see no active session, and its own rules ask for a password.
+     */
+    private val POLKIT = """
+        #!/usr/bin/python3
+        # Written by DroidNux: org.freedesktop.PolicyKit1 on the system bus, for powerdevil's backlight helper.
+        from gi.repository import Gio, GLib
+
+        ALLOWED = "$BACKLIGHT_HELPER."
+        NODE = Gio.DBusNodeInfo.new_for_xml(
+            '<node><interface name="org.freedesktop.PolicyKit1.Authority">'
+            '<method name="CheckAuthorization"><arg type="(sa{sv})" direction="in"/><arg type="s" direction="in"/>'
+            '<arg type="a{ss}" direction="in"/><arg type="u" direction="in"/><arg type="s" direction="in"/>'
+            '<arg type="(bba{ss})" direction="out"/></method>'
+            '<method name="CancelCheckAuthorization"><arg type="s" direction="in"/></method>'
+            '<method name="EnumerateActions"><arg type="s" direction="in"/>'
+            '<arg type="a(ssssssuuua{ss})" direction="out"/></method>'
+            '<signal name="Changed"/>'
+            '<property name="BackendName" type="s" access="read"/>'
+            '<property name="BackendVersion" type="s" access="read"/>'
+            '<property name="BackendFeatures" type="u" access="read"/>'
+            '</interface></node>')
+
+
+        def method_call(connection, sender, path, interface, method, parameters, invocation):
+            if method == "CheckAuthorization":
+                allowed = parameters[1].startswith(ALLOWED)
+                invocation.return_value(GLib.Variant("((bba{ss}))", ((allowed, False, {}),)))
+            elif method == "EnumerateActions":
+                invocation.return_value(GLib.Variant("(a(ssssssuuua{ss}))", ([],)))
+            else:
+                invocation.return_value(None)
+
+
+        def get_property(connection, sender, path, interface, name):
+            return {"BackendName": GLib.Variant("s", "droidnux"), "BackendVersion": GLib.Variant("s", "126"),
+                    "BackendFeatures": GLib.Variant("u", 0)}[name]
+
+
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+        bus.register_object("/org/freedesktop/PolicyKit1/Authority", NODE.interfaces[0], method_call, get_property, None)
+        Gio.bus_own_name_on_connection(bus, "org.freedesktop.PolicyKit1", Gio.BusNameOwnerFlags.NONE, None, None)
+        GLib.MainLoop().run()
     """.trimIndent() + "\n"
 
     /**
@@ -1348,6 +1644,16 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
     """.trimIndent() + "\n"
 
     /** Default prefs of Debian's Firefox ESR (browser/defaults/preferences, next to Debian's own). */
+    /** Read by Debian's chromium launcher. */
+    private const val CHROMIUM_FLAGS_PATH = "/etc/chromium.d/droidnux"
+
+    // Chromium's sandbox needs user namespaces or its set-user-ID helper, neither of which
+    // Android allows (Electron apps: ELECTRON_DISABLE_SANDBOX in the session).
+    private val CHROMIUM_FLAGS = """
+        # Written by DroidNux: Android gives apps no user namespaces for Chromium's sandbox.
+        export CHROMIUM_FLAGS="${'$'}CHROMIUM_FLAGS --no-sandbox"
+    """.trimIndent() + "\n"
+
     private const val FIREFOX_PREFS_PATH = "/usr/lib/firefox-esr/browser/defaults/preferences/droidnux.js"
 
     // VA-API decoding through the app costs Firefox more CPU than software (it
@@ -1359,6 +1665,38 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
 
     // Written by earlier versions: an autoconfig script hiding Firefox's
     // "sandbox disabled" bar, and what only XFCE and proot used.
+    /**
+     * [FLATPAK_GL_SCRIPT]: the extension for each runtime branch installed, downloaded and
+     * installed once per build (a stamp with its SHA-256): in the user's installation from
+     * the session, system-wide from the store (as root).
+     */
+    private val FLATPAK_GL = """
+        #!/bin/sh
+        # Written by DroidNux: our Mesa as Flatpak's GL extension (org.freedesktop.Platform.GL.droidnux),
+        # for each branch of the Freedesktop runtime installed, as Flathub has no build of it.
+        command -v flatpak > /dev/null || exit 0
+        scope=--user
+        [ "${'$'}(id -u)" != 0 ] || scope=--system
+        stamps=${'$'}{XDG_DATA_HOME:-${'$'}HOME/.local/share}/flatpak/.droidnux-gl
+        while read -r branch url sha; do
+            [ -n "${'$'}sha" ] && flatpak info org.freedesktop.Platform//${'$'}branch > /dev/null 2>&1 || continue
+            # Pinned: nothing uses an extension chosen by FLATPAK_GL_DRIVERS, so "uninstall --unused" would take it.
+            ref=runtime/org.freedesktop.Platform.GL.droidnux/${'$'}(flatpak --default-arch)/${'$'}branch
+            flatpak pin ${'$'}scope "${'$'}ref" 2> /dev/null
+            [ "${'$'}(cat "${'$'}stamps-${'$'}branch" 2> /dev/null)" != "${'$'}sha" ] || ! flatpak info ${'$'}scope "${'$'}ref" > /dev/null 2>&1 || continue
+            file=${'$'}(mktemp --suffix=.flatpak) || exit 1
+            if python3 -c 'import shutil, sys, urllib.request; shutil.copyfileobj(urllib.request.urlopen(sys.argv[1], timeout=60), open(sys.argv[2], "wb"))' "${'$'}url" "${'$'}file" &&
+                echo "${'$'}sha  ${'$'}file" | sha256sum -c --status &&
+                flatpak install ${'$'}scope --noninteractive --reinstall -y --bundle "${'$'}file"; then
+                mkdir -p "${'$'}(dirname "${'$'}stamps")" && echo "${'$'}sha" > "${'$'}stamps-${'$'}branch"
+                echo "Flatpak: DroidNux's GL extension for ${'$'}branch installed"
+            fi
+            rm -f "${'$'}file"
+        done <<EOF
+${Component.FLATPAK_GL.joinToString("\n") { "        ${it.branch} ${it.url} ${it.sha256}" }}
+        EOF
+    """.trimIndent()
+
     /**
      * bwrap for Flatpak ([BWRAP_SCRIPT]): the sandbox built with what Burrow emulates
      * (unshare, bind mounts as bindings, chroot), since Android allows apps no user namespaces.
@@ -1374,8 +1712,8 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
         # calls, then runs the command in it.
         #
         # Not a security boundary (no more than Burrow): namespaces, seccomp filters
-        # (--seccomp) and read-only mounts are not applied. Flatpak runs its apps with
-        # it (FLATPAK_BWRAP, set by the session).
+        # (--seccomp) and read-only mounts are not applied. It replaces the distro's
+        # /usr/bin/bwrap (diverted by the session), so Flatpak runs its apps with it.
         import ctypes
         import json
         import os
@@ -1405,13 +1743,25 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
             "--bind-data": 2, "--ro-bind-data": 2, "--symlink": 2, "--chmod": 2, "--perms": 1, "--lock-file": 1,
         }
         # The session's variables for the app's Mesa (/opt/droidnux/mesa, built for the
-        # distro's /usr), dropped where the new root has another /usr. The Mesa of
-        # Flatpak's runtimes has no Turnip for KGSL, takes the render node for Zink's and
-        # gives up: it renders in software instead.
+        # distro's /usr), dropped where the new root has another /usr. There, the same
+        # Mesa built as a Flatpak GL extension (guest/mesa/flatpak.sh) takes over when
+        # Flatpak mounted it; without it the Mesa of Flatpak's runtimes has no Turnip for
+        # KGSL, takes the render node for Zink's and gives up: it renders in software.
         GPU_VARIABLES = (
             "VK_DRIVER_FILES", "__GLX_VENDOR_LIBRARY_NAME", "__EGL_VENDOR_LIBRARY_FILENAMES", "MESA_LOADER_DRIVER_OVERRIDE",
-            "GALLIUM_DRIVER", "LIBVA_DRIVERS_PATH", "LIBVA_DRIVER_NAME", "GBM_BACKENDS_PATH",
+            "GALLIUM_DRIVER", "LIBVA_DRIVERS_PATH", "LIBVA_DRIVER_NAME", "GBM_BACKENDS_PATH", "DROIDNUX_AHB_SOCKET",
         )
+        GL_EXTENSION = "/usr/lib/aarch64-linux-gnu/GL/droidnux"
+        # As the session's GPU_ENV sets them; the app's allocator and video sockets stay outside the sandbox's /tmp.
+        GL_EXTENSION_VARIABLES = {
+            "VK_DRIVER_FILES": GL_EXTENSION + "/vulkan/icd.d/droidnux_icd.aarch64.json",
+            "__GLX_VENDOR_LIBRARY_NAME": "droidnux",
+            "__EGL_VENDOR_LIBRARY_FILENAMES": GL_EXTENSION + "/glvnd/egl_vendor.d/50_droidnux.json",
+            "MESA_LOADER_DRIVER_OVERRIDE": "zink",
+            "GALLIUM_DRIVER": "zink",
+            "GBM_BACKENDS_PATH": GL_EXTENSION + "/lib/gbm",
+            "FD_DEV_FEATURES": "enable_tp_ubwc_flag_hint=1",
+        }
         SETTINGS = {
             "--setenv": 2, "--unsetenv": 1, "--chdir": 1, "--info-fd": 1, "--json-status-fd": 1, "--block-fd": 1,
             "--userns-block-fd": 1, "--sync-fd": 1, "--seccomp": 1, "--add-seccomp-fd": 1, "--argv0": 1,
@@ -1522,6 +1872,11 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
                     target = at(args[0])
                     mount_point(target, True)
                     mount("/" + name[2:], target)
+                    # Burrow's own binding of /dev/shm does not come with /dev; bwrap's --dev has one
+                    # (CEF apps like ONLYOFFICE abort without it).
+                    if name == "--dev" and os.path.isdir("/dev/shm"):
+                        mount_point(target + "/shm", True)
+                        mount("/dev/shm", target + "/shm")
                 elif name in ("--tmpfs", "--dir", "--mqueue"):
                     target = at(args[0])
                     m = mode(0o755)
@@ -1609,7 +1964,15 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
             if not same_usr:
                 for name in GPU_VARIABLES:
                     env.pop(name, None)
-                env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
+                if os.path.exists("/dev/kgsl-3d0") and os.path.isfile(root + GL_EXTENSION + "/droidnux-mesa.version"):
+                    env.update(GL_EXTENSION_VARIABLES)
+                    # The runtime's Vulkan loader first: apps bundling Chromium's older one (ONLYOFFICE,
+                    # LD_LIBRARY_PATH=./) leave Zink without an instance, and GLX without a visual.
+                    loader = "/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
+                    if os.path.isfile(root + loader):
+                        env["LD_PRELOAD"] = " ".join(filter(None, (loader, env.get("LD_PRELOAD"))))
+                else:
+                    env.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
 
             here = os.getcwd()
             os.chroot(root)

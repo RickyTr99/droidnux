@@ -2,6 +2,10 @@ package app.droidnux.ui
 
 import android.content.Intent
 import android.os.StatFs
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import android.provider.Settings
+import androidx.compose.foundation.layout.PaddingValues
 import android.text.format.Formatter
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
@@ -91,6 +95,14 @@ fun WizardScreen(state: AppState, viewModel: AppViewModel) {
     val pages = 5
     // An installation already under way (the activity was recreated) shows its progress.
     val current = if (state.setup != null) pages - 1 else step
+    // What the installation lacks to fit, rechecked when the user comes back (from freeing some).
+    val context = LocalContext.current
+    var free by remember { mutableLongStateOf(Long.MAX_VALUE) }
+    LifecycleResumeEffect(Unit) {
+        free = StatFs(context.filesDir.path).availableBytes
+        onPauseOrDispose {}
+    }
+    val short = DESKTOP_BYTES + apps.mapNotNull(StoreCatalog::get).sumOf { it.sizeMb } * 1_000_000L - free
 
     Box(
         Modifier
@@ -119,11 +131,16 @@ fun WizardScreen(state: AppState, viewModel: AppViewModel) {
                             }
                             StepDots(pages - 2, pages)
                         }
-                        Button(onClick = { viewModel.runSetup(apps) }, modifier = Modifier.height(48.dp)) {
+                        Button(onClick = { viewModel.runSetup(apps) }, enabled = short <= 0, modifier = Modifier.height(48.dp)) {
                             Text(stringResource(R.string.action_install))
                         }
                     },
-                ) { SystemChecks(state.gpu) }
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        if (short > 0) SpaceShort(short)
+                        SystemChecks(state.gpu)
+                    }
+                }
                 pages - 1 -> InstallPage(state, viewModel, pages)
                 2 -> AppsPage(state, viewModel, apps, { apps = it }, back = { step = 1 }, pages = pages) { step = 3 }
                 else -> AccountPage(back = { step = 0 }, dot = 1, pages = pages) { step = 2 }
@@ -352,6 +369,33 @@ private fun WizardPage(
     }
 }
 
+/** The desktop's size on disk, as wizard_space_needed_value says it. */
+private const val DESKTOP_BYTES = 2_100_000_000L
+
+/** The installation would not fit: [short] bytes more are needed. */
+@Composable
+private fun SpaceShort(short: Long) {
+    val context = LocalContext.current
+    val colors = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(colors.errorContainer).padding(16.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Icon(Icons.Warning, null, tint = colors.onErrorContainer)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(R.string.wizard_space_short), fontWeight = FontWeight.Medium, color = colors.onErrorContainer)
+            Text(
+                stringResource(R.string.wizard_space_short_text, Formatter.formatShortFileSize(context, short)),
+                fontSize = 14.sp, color = colors.onErrorContainer,
+            )
+            TextButton(
+                onClick = { context.startActivity(Intent(Settings.ACTION_INTERNAL_STORAGE_SETTINGS)) },
+                contentPadding = PaddingValues(0.dp),
+            ) { Text(stringResource(R.string.wizard_space_open), color = colors.onErrorContainer) }
+        }
+    }
+}
+
 @Composable
 private fun SpaceSummary() {
     val context = LocalContext.current
@@ -511,7 +555,6 @@ fun PasswordDialog(onDismiss: () -> Unit) {
         title = { Text(stringResource(R.string.settings_password_change)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.settings_password_text), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (current != null) {
                     field(old, { old = it; wrong = false }, R.string.settings_password_current,
                         R.string.settings_password_wrong.takeIf { wrong }, false)

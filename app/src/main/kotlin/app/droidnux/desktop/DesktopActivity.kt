@@ -5,20 +5,19 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.res.Configuration
+import android.database.ContentObserver
 import android.graphics.Color
 import android.graphics.Rect
-import android.graphics.Typeface
 import android.net.Uri
 import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
+import android.os.FileObserver
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
-import android.util.TypedValue
-import android.view.Gravity
 import android.view.View
 import android.view.InputDevice
 import android.view.KeyCharacterMap
@@ -36,7 +35,6 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.window.OnBackInvokedDispatcher
 import android.widget.FrameLayout
-import android.widget.TextView
 import app.droidnux.R
 import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
@@ -45,7 +43,9 @@ import app.droidnux.display.AudioFocus
 import app.droidnux.display.AudioVolume
 import app.droidnux.display.Presenter
 import app.droidnux.display.DisplayServer
+import java.io.File
 import java.util.Locale
+import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 /**
@@ -55,7 +55,7 @@ import kotlin.math.roundToInt
 class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     private lateinit var surfaceView: SurfaceView
-    private var overlay: TextView? = null
+    private var overlay: StatsOverlay? = null
     private val handler = Handler(Looper.getMainLooper())
 
     /** Desktop pixels per surface pixel (the desktop runs below native resolution). */
@@ -74,6 +74,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     /** The touchscreen in trackpad mode: the finger moves the pointer instead of clicking where it lands. */
     private val screenTouchpad = CapturedTouchpad()
     private var trackpadMode = false
+    /** The settings the desktop follows (reloadSettings): what opens the menu, which keyboard, the screen. */
+    private var prefs = DesktopSettings()
     /** Interface size the user chose, 1 = the default; independent of the resolution ([desktopScale]). */
     private var uiScale = 1f
     private lateinit var menu: SessionMenu
@@ -130,16 +132,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             setBackgroundColor(Color.BLACK)
             addView(surfaceView)
         }
-        overlay = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setBackgroundColor(0x88000000.toInt())
-            typeface = Typeface.MONOSPACE
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setPadding(12, 6, 12, 6)
-        }
-        root.addView(overlay, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
-        ))
+        overlay = StatsOverlay(this)
+        root.addView(overlay, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         pcKeyboard = PcKeyboard(this, keyboardListener)
         root.addView(pcKeyboard.view, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
@@ -231,7 +225,15 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     /** Settings changed in the app while the desktop was in the background apply on return. */
     private fun reloadSettings() {
         val settings = DesktopSettings.load(this)
+        prefs = settings
+        menu.atBottom = settings.menuBottom
+        if (settings.keepScreenOn) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         trackpadMode = settings.trackpad
+        overlay?.apply(settings, animate = true)
         overlay?.visibility = if (settings.stats) View.VISIBLE else View.GONE
         if (settings.scale != desktopScale) {
             desktopScale = settings.scale.coerceIn(MIN_SCALE, MAX_SCALE)
@@ -248,8 +250,76 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private fun scaleOf(intent: Intent?) =
         (intent?.getFloatExtra(EXTRA_SCALE, desktopScale) ?: desktopScale).coerceIn(MIN_SCALE, MAX_SCALE)
 
+    /** Android's brightness, from the session's menu or Plasma's slider; the permission is asked only from the menu. */
+    private fun setBrightness(brightness: Float, ask: Boolean) {
+        if (Settings.System.canWrite(this)) {
+            Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE,
+                Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
+            writtenSetting = Brightness.toSetting(brightness)
+            Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, writtenSetting)
+            // The window's own brightness, set before the permission was granted, would keep overriding Android's.
+            if (window.attributes.screenBrightness >= 0f) {
+                window.attributes = window.attributes.apply {
+                    screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                }
+            }
+            return
+        }
+        window.attributes = window.attributes.apply { screenBrightness = brightness }
+        if (ask && !askedWriteSettings) {
+            askedWriteSettings = true
+            startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.fromParts("package", packageName, null)))
+        }
+    }
+
+    // Plasma's brightness slider: powerdevil's helper writes the backlight's brightness (DesktopEnvironment.backlightDevice).
+    private val backlight by lazy { DesktopEnvironment.backlightDevice(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)) }
+    @Volatile private var backlightValue = -1
+    /** When the desktop last changed size: KWin then applies its saved output settings, an old brightness among them. */
+    @Volatile private var resizedAt = 0L
+    private val backlightWatch by lazy {
+        object : FileObserver(backlight, CLOSE_WRITE) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path != "brightness") return
+                val value = runCatching { File(backlight, path).readText().trim().toInt() }.getOrNull() ?: return
+                if (value == backlightValue) return
+                if (SystemClock.uptimeMillis() - resizedAt < RESIZE_SETTLE_MS) {
+                    runOnUiThread { writeBacklight(menuListener.brightness()) }
+                    return
+                }
+                backlightValue = value
+                runCatching { File(backlight, "actual_brightness").writeText("$value\n") }
+                runOnUiThread { setBrightness(value.toFloat() / DesktopEnvironment.BACKLIGHT_MAX, ask = false) }
+            }
+        }
+    }
+
+    /** The setting the desktop last gave Android: that change coming back is not a new one. */
+    private var writtenSetting = -1
+    // Android's own slider (the quick settings over the desktop) moves the desktop's too.
+    private val brightnessObserver by lazy {
+        object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                val setting = Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
+                if (setting != writtenSetting) writeBacklight(menuListener.brightness())
+            }
+        }
+    }
+
+    /** The backlight at [brightness] (0 to 1), as the session's menu shows it. */
+    private fun writeBacklight(brightness: Float) {
+        val value = (brightness * DesktopEnvironment.BACKLIGHT_MAX).roundToInt().coerceIn(0, DesktopEnvironment.BACKLIGHT_MAX)
+        backlightValue = value
+        for (name in listOf("brightness", "actual_brightness")) {
+            runCatching { File(backlight, name).writeText("$value\n") }.onFailure { Log.w(TAG, "backlight: $it") }
+        }
+    }
+
     override fun onResume() {
         super.onResume()
+        writeBacklight(menuListener.brightness())
+        backlightWatch.startWatching()
+        contentResolver.registerContentObserver(Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS), false, brightnessObserver)
         // Back to a paused desktop: it continues.
         SessionPause.resume(this)
         reloadSettings()
@@ -260,6 +330,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     override fun onPause() {
+        backlightWatch.stopWatching()
+        contentResolver.unregisterContentObserver(brightnessObserver)
         saveThumbnail()
         handler.removeCallbacks(overlayUpdater)
         clipboard.removePrimaryClipChangedListener(clipboardListener)
@@ -269,9 +341,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     @Deprecated("Android 12 and older; newer versions use the OnBackInvokedCallback")
     override fun onBackPressed() = onBack()
 
-    /** Back hides the keyboard first, then opens or closes the menu. */
+    /** Back hides the keyboard first, then closes the menu, or opens it unless the settings say not to. */
     private fun onBack() {
-        if (pcKeyboard.isShown && !menu.isOpen) pcKeyboard.hide() else toggleMenu()
+        when {
+            pcKeyboard.isShown && !menu.isOpen -> pcKeyboard.hide()
+            menu.isOpen || prefs.menuBack -> toggleMenu()
+        }
     }
 
     override fun onDestroy() {
@@ -350,6 +425,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout())
             clipboardToDesktop()
         } else {
+            resizedAt = SystemClock.uptimeMillis()
             DisplayServer.resize(desktopWidth, desktopHeight)
         }
         DisplayServer.redraw()
@@ -480,7 +556,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** Ctrl+Alt+Space: free in Plasma and in common Linux apps. */
-    private fun isMenuShortcut(event: KeyEvent) =
+    private fun isMenuShortcut(event: KeyEvent) = prefs.menuShortcut &&
         event.keyCode == KeyEvent.KEYCODE_SPACE && event.isCtrlPressed && event.isAltPressed
 
     private fun isSystemKey(keyCode: Int) = keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
@@ -652,7 +728,16 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     // -- Keyboard ------------------------------------------------------------
 
-    private fun showKeyboard() = pcKeyboard.show(DesktopSettings.load(this).xkbLayout())
+    /** The keyboard the settings chose: the full one, or Android's. */
+    private fun showKeyboard() {
+        if (prefs.androidKeyboard) showAndroidKeyboard() else pcKeyboard.show(prefs.xkbLayout())
+    }
+
+    private fun showAndroidKeyboard() {
+        pcKeyboard.hide()
+        surfaceView.requestFocus()
+        getSystemService(InputMethodManager::class.java).showSoftInput(surfaceView, 0)
+    }
 
     /** Hides whichever keyboard shows, or shows the full one. */
     private fun toggleKeyboard() {
@@ -675,11 +760,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 ?.toString()?.takeIf { it.isNotEmpty() }?.let { DisplayServer.commitText(it) }
         }
 
-        override fun onAndroidKeyboard() {
-            pcKeyboard.hide()
-            surfaceView.requestFocus()
-            getSystemService(InputMethodManager::class.java).showSoftInput(surfaceView, 0)
-        }
+        override fun onAndroidKeyboard() = showAndroidKeyboard()
 
         override fun onHeight(height: Int) {
             pcKeyboardHeight = height
@@ -741,17 +822,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             ?: Brightness.toSlider(Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128))
 
         override fun onBrightnessChanged(brightness: Float) {
-            if (Settings.System.canWrite(this@DesktopActivity)) {
-                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE,
-                    Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
-                Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, Brightness.toSetting(brightness))
-                return
-            }
-            window.attributes = window.attributes.apply { screenBrightness = brightness }
-            if (!askedWriteSettings) {
-                askedWriteSettings = true
-                startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.fromParts("package", packageName, null)))
-            }
+            setBrightness(brightness, ask = true)
+            writeBacklight(brightness)
         }
 
         // Android's media volume, which is also the desktop's (AudioVolume).
@@ -835,25 +907,29 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         menu.showUiScale(uiScale)
     }
 
-    // -- Debug overlay -----------------------------------------------------
+    // -- Statistics --------------------------------------------------------
 
     private var lastFrames = 0L
     private var lastFrameTime = 0L
+    private val statsSampler by lazy { StatsSampler(this) }
+    private val statsThread by lazy { Executors.newSingleThreadExecutor() }
     private val overlayUpdater = object : Runnable {
         override fun run() {
             val frames = Presenter.frameCount
             val frameTime = Presenter.frameTimeTotalNanos
-            val maxMs = Presenter.takeFrameTimeMaxNanos() / 1e6
-            val count = frames - lastFrames
+            val maxMs = Presenter.takeFrameTimeMaxNanos() / 1e6f
+            val count = (frames - lastFrames).toInt()
             // Frame time: copying the damage and submitting it, not the whole pipeline.
-            val time = if (count > 0) {
-                String.format(Locale.ROOT, " · frame %.1f ms (max %.1f)", (frameTime - lastFrameTime) / 1e6 / count, maxMs)
-            } else {
-                ""
-            }
-            overlay?.text = "$count fps$time · desktop ${(scale * 100).toInt()}%"
+            val ms = if (count > 0) (frameTime - lastFrameTime) / 1e6f / count else null
             lastFrames = frames
             lastFrameTime = frameTime
+            val refresh = window.decorView.display?.refreshRate ?: 60f
+            val width = (surfaceWidth * desktopScale).toInt() and 1.inv()
+            val height = (surfaceHeight * desktopScale).toInt() and 1.inv()
+            statsThread.execute {
+                val sample = statsSampler.sample(count, ms, if (count > 0) maxMs else null, refresh, width, height)
+                handler.post { overlay?.show(sample) }
+            }
             handler.postDelayed(this, 1000)
         }
     }
@@ -862,6 +938,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val TAG = "DroidNux.Desktop"
         /** How long after a finger leaves a focused text field its tap may still reach it. */
         private const val TAP_FOCUS_MS = 150L
+        /** How long after a resize a brightness from KWin counts as its saved setting coming back, not the user. */
+        private const val RESIZE_SETTLE_MS = 2000L
 
         /** The desktop on screen, if any (main thread only). */
         private var current: DesktopActivity? = null

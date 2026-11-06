@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import app.droidnux.R
 import app.droidnux.container.AppCatalog
+import app.droidnux.container.FlathubCatalog
 import app.droidnux.container.AppStore
 import app.droidnux.container.CommandResult
 import app.droidnux.container.Component
@@ -74,8 +75,11 @@ data class AptProgress(
 /** An apt job of the store, waiting for the one before it, running, or failed. */
 sealed interface StoreJob {
     data object Queued : StoreJob
-    /** [done] of [total] steps (downloads and setups) once apt knows them, 0 of 0 before. */
-    data class Running(val removing: Boolean, val done: Int = 0, val total: Int = 0) : StoreJob
+    /**
+     * [done] of [total] steps (apt's downloads and setups, Flatpak's operations) once known, 0 of 0
+     * before; [part] of the step under way, when Flatpak tells it.
+     */
+    data class Running(val removing: Boolean, val done: Int = 0, val total: Int = 0, val part: Float = 0f) : StoreJob
     data class Failed(val message: String) : StoreJob
 }
 
@@ -174,6 +178,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private val rootfs get() = container.installer.rootfsDir(_state.value.distro)
 
+    /** Plasma's wallpaper, which the home screen shows (DesktopEnvironment.wallpaperFile). */
+    val wallpaperFile: File get() = DesktopEnvironment.wallpaperFile(rootfs)
+
     init {
         viewModelScope.launch {
             val cached = withContext(Dispatchers.IO) {
@@ -264,7 +271,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val error = apt.withLock {
                 set(StoreJob.Running(remove))
-                withContext(Dispatchers.IO) { runApt(key, packages, remove) { done, total -> set(StoreJob.Running(remove, done, total)) } }
+                withContext(Dispatchers.IO) { runApt(key, packages, remove) { done, total, part -> set(StoreJob.Running(remove, done, total, part)) } }
             }
             refreshPackages()
             if (error != null) {
@@ -289,7 +296,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Runs apt in the container; null when it succeeded, else the reason. */
-    private fun runApt(key: String, packages: List<String>, remove: Boolean, progress: (Int, Int) -> Unit): String? {
+    private fun runApt(key: String, packages: List<String>, remove: Boolean, progress: (Int, Int, Float) -> Unit): String? {
         val script = if (remove) {
             AppStore.removeScript(packages, DesktopEnvironment.desktopPackages)
         } else {
@@ -302,8 +309,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         var last = ""
         var total = 0
         var done = 0
+        var part = 0f
         try {
             process.inputStream.bufferedReader().forEachLine { line ->
+                FLATPAK_STEP.find(line)?.let {
+                    done = it.groupValues[1].toInt() - 1
+                    total = it.groupValues[2].toInt()
+                    part = (it.groupValues[3].toIntOrNull() ?: 0) / 100f
+                }
                 when {
                     line == AppStore.DONE_MARKER -> ok = true
                     line.startsWith(AppStore.KEEP_MARKER) -> kept = line.substringAfterLast(' ')
@@ -313,7 +326,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 APT_SUMMARY.find(line)?.let { total += 2 * (it.groupValues[1].toInt() + it.groupValues[2].toInt()) }
                 APT_REMOVE.find(line)?.let { if (remove) total = it.groupValues[1].toInt() }
                 if (line.isNotBlank()) last = line
-                progress(done.coerceAtMost(total), total)
+                progress(done.coerceAtMost(total), total, part)
             }
             process.waitFor()
         } catch (e: java.io.IOException) {
@@ -362,12 +375,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(storeCatalog = CatalogState.LOADING) }
         catalogJob = viewModelScope.launch {
             val dir = File(getApplication<Application>().filesDir, "store")
-            val catalog = withContext(Dispatchers.IO) { runCatching { AppCatalog.load(dir, Locale.getDefault().language) } }.getOrNull()
+            val language = Locale.getDefault().language
+            val catalog = withContext(Dispatchers.IO) { runCatching { AppCatalog.load(dir, language) } }.getOrNull()
             if (catalog == null) {
                 _state.update { it.copy(storeCatalog = CatalogState.FAILED) }
                 return@launch
             }
-            val items = withContext(Dispatchers.Default) { StoreItem.all(catalog) }
+            // Debian's alone if Flathub's cannot be had.
+            val flathub = withContext(Dispatchers.IO) { runCatching { FlathubCatalog.load(dir, language) } }.getOrDefault(emptyList())
+            val items = withContext(Dispatchers.Default) { StoreItem.all(catalog, flathub) }
             _state.update { it.copy(storeItems = items, storeCatalog = CatalogState.READY) }
         }
     }
@@ -440,9 +456,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** The store's icon called [name] (off the main thread), null until downloaded. */
-    fun storeIcon(name: String): Bitmap? = storeBitmaps.get("store:$name") ?: File(storeIconsDir, "$name.png").takeIf { it.isFile }
-        ?.let { BitmapFactory.decodeFile(it.path) }?.also { storeBitmaps.put("store:$name", it) }
+    /** The store's icon called [name] (off the main thread), null until downloaded; a Flathub app's ("flatpak:<id>") on demand. */
+    fun storeIcon(name: String): Bitmap? {
+        storeBitmaps.get("store:$name")?.let { return it }
+        val id = name.removePrefix(AppStore.FLATPAK).takeIf { it != name && AppStore.isFlatpakId(it) }
+        val file = File(storeIconsDir, if (id != null) "flatpak-$id.png" else "$name.png")
+        if (id != null && !file.isFile) runCatching { AppStore.download(FlathubCatalog.iconUrl(id), file) }
+        return file.takeIf { it.isFile }?.let { BitmapFactory.decodeFile(it.path) }?.also { storeBitmaps.put("store:$name", it) }
+    }
 
     /** First run: installs whatever is missing, in order, and stops at the first failure. */
     fun runSetup(apps: List<String> = _state.value.setup?.apps.orEmpty()) {
@@ -646,6 +667,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val GPU_NAME = Regex("""Adreno \(TM\) (\d+)""")
         val APT_SUMMARY = Regex("""(\d+) upgraded, (\d+) newly installed""")
         val APT_REMOVE = Regex("""(\d+) to remove""")
+        /** "Installing 2/3… ████   45%  1.2 MB/s" (also Updating, Uninstalling); the percent comes later. */
+        val FLATPAK_STEP = Regex("""^(?:Installing|Updating|Uninstalling) (\d+)/(\d+)\S*(?:.*?(\d+)%)?""")
         /** "Need to get 95.4 MB of archives." (or "12.3 MB/95.4 MB" when some are cached: the first is to fetch). */
         val APT_NEED = Regex("""^Need to get ([\d.,]+) ([kMG]?)B""")
         /** The size at the end of "Get:12 http://… libfoo arm64 1.2-3 [123 kB]". */

@@ -14,6 +14,7 @@ import android.os.BatteryManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import app.droidnux.BuildConfig
 import app.droidnux.R
@@ -39,6 +40,7 @@ class DesktopSessionService : Service() {
     private var session: Process? = null
     private var battery: BroadcastReceiver? = null
     private var network: NetworkReporter? = null
+    private var drives: RemovableDrives? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -65,6 +67,7 @@ class DesktopSessionService : Service() {
     override fun onDestroy() {
         battery?.let { unregisterReceiver(it) }
         network?.stop()
+        drives?.stop()
         stopSession()
         scope.cancel()
         super.onDestroy()
@@ -86,8 +89,10 @@ class DesktopSessionService : Service() {
         if (network == null) network = NetworkReporter(this, rootfs, scope).also { it.start() }
         SessionPause.file(this).delete() // left by a process that died paused
         val settings = DesktopSettings.load(this)
+        if (drives == null) drives = RemovableDrives(this, rootfs, settings.user, scope).also { it.start() }
         val verbose = BuildConfig.DIAGNOSTIC || settings.logs
-        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, settings.user, verbose))
+        val brightness = Brightness.toSlider(Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128))
+        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, settings.user, verbose, brightness))
         val password = Account.password(this).orEmpty()
         session = process
         Log.i(TAG, "session started (layout $layout)")

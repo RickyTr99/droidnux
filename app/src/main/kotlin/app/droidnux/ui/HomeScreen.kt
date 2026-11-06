@@ -1,6 +1,15 @@
 package app.droidnux.ui
 
+import app.droidnux.ui.theme.darkColors
+import app.droidnux.ui.theme.ThemeColor
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
 import android.app.ActivityOptions
+import android.app.KeyguardManager
+import android.hardware.biometrics.BiometricManager
+import android.hardware.biometrics.BiometricPrompt
+import android.os.Build
+import android.os.CancellationSignal
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -12,6 +21,7 @@ import android.view.View
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
@@ -50,13 +60,17 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -64,8 +78,14 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -75,16 +95,20 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -113,32 +137,43 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.RadialGradientShader
 import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -147,11 +182,15 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -161,6 +200,10 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -170,17 +213,25 @@ import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LifecycleStartEffect
 import app.droidnux.MainActivity
+import app.droidnux.BuildConfig
 import app.droidnux.R
+import app.droidnux.desktop.Account
 import app.droidnux.container.Component
 import app.droidnux.container.DesktopEnvironment.LinuxApp
 import app.droidnux.desktop.DesktopActivity
 import app.droidnux.desktop.DesktopKeysService
 import app.droidnux.desktop.DesktopSessionService
 import app.droidnux.desktop.DesktopSettings
+import app.droidnux.desktop.StatsItem
+import app.droidnux.desktop.StatsOverlay
+import app.droidnux.desktop.StatsPosition
+import app.droidnux.desktop.StatsSample
+import app.droidnux.desktop.StatsStyle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -190,19 +241,22 @@ private enum class Tab(val label: Int, val icon: ImageVector, val selectedIcon: 
     SETTINGS(R.string.tab_settings, Icons.Settings, Icons.SettingsFilled),
 }
 
-/** The Settings tab's pages. */
-private enum class Category(val title: Int, val icon: ImageVector) {
-    SCREEN(R.string.settings_screen, Icons.Desktop),
-    INPUT(R.string.settings_input, Icons.Keyboard),
-    ACCOUNT(R.string.settings_account, Icons.User),
-    COMPONENTS(R.string.settings_components, Icons.Package),
-    ANDROID(R.string.settings_android, Icons.Android),
-    DIAGNOSTICS(R.string.system_diagnostics, Icons.Pulse),
+/** The Settings tab's pages, in their groups. */
+private enum class Category(val title: Int, val icon: ImageVector, val group: Int) {
+    DESKTOP(R.string.settings_desktop, Icons.Desktop, R.string.settings_group_desktop),
+    STATS(R.string.settings_stats, Icons.Stats, R.string.settings_group_desktop),
+    ACCOUNT(R.string.settings_account, Icons.User, R.string.settings_group_desktop),
+    APP(R.string.settings_app, Icons.Apps, R.string.settings_group_system),
+    COMPONENTS(R.string.settings_components, Icons.Package, R.string.settings_group_system),
+    ANDROID(R.string.settings_android, Icons.Android, R.string.settings_group_system),
+    DIAGNOSTICS(R.string.system_diagnostics, Icons.Pulse, R.string.settings_group_system),
+    INFO(R.string.settings_info, Icons.About, R.string.settings_group_system),
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(state: AppState, viewModel: AppViewModel) {
-    // The pages side by side: a swipe moves between them, a tab slides to its page.
+    // The pages side by side: only a tab moves between them, sliding to its page.
     val pager = rememberPagerState { Tab.entries.size }
     val tab = Tab.entries[pager.targetPage]
     val scope = rememberCoroutineScope()
@@ -226,18 +280,21 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
     }
 
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-        HorizontalPager(pager, Modifier.fillMaxSize()) { page ->
-            // Room for the bar floating over the bottom of every page.
+        HorizontalPager(pager, Modifier.fillMaxSize(), userScrollEnabled = false) { page ->
+            // Room for the bar floating over the bottom of every page, and for the system's bar (or the keyboard) under it:
+            // inside the pages' scrolling, so they run on to the screen's edge.
+            val system = WindowInsets.safeDrawing.asPaddingValues().calculateBottomPadding()
             val padding = if (isCompact()) {
-                PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 100.dp)
+                PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 100.dp + system)
             } else {
-                PaddingValues(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 120.dp)
+                PaddingValues(start = 48.dp, end = 48.dp, top = 32.dp, bottom = 120.dp + system)
             }
+            val insets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
             when (Tab.entries[page]) {
                 // The Home runs under the status bar: its picture reaches the top edge.
                 Tab.HOME -> HomeTab(state, viewModel, updates, entrance, onUpdates = { category = Category.COMPONENTS; select(Tab.SETTINGS) })
-                Tab.STORE -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) { StoreTab(state, viewModel, padding) }
-                Tab.SETTINGS -> Box(Modifier.windowInsetsPadding(WindowInsets.safeDrawing)) {
+                Tab.STORE -> Box(Modifier.windowInsetsPadding(insets)) { StoreTab(state, viewModel, padding) }
+                Tab.SETTINGS -> Box(Modifier.windowInsetsPadding(insets)) {
                     SettingsTab(
                         state, viewModel, padding, category, updates,
                         onCategory = { category = it },
@@ -245,23 +302,31 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
                 }
             }
         }
-        BottomBar(
-            tab,
-            // The pill follows the pages, under the finger too.
-            position = { pager.currentPage + pager.currentPageOffsetFraction },
-            badge = if (updates) Tab.SETTINGS else null,
-            modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.safeDrawing)
-                .padding(bottom = if (isCompact()) 12.dp else 24.dp),
-        ) { if (it != tab) select(it) }
+        // Away while the keyboard is up: the window shrinks for it, and the bar would ride up on it.
+        AnimatedVisibility(
+            !WindowInsets.isImeVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn() + slideInVertically { it / 2 },
+            exit = fadeOut() + slideOutVertically { it / 2 },
+        ) {
+            BottomBar(
+                tab,
+                // The pill follows the pages, under the finger too.
+                position = { pager.currentPage + pager.currentPageOffsetFraction },
+                badge = if (updates) Tab.SETTINGS else null,
+                modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+                    .padding(bottom = if (isCompact()) 12.dp else 24.dp),
+            ) { if (it != tab) select(it) }
+        }
     }
 }
 
-/** The selected tab's pill: lit from above, like a raised key. */
-private val PillBrush = object : ShaderBrush() {
+/** The selected tab's pill in the theme's accent [color]: lit from above, like a raised key. */
+private fun pillBrush(color: Color) = object : ShaderBrush() {
     override fun createShader(size: Size): Shader {
         val center = Offset(size.width / 2, size.height * 0.35f)
         val radius = hypot(size.width / 2, size.height * 0.65f)
-        return RadialGradientShader(center, radius, listOf(Color(0xFF4A4C53), Color(0xFF33353A)), listOf(0f, 0.75f))
+        return RadialGradientShader(center, radius, listOf(color.copy(alpha = 0.34f), color.copy(alpha = 0.16f)), listOf(0f, 0.75f))
     }
 }
 private val TabColor = Color(0xFFA9ABB3)
@@ -321,10 +386,12 @@ private fun BottomBar(current: Tab, position: () -> Float, badge: Tab?, modifier
     BoxWithConstraints(modifier.padding(horizontal = if (compact) 12.dp else 0.dp)) {
         // Tabs just wide enough for "Impostazioni": the bar stays a pill in the middle, also on a phone.
         val item = minOf(if (compact) 88.dp else 108.dp, (maxWidth - if (compact) 12.dp else 44.dp) / Tab.entries.size)
+        val accent = MaterialTheme.colorScheme.primary
+        val pill = remember(accent) { pillBrush(accent) }
         Box(Modifier.clip(RoundedCornerShape(40.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(6.dp)) {
             Box(
                 Modifier.offset { IntOffset((item.toPx() * position()).roundToInt(), 0) }.size(item, height)
-                    .clip(RoundedCornerShape(height / 2)).background(PillBrush),
+                    .clip(RoundedCornerShape(height / 2)).background(pill),
             )
             Row {
                 Tab.entries.forEach { tab ->
@@ -395,11 +462,14 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
     val compact = isCompact()
     val side = if (compact) 16.dp else 48.dp
     var thumbnail by remember { mutableStateOf<Bitmap?>(null) }
-    // Reloaded whenever the screen comes back, and when the desktop's process writes a new one
-    // (it does on leaving the desktop, often after this screen is back). Decoding takes a few frames.
+    // The desktop's wallpaper; its last picture, windows and all, only while it is paused
+    // (or before a session copied the wallpaper). Reloaded whenever the screen comes back,
+    // and when the file is written anew (the picture on leaving the desktop, often after
+    // this screen is back). Decoding takes a few frames.
     val scope = rememberCoroutineScope()
-    LifecycleResumeEffect(Unit) {
-        val file = DesktopActivity.thumbnailFile(context)
+    LifecycleResumeEffect(state.sessionPaused) {
+        val wallpaper = viewModel.wallpaperFile
+        val file = if (!state.sessionPaused && wallpaper.isFile) wallpaper else DesktopActivity.thumbnailFile(context)
         fun load() = scope.launch {
             thumbnail = withContext(Dispatchers.IO) { if (file.isFile) blurred(file.path) else null }
         }
@@ -464,7 +534,10 @@ private fun Hero(state: AppState, viewModel: AppViewModel, side: Dp, picture: Bi
     val frozen by animateFloatAsState(if (paused) 1f else 0f, tween(400), label = "frozen")
     Box(
         modifier.fillMaxWidth().onGloballyPositioned { bounds = it.boundsInRoot() }
-            .clickable(onClickLabel = stringResource(R.string.action_open_desktop), onClick = open),
+            // No state layer: over the whole picture a hovering mouse lit it all. The button
+            // below is the same action for the keyboard and the controller.
+            .focusProperties { canFocus = false }
+            .clickable(null, indication = null, onClickLabel = stringResource(R.string.action_open_desktop), onClick = open),
     ) {
         if (picture != null) {
             Image(
@@ -636,7 +709,8 @@ private fun Halo(color: Color, period: Int) {
 
 /**
  * The favorites, in the user's order, in a dock. In edit mode each app has a remove badge and moves
- * where it is dragged; "Add" picks more.
+ * where it is dragged, or with a keyboard or controller: Enter (A) lifts the focused one, the arrows
+ * move it, Enter or Escape (B) puts it down; "Add" picks more.
  */
 @Composable
 private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier) {
@@ -647,20 +721,21 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
     var order by remember(state.homeApps, apps.keys) { mutableStateOf(state.homeApps.filter { it in apps }) }
     var dragged by remember { mutableStateOf<String?>(null) }
     var drag by remember { mutableStateOf(Offset.Zero) }
+    // The app lifted from the keyboard or a controller.
+    var moving by remember { mutableStateOf<String?>(null) }
     BackHandler(enabled = editing) { editing = false }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
-            SectionHeader(
-                stringResource(R.string.home_quick) + if (editing) " · " + stringResource(R.string.home_edit_hint) else "",
-                Modifier.weight(1f),
-            )
-            if (editing) {
-                Button(onClick = { editing = false }, modifier = Modifier.height(36.dp), contentPadding = PaddingValues(horizontal = 18.dp)) {
-                    Text(stringResource(R.string.home_done))
-                }
-            } else {
-                TextButton(onClick = { editing = true }) { Text(stringResource(R.string.home_edit)) }
+            SectionHeader(stringResource(R.string.home_quick))
+            // Clipped past the header, so the sliding text never crosses it.
+            AnimatedVisibility(
+                editing,
+                modifier = Modifier.padding(start = 12.dp).clipToBounds(),
+                enter = fadeIn() + slideInHorizontally { -it / 4 },
+                exit = fadeOut() + slideOutHorizontally { -it / 4 },
+            ) {
+                Text(stringResource(R.string.home_edit_hint), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         val compact = isCompact()
@@ -677,22 +752,28 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
             val stepX = with(density) { (cell + gap).toPx() }
             val stepY = with(density) { (height + gap).toPx() }
             fun origin(index: Int) = DpOffset((cell + gap) * (index % columns), (height + gap) * (index / columns))
-            // "Add" while editing, or in place of an empty dock.
-            val add = editing || order.isEmpty()
-            val count = order.size + if (add) 1 else 0
-            Box(Modifier.fillMaxWidth().height(height * ((count + columns - 1) / columns) + gap * ((count - 1) / columns))) {
+            // After the apps: "Edit", which turns into "Add" beside "Done" while editing; "Add" alone in an empty dock.
+            val pencil = !editing && order.isNotEmpty()
+            val count = order.size + if (editing) 2 else 1
+            val boxHeight by animateDpAsState(height * ((count + columns - 1) / columns) + gap * ((count - 1) / columns), label = "dock")
+            Box(Modifier.fillMaxWidth().height(boxHeight)) {
                 order.forEach { id ->
                     val app = apps[id] ?: return@forEach
                     key(id) {
                         val index = order.indexOf(id)
-                        val lifted = dragged == id
+                        val lifted = dragged == id || moving == id
+                        var focused by remember { mutableStateOf(false) }
+                        fun putDown() {
+                            moving = null
+                            viewModel.setHomeApps(order)
+                        }
                         val target by animateDpOffsetAsState(origin(index), label = "tile")
-                        val position = if (lifted) origin(index) else target
+                        val position = if (dragged == id) origin(index) else target
                         val scale by animateFloatAsState(if (lifted) 1.04f else 1f, label = "lift")
                         Box(
                             Modifier.offset(position.x, position.y).size(cell, height).zIndex(if (lifted) 1f else 0f)
                                 .graphicsLayer {
-                                    if (lifted) {
+                                    if (dragged == id) {
                                         translationX = drag.x
                                         translationY = drag.y - 6.dp.toPx()
                                     }
@@ -720,16 +801,53 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                                                 }
                                             }
                                         }
+                                            .onFocusChanged {
+                                                focused = it.isFocused
+                                                if (!it.isFocused && moving == id) putDown()
+                                            }
+                                            .onKeyEvent { event ->
+                                                val down = event.type == KeyEventType.KeyDown
+                                                when (event.key) {
+                                                    Key.Enter, Key.NumPadEnter, Key.DirectionCenter, Key.ButtonA, Key.Spacebar -> {
+                                                        if (down) if (moving == id) putDown() else moving = id
+                                                        true
+                                                    }
+                                                    // On release, as Back would leave edit mode on its own release.
+                                                    Key.Escape, Key.ButtonB, Key.Back -> (moving == id).also { if (it && !down) putDown() }
+                                                    Key.DirectionLeft, Key.DirectionRight, Key.DirectionUp, Key.DirectionDown -> {
+                                                        if (moving != id) return@onKeyEvent false
+                                                        if (down) {
+                                                            val step = when (event.key) {
+                                                                Key.DirectionLeft -> -1
+                                                                Key.DirectionRight -> 1
+                                                                Key.DirectionUp -> -columns
+                                                                else -> columns
+                                                            }
+                                                            val from = order.indexOf(id)
+                                                            val to = (from + step).coerceIn(0, order.size - 1)
+                                                            if (to != from) order = order.toMutableList().apply { add(to, removeAt(from)) }
+                                                        }
+                                                        true
+                                                    }
+                                                    else -> false
+                                                }
+                                            }
+                                            .focusable()
                                     } else {
                                         Modifier
                                     },
                                 ),
                         ) {
-                            AppTile(app, viewModel, height, iconSize = if (compact) 52.dp else 56.dp, editing = editing, lifted = lifted)
-                            if (editing) {
+                            AppTile(app, viewModel, height, iconSize = if (compact) 52.dp else 56.dp, editing = editing, lifted = lifted || focused)
+                            androidx.compose.animation.AnimatedVisibility(
+                                editing,
+                                modifier = Modifier.align(Alignment.TopEnd),
+                                enter = fadeIn() + scaleIn(initialScale = 0.4f),
+                                exit = fadeOut() + scaleOut(targetScale = 0.4f),
+                            ) {
                                 IconButton(
                                     onClick = { viewModel.setHomeApps(order - id) },
-                                    modifier = Modifier.align(Alignment.TopEnd).size(36.dp),
+                                    modifier = Modifier.size(36.dp),
                                 ) {
                                     Box(
                                         Modifier.size(24.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHighest),
@@ -740,26 +858,11 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                         }
                     }
                 }
-                if (add) {
-                    val last by animateDpOffsetAsState(origin(order.size), label = "last")
-                    Column(
-                        Modifier.offset(last.x, last.y).size(cell, height).clip(CardShape).clickable { adding = true },
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
-                    ) {
-                        Box(
-                            Modifier.size(if (compact) 52.dp else 56.dp).border(2.dp, MaterialTheme.colorScheme.outlineVariant, RoundedCornerShape(16.dp)),
-                            contentAlignment = Alignment.Center,
-                        ) { Icon(Icons.Plus, null, tint = MaterialTheme.colorScheme.onSurfaceVariant) }
-                        Text(
-                            stringResource(R.string.home_add),
-                            fontSize = if (compact) 12.sp else 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            modifier = Modifier.padding(top = 8.dp),
-                        )
-                    }
+                val iconSize = if (compact) 52.dp else 56.dp
+                DockAction(true, origin(order.size), cell, height, iconSize, if (pencil) Icons.Edit else Icons.Plus, if (pencil) R.string.home_edit else R.string.home_add, filled = false) {
+                    if (pencil) editing = true else adding = true
                 }
+                DockAction(editing, origin(order.size + 1), cell, height, iconSize, Icons.Selected, R.string.home_done, filled = true) { editing = false }
             }
         }
     }
@@ -792,48 +895,19 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
     }
 }
 
-/** Every app, programs before the desktop's settings; the magnifier opens a filter. */
+/** Every app, programs before the desktop's settings. */
 @Composable
 private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier) {
-    var query by rememberSaveable { mutableStateOf<String?>(null) }
-    BackHandler(enabled = query != null) { query = null }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
-            SectionHeader(stringResource(R.string.home_all_apps), Modifier.weight(1f))
-            IconButton(onClick = { query = if (query == null) "" else null }) {
-                Icon(if (query == null) Icons.Search else Icons.Close, stringResource(R.string.home_search), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        val text = query
-        if (text != null) {
-            val focus = remember { FocusRequester() }
-            LaunchedEffect(Unit) { focus.requestFocus() }
-            OutlinedTextField(
-                value = text,
-                onValueChange = { query = it },
-                placeholder = { Text(stringResource(R.string.home_search)) },
-                leadingIcon = { Icon(Icons.Search, null) },
-                singleLine = true,
-                shape = RoundedCornerShape(28.dp),
-                modifier = Modifier.fillMaxWidth().focusRequester(focus),
-            )
-        }
+        val compact = isCompact()
+        Box(Modifier.height(40.dp), contentAlignment = Alignment.CenterStart) { SectionHeader(stringResource(R.string.home_all_apps)) }
         val apps = state.apps
         if (apps == null) {
             LinearProgressIndicator(Modifier.fillMaxWidth())
             return@Column
         }
         val (settings, programs) = apps.partition { "Settings" in it.categories }
-        val shown = (programs + settings).filter { text.isNullOrBlank() || it.name.contains(text.trim(), ignoreCase = true) }
-        if (shown.isEmpty()) {
-            Text(
-                stringResource(R.string.store_no_results, text.orEmpty().trim()),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 16.dp),
-            )
-            return@Column
-        }
-        val compact = isCompact()
+        val shown = programs + settings
         BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) { // The dock's inset: columns line up.
             val columns = appColumns(compact, maxWidth)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -860,8 +934,11 @@ private fun appColumns(compact: Boolean, width: Dp): Int = if (compact) 4 else (
  * nothing per frame and works on every Android version.
  */
 private fun blurred(path: String): Bitmap? {
-    // A light blur: a few pixels at a quarter of the size, the screen stretches it smoothly.
-    val quarter = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = 4 }) ?: return null
+    // A light blur: a few pixels at about a quarter of the screen's size (a photo may be far larger), the screen stretches it smoothly.
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }.also { BitmapFactory.decodeFile(path, it) }
+    var sample = 4
+    while (bounds.outWidth / (sample * 2) >= 700) sample *= 2
+    val quarter = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
     return boxBlur(quarter, radius = 3, passes = 2)
 }
 
@@ -924,6 +1001,47 @@ private fun shortcut(context: Context, app: LinuxApp, icon: Bitmap?): ShortcutIn
             Intent(context, MainActivity::class.java).setAction(MainActivity.ACTION_LAUNCH).putExtra(MainActivity.EXTRA_APP, app.id),
         )
         .build()
+
+/** A tile after the favorites (edit, add, done) at [at]: it fades in when [visible], growing if [grow], and away after. */
+@Composable
+private fun DockAction(
+    visible: Boolean,
+    at: DpOffset,
+    width: Dp,
+    height: Dp,
+    iconSize: Dp,
+    icon: ImageVector,
+    label: Int,
+    filled: Boolean,
+    onClick: () -> Unit,
+) {
+    // Unhurried both ways: a tile appearing in place of another needs time to read.
+    val shown by animateFloatAsState(if (visible) 1f else 0f, tween(350), label = "action")
+    if (!visible && shown == 0f) return
+    val position by animateDpOffsetAsState(at, label = "actionAt")
+    val colors = MaterialTheme.colorScheme
+    Column(
+        Modifier.offset(position.x, position.y).size(width, height)
+            .graphicsLayer { alpha = shown; scaleX = 0.4f + 0.6f * shown; scaleY = scaleX }
+            .clip(CardShape).clickable(enabled = visible, onClick = onClick),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            Modifier.size(iconSize).clip(RoundedCornerShape(16.dp))
+                .then(if (filled) Modifier.background(colors.primary) else Modifier.border(2.dp, colors.outlineVariant, RoundedCornerShape(16.dp))),
+            contentAlignment = Alignment.Center,
+        ) { Crossfade(icon, label = "actionIcon") { Icon(it, null, tint = if (filled) colors.onPrimary else colors.onSurfaceVariant) } }
+        Crossfade(label, Modifier.padding(top = 8.dp), label = "actionLabel") {
+            Text(
+                stringResource(it),
+                fontSize = if (isCompact()) 12.sp else 14.sp,
+                color = if (filled) colors.primary else colors.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
+    }
+}
 
 /**
  * An app, [height] tall: tap starts it in the desktop, long press offers the favorites and a shortcut on
@@ -1008,8 +1126,8 @@ private fun AppTile(
 // -- Settings ----------------------------------------------------------------
 
 /**
- * The categories and the chosen one's page: on a phone a grid of categories, each opening its page
- * (Back returns); on a tablet the list beside the page.
+ * The categories and the chosen one's page: on a phone the grouped list, each row opening its page
+ * (Back returns); on a tablet the same list beside the page.
  */
 @Composable
 private fun SettingsTab(
@@ -1026,27 +1144,37 @@ private fun SettingsTab(
         settings = DesktopSettings.update(context, change)
     }
     val screen = remember { context.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds }
+    // The statistics preview's wallpaper, ready before its page opens.
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { PreviewWallpaper.load(viewModel.wallpaperFile) } }
     val summary = @Composable { it: Category ->
         when (it) {
-            Category.SCREEN -> "${(screen.width() * settings.scale).toInt() and 1.inv()} × ${(screen.height() * settings.scale).toInt() and 1.inv()} · " +
-                "${(settings.uiScale * 100).roundToInt()}%"
-            Category.INPUT -> layoutName(settings.layout) + " · " +
+            Category.DESKTOP -> "${(screen.width() * settings.scale).toInt() and 1.inv()} × ${(screen.height() * settings.scale).toInt() and 1.inv()} · " +
+                "${(settings.uiScale * 100).roundToInt()}% · " +
                 stringResource(if (settings.trackpad) R.string.menu_mode_trackpad else R.string.menu_mode_touch)
+            Category.APP -> stringResource(themeColorName(ThemeColor.picked ?: ThemeColor.resolve(settings.themeColor))) + " · " +
+                listOfNotNull(
+                    stringResource(R.string.settings_menu_back).takeIf { settings.menuBack },
+                    stringResource(R.string.settings_menu_shortcut).takeIf { settings.menuShortcut },
+                ).joinToString(", ").ifEmpty { stringResource(R.string.settings_menu_none) }
+            Category.STATS -> stringResource(if (settings.stats) settings.statsStyle.label else R.string.stats_off)
             Category.ACCOUNT -> settings.user
             Category.COMPONENTS -> stringResource(if (updates) R.string.settings_components_update else R.string.settings_components_ok)
             Category.ANDROID -> stringResource(R.string.settings_android_text)
             Category.DIAGNOSTICS -> stringResource(R.string.settings_diagnostics_text)
+            Category.INFO -> BuildConfig.VERSION_NAME
         }
     }
     val pageContent = @Composable { it: Category ->
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when (it) {
-                Category.SCREEN -> ScreenPage(settings, screen, ::save)
-                Category.INPUT -> InputPage(settings, ::save)
-                Category.ACCOUNT -> AccountPage(settings)
+                Category.DESKTOP -> DesktopPage(settings, screen, ::save)
+                Category.APP -> AppPage(settings, ::save)
+                Category.STATS -> StatsPage(settings, screen, viewModel.wallpaperFile, ::save)
+                Category.ACCOUNT -> AccountPage(settings, ::save)
                 Category.COMPONENTS -> ComponentsPage(state, viewModel)
                 Category.ANDROID -> SystemChecks(state.gpu)
                 Category.DIAGNOSTICS -> DiagnosticsPage(state, viewModel, settings, ::save)
+                Category.INFO -> InfoPage()
             }
         }
     }
@@ -1074,11 +1202,7 @@ private fun SettingsTab(
                         stringResource(R.string.tab_settings), fontSize = 24.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier.padding(start = 4.dp).reachTitle(open),
                     )
-                    Category.entries.chunked(2).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            row.forEach { CategoryCard(it, summary(it), badge = it == Category.COMPONENTS && updates, Modifier.weight(1f)) { onCategory(it) } }
-                        }
-                    }
+                    CategoryGroups(selected = null, updates, summary) { onCategory(it) }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalIconButton(onClick = { onCategory(null) }) { Icon(Icons.Back, stringResource(R.string.action_back)) }
@@ -1089,41 +1213,33 @@ private fun SettingsTab(
             }
         }
     } else {
-        val current = category ?: Category.SCREEN
-        Row(Modifier.fillMaxSize().padding(padding), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
-            Column(Modifier.width(280.dp).verticalScroll(rememberScrollState())) {
+        val current = category ?: Category.DESKTOP
+        // The bottom padding inside the scrolling columns: they run on under the floating bar.
+        val direction = LocalLayoutDirection.current
+        val bottom = padding.calculateBottomPadding()
+        Row(
+            Modifier.fillMaxSize().padding(
+                start = padding.calculateStartPadding(direction), top = padding.calculateTopPadding(), end = padding.calculateEndPadding(direction),
+            ),
+            horizontalArrangement = Arrangement.spacedBy(40.dp),
+        ) {
+            Column(Modifier.width(320.dp).verticalScroll(rememberScrollState()).padding(bottom = bottom), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
                     stringResource(R.string.tab_settings), fontSize = 28.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 16.dp, bottom = 20.dp),
+                    modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
                 )
-                Box {
-                    // The chosen row's background slides to it, as the bar's pill does.
-                    val y by animateDpAsState(
-                        (CategoryRowHeight + 4.dp) * current.ordinal,
-                        spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow),
-                        label = "category",
-                    )
-                    Box(
-                        Modifier.offset(y = y).fillMaxWidth().height(CategoryRowHeight).clip(RoundedCornerShape(18.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Category.entries.forEach {
-                            CategoryRow(it, selected = it == current, badge = it == Category.COMPONENTS && updates) { onCategory(it) }
-                        }
-                    }
-                }
+                CategoryGroups(selected = current, updates, summary) { onCategory(it) }
             }
             AnimatedContent(
                 current,
                 transitionSpec = {
-                    (fadeIn(tween(240, 90)) + slideInVertically(tween(300, 90, Emphasized)) { it / 30 }) togetherWith
+                    (fadeIn(tween(200, 30)) + slideInVertically(tween(280, 30, Emphasized)) { it / 30 }) togetherWith
                         (fadeOut(tween(90)) + slideOutVertically(tween(90)) { -it / 60 })
                 },
                 label = "page",
                 modifier = Modifier.weight(1f),
             ) { page ->
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = bottom), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(stringResource(page.title), fontSize = 22.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
                     Box(Modifier.widthIn(max = 760.dp)) { pageContent(page) }
                 }
@@ -1197,58 +1313,167 @@ private fun Modifier.reachTitle(open: () -> Float) = graphicsLayer {
 /** Pixels a second: a flick at least this fast opens or closes the reach header. */
 private const val REACH_FLICK = 300f
 
-/** A category on a phone: its icon, its name and a line of its state. */
+/**
+ * The categories in their groups, each under its header: rows joined into one block, its outer corners round.
+ * On a tablet [selected] is the page beside the list; on a phone there is none and each row has a chevron.
+ */
 @Composable
-private fun CategoryCard(category: Category, summary: String, badge: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    val press = remember { MutableInteractionSource() }
-    Box(
-        modifier.pressScale(press).heightIn(min = 120.dp).clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .clickable(press, LocalIndication.current, onClick = onClick),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Box(
-                Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                contentAlignment = Alignment.Center,
-            ) { Icon(category.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp)) }
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(stringResource(category.title), fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                // Two lines on every card, so a longer summary doesn't make its card taller than the others.
-                Text(
-                    summary, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp,
-                )
+private fun CategoryGroups(selected: Category?, updates: Boolean, summary: @Composable (Category) -> String, onClick: (Category) -> Unit) {
+    Category.entries.groupBy { it.group }.forEach { (group, categories) ->
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            SectionHeader(stringResource(group), Modifier.padding(start = 20.dp, bottom = 10.dp))
+            categories.forEachIndexed { index, category ->
+                val top = if (index == 0) 24.dp else 6.dp
+                val bottom = if (index == categories.lastIndex) 24.dp else 6.dp
+                CategoryRow(
+                    category, summary(category), RoundedCornerShape(top, top, bottom, bottom),
+                    selected = category == selected, chevron = selected == null,
+                    badge = category == Category.COMPONENTS && updates,
+                ) { onClick(category) }
             }
         }
-        if (badge) Badge(Modifier.align(Alignment.TopEnd).padding(18.dp))
     }
 }
 
-private val CategoryRowHeight = 52.dp
-
-/** A category in the tablet's list (the chosen one's background is drawn under the list). */
+/** A category: its icon in a circle, its name and a line of its state; the desktop's in the primary tones, the system's in the secondary. */
 @Composable
-private fun CategoryRow(category: Category, selected: Boolean, badge: Boolean, onClick: () -> Unit) {
+private fun CategoryRow(
+    category: Category,
+    summary: String,
+    shape: Shape,
+    selected: Boolean,
+    chevron: Boolean,
+    badge: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val background by animateColorAsState(if (selected) colors.secondaryContainer else colors.surfaceContainerLow, label = "row")
+    val circle by animateColorAsState(if (selected) colors.primary else colors.secondaryContainer, label = "circle")
+    val icon by animateColorAsState(if (selected) colors.onPrimary else colors.onSecondaryContainer, label = "icon")
+    val press = remember { MutableInteractionSource() }
+    // Beside its page (no chevron) a row is chosen on touch down, as the bar's tabs; on a phone a scroll may start on it.
+    if (!chevron) {
+        val choose by rememberUpdatedState(onClick)
+        LaunchedEffect(press) { press.interactions.collect { if (it is PressInteraction.Press) choose() } }
+    }
     Row(
-        Modifier.fillMaxWidth().height(CategoryRowHeight).clip(RoundedCornerShape(18.dp))
-            .selectable(selected, onClick = onClick).padding(horizontal = 16.dp),
+        Modifier.pressScale(press, 0.97f).fillMaxWidth().heightIn(min = 72.dp).clip(shape).background(background)
+            .selectable(selected, press, LocalIndication.current, onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Icon(category.icon, null, tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
-        Text(
-            stringResource(category.title),
-            fontSize = 15.sp,
-            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
+        Box(Modifier.size(40.dp).clip(CircleShape).background(circle), contentAlignment = Alignment.Center) {
+            Icon(category.icon, null, tint = icon, modifier = Modifier.size(22.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                stringResource(category.title), fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = if (selected) colors.onSecondaryContainer else colors.onSurface,
+            )
+            Text(
+                summary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = when {
+                    badge -> colors.primary
+                    selected -> colors.onSecondaryContainer
+                    else -> colors.onSurfaceVariant
+                },
+            )
+        }
         if (badge) Badge()
+        if (chevron) Icon(Icons.Chevron, null, tint = colors.outline, modifier = Modifier.size(20.dp))
     }
 }
 
+/** The theme color, as in MoonVibe: under its name a dot for each color, the chosen one bigger and with a check. */
 @Composable
-private fun ScreenPage(settings: DesktopSettings, screen: android.graphics.Rect, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+private fun ThemeColorRow(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
     val context = LocalContext.current
+    val chosen = ThemeColor.picked ?: ThemeColor.resolve(settings.themeColor)
+    Column(
+        Modifier.fillMaxWidth().clip(RowShape).background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(stringResource(R.string.theme_color), fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            Text(stringResource(themeColorName(chosen)), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        // One row: on a phone it scrolls sideways instead of taking a second line, its cut sides fading out.
+        val scroll = rememberScrollState()
+        val fadeStart by animateFloatAsState(if (scroll.canScrollBackward) 1f else 0f, tween(150), label = "fadeStart")
+        val fadeEnd by animateFloatAsState(if (scroll.canScrollForward) 1f else 0f, tween(150), label = "fadeEnd")
+        Row(
+            Modifier.padding(top = 4.dp).offset(x = (-8).dp)
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val width = 32.dp.toPx()
+                    val edge = Size(width, size.height)
+                    drawRect(
+                        Brush.horizontalGradient(listOf(Color.Black.copy(alpha = 1f - fadeStart), Color.Black), endX = width),
+                        size = edge, blendMode = BlendMode.DstIn,
+                    )
+                    drawRect(
+                        Brush.horizontalGradient(listOf(Color.Black, Color.Black.copy(alpha = 1f - fadeEnd)), size.width - width, size.width),
+                        topLeft = Offset(size.width - width, 0f), size = edge, blendMode = BlendMode.DstIn,
+                    )
+                }
+                .horizontalScroll(scroll),
+        ) {
+            for (color in ThemeColor.choices) {
+                val selected = color == chosen
+                val scale by animateFloatAsState(if (selected) 1.15f else 1f, tween(150), label = "swatch")
+                val check by animateFloatAsState(if (selected) 1f else 0f, tween(150), label = "check")
+                Box(
+                    Modifier.size(44.dp).clip(CircleShape)
+                        .selectable(selected, role = Role.RadioButton) {
+                            ThemeColor.picked = color
+                            save { it.copy(themeColor = color) }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val swatch = remember(color) { themeSwatch(context, color) }
+                    Box(
+                        Modifier.size(28.dp).graphicsLayer { scaleX = scale; scaleY = scale }.background(swatch, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Check, stringResource(themeColorName(color)),
+                            tint = MaterialTheme.colorScheme.surfaceContainerLow,
+                            modifier = Modifier.size(18.dp).graphicsLayer { alpha = check },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A color's dot: its primary color, or the wallpaper's colors around the circle. */
+private fun themeSwatch(context: android.content.Context, color: String): Brush =
+    if (color == ThemeColor.DYNAMIC && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+        val first = Color(context.getColor(android.R.color.system_accent1_300))
+        Brush.sweepGradient(listOf(first, Color(context.getColor(android.R.color.system_accent2_300)), Color(context.getColor(android.R.color.system_accent3_300)), first))
+    } else {
+        SolidColor(darkColors(context, color).primary)
+    }
+
+private fun themeColorName(color: String) = when (color) {
+    ThemeColor.DYNAMIC -> R.string.theme_color_dynamic
+    "purple" -> R.string.theme_color_purple
+    "pink" -> R.string.theme_color_pink
+    "red" -> R.string.theme_color_red
+    "orange" -> R.string.theme_color_orange
+    "yellow" -> R.string.theme_color_yellow
+    "green" -> R.string.theme_color_green
+    "teal" -> R.string.theme_color_teal
+    "gray" -> R.string.theme_color_gray
+    else -> R.string.theme_color_blue
+}
+
+/** The desktop's screen, then its keyboard and touch. */
+@Composable
+private fun DesktopPage(settings: DesktopSettings, screen: android.graphics.Rect, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    PageSection(R.string.settings_screen, first = true)
     var scale by remember { mutableFloatStateOf(settings.scale) }
     SliderRow(
         stringResource(R.string.menu_resolution),
@@ -1263,40 +1488,247 @@ private fun ScreenPage(settings: DesktopSettings, screen: android.graphics.Rect,
         uiScale, DesktopSettings.MIN_UI_SCALE..DesktopSettings.MAX_UI_SCALE,
         onChange = { uiScale = it }, onDone = { save { it.copy(uiScale = uiScale) } },
     )
-    InfoRow(
-        stringResource(R.string.settings_stats),
-        text = stringResource(R.string.settings_stats_text),
-        onClick = { save { it.copy(stats = !it.stats) } },
-    ) {
-        Switch(checked = settings.stats, onCheckedChange = { checked -> save { it.copy(stats = checked) } })
+    SwitchRow(R.string.settings_screen_on, settings.keepScreenOn) { on -> save { it.copy(keepScreenOn = on) } }
+    PageSection(R.string.settings_input)
+    InputRows(settings, save)
+}
+
+/** The app's own: its color, what opens the session's menu and how it looks, the start. */
+@Composable
+private fun AppPage(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    PageSection(R.string.settings_appearance, first = true)
+    ThemeColorRow(settings, save)
+    PageSection(R.string.settings_session_menu)
+    SwitchRow(R.string.settings_menu_back, settings.menuBack) { on -> save { it.copy(menuBack = on) } }
+    SwitchRow(R.string.settings_menu_shortcut, settings.menuShortcut) { on -> save { it.copy(menuShortcut = on) } }
+    ChoiceRow(R.string.settings_menu_position, settings.menuBottom, R.string.settings_menu_top, R.string.settings_menu_bottom) { bottom ->
+        save { it.copy(menuBottom = bottom) }
     }
+    ChoiceRow(R.string.settings_keyboard_kind, settings.androidKeyboard, R.string.settings_keyboard_full, R.string.settings_keyboard_android) { android ->
+        save { it.copy(androidKeyboard = android) }
+    }
+    PageSection(R.string.settings_startup)
+    SwitchRow(R.string.settings_open_at_start, settings.openAtStart) { on -> save { it.copy(openAtStart = on) } }
+}
+
+/** A section's title in a settings page. */
+@Composable
+private fun PageSection(title: Int, first: Boolean = false) {
+    SectionHeader(stringResource(title), Modifier.padding(start = 4.dp, top = if (first) 0.dp else 12.dp, bottom = 4.dp))
 }
 
 @Composable
-private fun InputPage(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
-    var choosingLayout by remember { mutableStateOf(false) }
-    InfoRow(stringResource(R.string.settings_touch)) {
+private fun SwitchRow(title: Int, checked: Boolean, text: Int? = null, onChange: (Boolean) -> Unit) {
+    InfoRow(stringResource(title), text = text?.let { stringResource(it) }, onClick = { onChange(!checked) }) {
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/** Two choices side by side, [second] chosen when [value]. */
+@Composable
+private fun ChoiceRow(title: Int, value: Boolean, first: Int, second: Int, onChange: (Boolean) -> Unit) {
+    InfoRow(stringResource(title)) {
         SingleChoiceSegmentedButtonRow {
-            listOf(false to R.string.menu_mode_touch, true to R.string.menu_mode_trackpad).forEachIndexed { index, (trackpad, label) ->
+            listOf(false to first, true to second).forEachIndexed { index, (choice, label) ->
                 SegmentedButton(
-                    selected = settings.trackpad == trackpad,
-                    onClick = { save { it.copy(trackpad = trackpad) } },
+                    selected = value == choice,
+                    onClick = { onChange(choice) },
                     shape = SegmentedButtonDefaults.itemShape(index, 2),
                     icon = {},
                 ) { Text(stringResource(label)) }
             }
         }
     }
+}
+
+/** The statistics over the desktop, as MoonVibe's: the style over a preview of the screen, then where, how opaque and what it shows. */
+@Composable
+private fun StatsPage(settings: DesktopSettings, screen: android.graphics.Rect, wallpaper: File, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    val style = settings.statsStyle
+    var opacity by remember { mutableFloatStateOf(settings.statsOpacity) }
+    InfoRow(stringResource(R.string.stats_show), onClick = { save { it.copy(stats = !it.stats) } }) {
+        Switch(checked = settings.stats, onCheckedChange = { checked -> save { it.copy(stats = checked) } })
+    }
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        StatsStyle.entries.forEachIndexed { index, each ->
+            SegmentedButton(
+                selected = style == each,
+                onClick = { save { it.copy(statsStyle = each) } },
+                shape = SegmentedButtonDefaults.itemShape(index, StatsStyle.entries.size),
+                icon = {},
+            ) { Text(stringResource(each.label)) }
+        }
+    }
+    StatsPreview(settings.copy(statsOpacity = opacity), screen, wallpaper)
+    var choosingPosition by remember { mutableStateOf(false) }
+    Box {
+        InfoRow(stringResource(R.string.stats_position), onClick = { choosingPosition = true }) {
+            Text(stringResource(settings.statsPosition(style).label), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
+        }
+        DropdownMenu(expanded = choosingPosition, onDismissRequest = { choosingPosition = false }, modifier = Modifier.align(Alignment.TopEnd)) {
+            StatsPosition.entries.forEach { position ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(position.label)) },
+                    onClick = {
+                        choosingPosition = false
+                        save { it.copy(statsPositions = it.statsPositions + (style to position)) }
+                    },
+                )
+            }
+        }
+    }
+    SliderRow(
+        stringResource(R.string.stats_opacity), "${(opacity * 100).roundToInt()}%",
+        opacity, DesktopSettings.MIN_STATS_OPACITY..1f,
+        onChange = { opacity = it }, onDone = { save { it.copy(statsOpacity = opacity) } },
+    )
+    InfoRow(stringResource(R.string.stats_warnings), onClick = { save { it.copy(statsWarnings = !it.statsWarnings) } }) {
+        Switch(checked = settings.statsWarnings, onCheckedChange = { checked -> save { it.copy(statsWarnings = checked) } })
+    }
+    SectionHeader(
+        stringResource(
+            when (style) {
+                StatsStyle.BAR -> R.string.stats_items_bar
+                StatsStyle.PANEL -> R.string.stats_items_panel
+                StatsStyle.MINI -> R.string.stats_items_mini
+            },
+        ),
+        Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
+    )
+    // The shown ones in their order, dragged by their handle; the hidden ones after, a switch away from the end of it.
+    val saved = settings.statsItems(style)
+    var order by remember(style, saved) { mutableStateOf(saved) }
+    var dragged by remember { mutableStateOf<StatsItem?>(null) }
+    var drag by remember { mutableFloatStateOf(0f) }
+    var step by remember { mutableFloatStateOf(1f) }
+    val gap = with(LocalDensity.current) { 8.dp.toPx() }
+    fun store(items: List<StatsItem>) = save { it.copy(statsItemsByStyle = it.statsItemsByStyle + (style to items)) }
+    (order + StatsItem.entries.filter { it !in order }).forEachIndexed { index, item -> key(item) {
+        val shown = item in order
+        val lifted = dragged == item
+        val scale by animateFloatAsState(if (lifted) 1.02f else 1f, label = "lift")
+        // A row that changes place slides there from where it was.
+        val slide = remember { Animatable(0f) }
+        var last by remember { mutableIntStateOf(index) }
+        LaunchedEffect(index) {
+            val moved = last - index
+            last = index
+            if (!lifted && moved != 0) {
+                slide.snapTo(slide.value + moved * step)
+                slide.animateTo(0f, tween(200))
+            }
+        }
+        fun toggle() = store(if (shown) order - item else order + item)
+        InfoRow(
+            stringResource(item.label),
+            Modifier.onSizeChanged { step = it.height + gap }.zIndex(if (lifted) 1f else 0f).graphicsLayer {
+                translationY = if (lifted) drag else slide.value
+                scaleX = scale
+                scaleY = scale
+            },
+            icon = ImageVector.vectorResource(item.icon),
+            iconTint = MaterialTheme.colorScheme.primary,
+            onClick = ::toggle,
+        ) {
+            Switch(checked = shown, onCheckedChange = { toggle() })
+            Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                if (shown) {
+                    Icon(
+                        Icons.Grip, stringResource(R.string.stats_reorder), tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxSize().padding(8.dp).pointerInput(item) {
+                            detectDragGestures(
+                                onDragStart = { dragged = item; drag = 0f },
+                                onDragEnd = { dragged = null; drag = 0f; store(order) },
+                                onDragCancel = { dragged = null; drag = 0f; order = saved },
+                            ) { change, amount ->
+                                change.consume()
+                                drag += amount.y
+                                // The place under the row's middle, as the list is now.
+                                val from = order.indexOf(item)
+                                val to = (from + (drag / step).roundToInt()).coerceIn(0, order.lastIndex)
+                                if (to != from) {
+                                    order = order.toMutableList().apply { add(to, removeAt(from)) }
+                                    drag -= (to - from) * step
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    } }
+}
+
+/** The statistics over a screen of the device's shape, drawn at their real size and shrunk to fit. */
+/**
+ * The statistics preview's wallpaper, decoded once per file version: decoding it on
+ * opening the page showed the page a moment without it. The settings tab loads it ahead.
+ */
+private object PreviewWallpaper {
+    private var key: String? = null
+    private var bitmap: Bitmap? = null
+
+    private fun keyOf(file: File) = "${file.path}:${file.lastModified()}"
+
+    @Synchronized
+    fun cached(file: File): Bitmap? = bitmap.takeIf { file.isFile && key == keyOf(file) }
+
+    /** IO thread. */
+    @Synchronized
+    fun load(file: File): Bitmap? {
+        cached(file)?.let { return it }
+        if (!file.isFile) return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }.also { BitmapFactory.decodeFile(file.path, it) }
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= 1000) sample *= 2
+        bitmap = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+        key = keyOf(file)
+        return bitmap
+    }
+}
+
+@Composable
+private fun StatsPreview(settings: DesktopSettings, screen: android.graphics.Rect, wallpaper: File) {
+    val density = LocalDensity.current
+    // Plasma's wallpaper, at about the preview's size; plain before a session copied it.
+    val picture by produceState(PreviewWallpaper.cached(wallpaper), wallpaper) {
+        if (value == null) value = withContext(Dispatchers.IO) { PreviewWallpaper.load(wallpaper) }
+    }
+    val width = with(density) { screen.width().toDp() }
+    val height = with(density) { screen.height().toDp() }
+    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        // A tall screen (a phone held upright) as wide as fits under 360 dp of height.
+        val shown = minOf(maxWidth, 360.dp * (width / height))
+        Box(
+            Modifier.width(shown).aspectRatio(width / height).clip(CardShape).background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            contentAlignment = Alignment.Center,
+        ) {
+            picture?.let { Image(it.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+            AndroidView(
+                factory = { StatsOverlay(it) },
+                update = {
+                    it.apply(settings, animate = true)
+                    it.show(StatsSample.SAMPLE)
+                },
+                modifier = Modifier.requiredSize(width, height).graphicsLayer {
+                    scaleX = shown / width
+                    scaleY = shown / width
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun InputRows(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    var choosingLayout by remember { mutableStateOf(false) }
+    ChoiceRow(R.string.settings_touch, settings.trackpad, R.string.menu_mode_touch, R.string.menu_mode_trackpad) { trackpad ->
+        save { it.copy(trackpad = trackpad) }
+    }
     InfoRow(stringResource(R.string.settings_layout), onClick = { choosingLayout = true }) {
         Text(layoutName(settings.layout), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
     }
     SystemKeysRow()
-    Text(
-        stringResource(R.string.settings_next_session),
-        fontSize = 13.sp,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(start = 4.dp, top = 4.dp),
-    )
     if (choosingLayout) {
         LayoutDialog(settings.layout, onDismiss = { choosingLayout = false }) { layout ->
             save { it.copy(layout = layout) }
@@ -1306,15 +1738,101 @@ private fun InputPage(settings: DesktopSettings, save: ((DesktopSettings) -> Des
 }
 
 @Composable
-private fun AccountPage(settings: DesktopSettings) {
+private fun AccountPage(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    val context = LocalContext.current
+    var changingName by remember { mutableStateOf(false) }
     var changingPassword by remember { mutableStateOf(false) }
-    InfoRow(
-        stringResource(R.string.wizard_account_password),
-        text = stringResource(R.string.settings_password_summary, settings.user),
-    ) {
+    // The password in clear, after the fingerprint or the screen lock; hidden again when the app leaves the screen.
+    var shown by remember { mutableStateOf<String?>(null) }
+    LifecycleResumeEffect(Unit) { onPauseOrDispose { shown = null } }
+    InfoRow(stringResource(R.string.wizard_account_name), text = settings.user) {
+        FilledTonalButton(onClick = { changingName = true }) { Text(stringResource(R.string.action_change)) }
+    }
+    InfoRow(stringResource(R.string.wizard_account_password), text = shown ?: "••••••••") {
+        IconButton(onClick = {
+            if (shown != null) shown = null else unlock(context, context.getString(R.string.settings_password_show)) {
+                shown = Account.password(context)
+            }
+        }) {
+            Icon(
+                if (shown != null) Icons.VisibilityOff else Icons.Visibility,
+                contentDescription = stringResource(if (shown != null) R.string.settings_password_hide else R.string.settings_password_show),
+                tint = if (shown != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         FilledTonalButton(onClick = { changingPassword = true }) { Text(stringResource(R.string.action_change)) }
     }
+    // The session script renames the account, and moves its home, when the desktop next starts.
+    if (changingName) NameDialog(settings.user, onDismiss = { changingName = false }) { name -> save { it.copy(user = name) } }
     if (changingPassword) PasswordDialog(onDismiss = { changingPassword = false })
+}
+
+/** Runs [onUnlocked] after the fingerprint, face or screen lock; at once on a device with no lock to ask for. */
+private fun unlock(context: Context, title: String, onUnlocked: () -> Unit) {
+    if (!context.getSystemService(KeyguardManager::class.java).isDeviceSecure) return onUnlocked()
+    val prompt = BiometricPrompt.Builder(context).setTitle(title).apply {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+        } else {
+            @Suppress("DEPRECATION") setDeviceCredentialAllowed(true)
+        }
+    }.build()
+    prompt.authenticate(CancellationSignal(), context.mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
+        override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = onUnlocked()
+    })
+}
+
+@Composable
+private fun NameDialog(current: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember { mutableStateOf(current) }
+    val ok = Account.isValidName(name)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_name_change)) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.trim().lowercase() },
+                label = { Text(stringResource(R.string.wizard_account_name)) },
+                supportingText = {
+                    Text(stringResource(if (name.isEmpty() || ok) R.string.wizard_account_name_hint else R.string.wizard_account_name_bad))
+                },
+                isError = name.isNotEmpty() && !ok,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(name); onDismiss() }, enabled = ok && name != current) {
+                Text(stringResource(R.string.action_save))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+@Composable
+private fun InfoPage() {
+    val uri = LocalUriHandler.current
+    val value = @Composable { text: String -> Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp) }
+    val open = @Composable { Icon(Icons.Open, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
+    InfoRow(stringResource(R.string.info_version)) { value(BuildConfig.VERSION_NAME) }
+    InfoRow(stringResource(R.string.info_creator)) { value("RickyTr99") }
+    InfoRow(stringResource(R.string.info_source), onClick = { uri.openUri("https://github.com/RickyTr99/droidnux") }) {
+        if (!isCompact()) value("RickyTr99/droidnux")
+        open()
+    }
+    InfoRow(stringResource(R.string.info_license)) { value("GPL-3.0") }
+    PageSection(R.string.info_other_projects)
+    InfoRow(
+        "MoonVibe",
+        image = painterResource(R.drawable.moonvibe),
+        onClick = { uri.openUri("https://github.com/RickyTr99/moonvibe") },
+    ) {
+        if (!isCompact()) value("RickyTr99/moonvibe")
+        open()
+    }
 }
 
 /** The accessibility service that hands the desktop Meta, Alt+Tab and the other keys Android keeps. */
