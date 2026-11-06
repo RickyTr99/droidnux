@@ -157,7 +157,6 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -301,7 +300,7 @@ private fun pillBrush(color: Color) = object : ShaderBrush() {
     override fun createShader(size: Size): Shader {
         val center = Offset(size.width / 2, size.height * 0.35f)
         val radius = hypot(size.width / 2, size.height * 0.65f)
-        return RadialGradientShader(center, radius, listOf(lerp(color, Color.White, 0.12f), color), listOf(0f, 0.75f))
+        return RadialGradientShader(center, radius, listOf(color.copy(alpha = 0.34f), color.copy(alpha = 0.16f)), listOf(0f, 0.75f))
     }
 }
 private val TabColor = Color(0xFFA9ABB3)
@@ -361,7 +360,7 @@ private fun BottomBar(current: Tab, position: () -> Float, badge: Tab?, modifier
     BoxWithConstraints(modifier.padding(horizontal = if (compact) 12.dp else 0.dp)) {
         // Tabs just wide enough for "Impostazioni": the bar stays a pill in the middle, also on a phone.
         val item = minOf(if (compact) 88.dp else 108.dp, (maxWidth - if (compact) 12.dp else 44.dp) / Tab.entries.size)
-        val accent = MaterialTheme.colorScheme.primaryContainer
+        val accent = MaterialTheme.colorScheme.primary
         val pill = remember(accent) { pillBrush(accent) }
         Box(Modifier.clip(RoundedCornerShape(40.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(6.dp)) {
             Box(
@@ -371,9 +370,7 @@ private fun BottomBar(current: Tab, position: () -> Float, badge: Tab?, modifier
             Row {
                 Tab.entries.forEach { tab ->
                     val selected = tab == current
-                    val color by animateColorAsState(
-                        if (selected) MaterialTheme.colorScheme.onPrimaryContainer else TabColor, tween(150), label = "tab",
-                    )
+                    val color by animateColorAsState(if (selected) Color.White else TabColor, tween(150), label = "tab")
                     // The icon hops when its tab is chosen.
                     val hop = remember { Animatable(1f) }
                     var wasSelected by remember { mutableStateOf(selected) }
