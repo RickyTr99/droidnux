@@ -14,6 +14,7 @@ import android.os.BatteryManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
 import app.droidnux.BuildConfig
 import app.droidnux.R
@@ -90,7 +91,8 @@ class DesktopSessionService : Service() {
         val settings = DesktopSettings.load(this)
         if (drives == null) drives = RemovableDrives(this, rootfs, settings.user, scope).also { it.start() }
         val verbose = BuildConfig.DIAGNOSTIC || settings.logs
-        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, settings.user, verbose))
+        val brightness = Brightness.toSlider(Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128))
+        val process = container.spawnShell(distro, DesktopEnvironment.sessionCommand(layout, settings.user, verbose, brightness))
         val password = Account.password(this).orEmpty()
         session = process
         Log.i(TAG, "session started (layout $layout)")

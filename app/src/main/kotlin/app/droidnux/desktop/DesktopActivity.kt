@@ -5,6 +5,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.content.res.Configuration
+import android.database.ContentObserver
 import android.graphics.Color
 import android.graphics.Rect
 import android.net.Uri
@@ -245,7 +246,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         if (Settings.System.canWrite(this)) {
             Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE,
                 Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
-            Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, Brightness.toSetting(brightness))
+            writtenSetting = Brightness.toSetting(brightness)
+            Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, writtenSetting)
             // The window's own brightness, set before the permission was granted, would keep overriding Android's.
             if (window.attributes.screenBrightness >= 0f) {
                 window.attributes = window.attributes.apply {
@@ -283,6 +285,18 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
+    /** The setting the desktop last gave Android: that change coming back is not a new one. */
+    private var writtenSetting = -1
+    // Android's own slider (the quick settings over the desktop) moves the desktop's too.
+    private val brightnessObserver by lazy {
+        object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                val setting = Settings.System.getInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, -1)
+                if (setting != writtenSetting) writeBacklight(menuListener.brightness())
+            }
+        }
+    }
+
     /** The backlight at [brightness] (0 to 1), as the session's menu shows it. */
     private fun writeBacklight(brightness: Float) {
         val value = (brightness * DesktopEnvironment.BACKLIGHT_MAX).roundToInt().coerceIn(0, DesktopEnvironment.BACKLIGHT_MAX)
@@ -296,6 +310,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         super.onResume()
         writeBacklight(menuListener.brightness())
         backlightWatch.startWatching()
+        contentResolver.registerContentObserver(Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS), false, brightnessObserver)
         // Back to a paused desktop: it continues.
         SessionPause.resume(this)
         reloadSettings()
@@ -307,10 +322,17 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onPause() {
         backlightWatch.stopWatching()
+        contentResolver.unregisterContentObserver(brightnessObserver)
         saveThumbnail()
         handler.removeCallbacks(overlayUpdater)
         clipboard.removePrimaryClipChangedListener(clipboardListener)
         super.onPause()
+    }
+
+    override fun onStop() {
+        // Out of sight, the desktop pauses as the menu's Pause does, and continues on return (onResume).
+        if (DisplayServer.running && !sessionEnded && !ending && !isChangingConfigurations) SessionPause.pause(this)
+        super.onStop()
     }
 
     @Deprecated("Android 12 and older; newer versions use the OnBackInvokedCallback")
@@ -658,6 +680,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private var lastInputTouch = false
     /** The session is over: no picture of what is left of the desktop. */
     private var sessionEnded = false
+    /** End was chosen: stopped processes would not see the session end, so no pause. */
+    private var ending = false
     /** When the first finger touched the desktop and when the last one left (uptime ms). */
     private var lastFingerDown = 0L
     private var lastFingerUp = 0L
@@ -815,7 +839,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
 
         // The picture first: once the session stops, the pause has no desktop to take it from.
-        override fun onExit() = saveThumbnail { DesktopSessionService.stop(this@DesktopActivity) }
+        override fun onExit() {
+            ending = true
+            saveThumbnail { DesktopSessionService.stop(this@DesktopActivity) }
+        }
 
         override fun onClosed() {
             surfaceView.requestFocus()

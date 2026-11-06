@@ -275,9 +275,11 @@ object DesktopEnvironment {
         File(rootfs.canonicalFile, "home/${user.ifEmpty { DESKTOP_USER }}/.local/share/user-places.xbel")
             .takeIf { it.isFile && it.canonicalPath == it.path }
 
-    fun sessionCommand(layout: String, user: String = "", verbose: Boolean = false): String =
+    /** [brightness]: Android's, 0 to 1 as the backlight has it, for KWin to start with. */
+    fun sessionCommand(layout: String, user: String = "", verbose: Boolean = false, brightness: Float? = null): String =
         "DROIDNUX_XKB_LAYOUT=$layout DROIDNUX_LOCALE=${glibcLocale()} " +
             (if (user.isNotEmpty()) "DROIDNUX_USER=$user " else "") +
+            (if (brightness != null) "DROIDNUX_BRIGHTNESS=${"%.3f".format(java.util.Locale.ROOT, brightness)} " else "") +
             (if (verbose) "DROIDNUX_VERBOSE=1 " else "") +
             "exec $SESSION_SCRIPT"
 
@@ -791,6 +793,10 @@ ${LOCALE_ENV.prependIndent("            ")}
                 xkbcomp -w 0 -xkb - /tmp/.droidnux-keymap.xkb || echo "keymap for ${'$'}layout failed"
             # Without systemd: Plasma starts its services itself.
             [ -f "${'$'}config/startkderc" ] || printf '[General]\nsystemdBoot=false\n' > "${'$'}config/startkderc"
+            # KWin applies the brightness it saved to the backlight, which is Android's: Android's instead.
+            if [ -n "${'$'}DROIDNUX_BRIGHTNESS" ] && [ -f "${'$'}config/kwinoutputconfig.json" ]; then
+                sed -i -E "s/(\"brightness\": *)[0-9.eE+-]+/\\1${'$'}DROIDNUX_BRIGHTNESS/" "${'$'}config/kwinoutputconfig.json"
+            fi
 
 ${SDCARD_LINK.prependIndent("            ")}
 ${USER_DIRS.prependIndent("            ")}
