@@ -87,10 +87,8 @@
     <string name="settings_appearance">Aspetto</string>
     <string name="settings_session_menu">Menu in sessione</string>
     <string name="settings_menu_back">Indietro</string>
-    <string name="settings_menu_back_text">Gesto o tasto</string>
     <string name="settings_menu_shortcut">Ctrl+Alt+Spazio</string>
     <string name="settings_menu_swipe">Scorri dal bordo</string>
-    <string name="settings_menu_swipe_text">Dall\'alto, col dito</string>
     <string name="settings_menu_none">Nessuna scorciatoia</string>
     <string name="settings_menu_position">Posizione</string>
     <string name="settings_menu_top">In alto</string>

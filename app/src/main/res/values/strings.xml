@@ -90,10 +90,8 @@
     <string name="settings_appearance">Appearance</string>
     <string name="settings_session_menu">Session menu</string>
     <string name="settings_menu_back">Back</string>
-    <string name="settings_menu_back_text">Gesture or key</string>
     <string name="settings_menu_shortcut">Ctrl+Alt+Space</string>
     <string name="settings_menu_swipe">Swipe from the edge</string>
-    <string name="settings_menu_swipe_text">From the top, with a finger</string>
     <string name="settings_menu_none">No shortcut</string>
     <string name="settings_menu_position">Position</string>
     <string name="settings_menu_top">Top</string>

@@ -1116,6 +1116,8 @@ private fun SettingsTab(
         settings = DesktopSettings.update(context, change)
     }
     val screen = remember { context.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds }
+    // The statistics preview's wallpaper, ready before its page opens.
+    LaunchedEffect(Unit) { withContext(Dispatchers.IO) { PreviewWallpaper.load(viewModel.wallpaperFile) } }
     val summary = @Composable { it: Category ->
         when (it) {
             Category.DESKTOP -> "${(screen.width() * settings.scale).toInt() and 1.inv()} × ${(screen.height() * settings.scale).toInt() and 1.inv()} · " +
@@ -1463,9 +1465,9 @@ private fun AppPage(settings: DesktopSettings, save: ((DesktopSettings) -> Deskt
     PageSection(R.string.settings_appearance, first = true)
     ThemeColorRow(settings, save)
     PageSection(R.string.settings_session_menu)
-    SwitchRow(R.string.settings_menu_back, settings.menuBack, R.string.settings_menu_back_text) { on -> save { it.copy(menuBack = on) } }
+    SwitchRow(R.string.settings_menu_back, settings.menuBack) { on -> save { it.copy(menuBack = on) } }
     SwitchRow(R.string.settings_menu_shortcut, settings.menuShortcut) { on -> save { it.copy(menuShortcut = on) } }
-    SwitchRow(R.string.settings_menu_swipe, settings.menuSwipe, R.string.settings_menu_swipe_text) { on -> save { it.copy(menuSwipe = on) } }
+    SwitchRow(R.string.settings_menu_swipe, settings.menuSwipe) { on -> save { it.copy(menuSwipe = on) } }
     ChoiceRow(R.string.settings_menu_position, settings.menuBottom, R.string.settings_menu_top, R.string.settings_menu_bottom) { bottom ->
         save { it.copy(menuBottom = bottom) }
     }
@@ -1616,18 +1618,39 @@ private fun StatsPage(settings: DesktopSettings, screen: android.graphics.Rect, 
 }
 
 /** The statistics over a screen of the device's shape, drawn at their real size and shrunk to fit. */
+/**
+ * The statistics preview's wallpaper, decoded once per file version: decoding it on
+ * opening the page showed the page a moment without it. The settings tab loads it ahead.
+ */
+private object PreviewWallpaper {
+    private var key: String? = null
+    private var bitmap: Bitmap? = null
+
+    private fun keyOf(file: File) = "${file.path}:${file.lastModified()}"
+
+    @Synchronized
+    fun cached(file: File): Bitmap? = bitmap.takeIf { file.isFile && key == keyOf(file) }
+
+    /** IO thread. */
+    @Synchronized
+    fun load(file: File): Bitmap? {
+        cached(file)?.let { return it }
+        if (!file.isFile) return null
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }.also { BitmapFactory.decodeFile(file.path, it) }
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= 1000) sample *= 2
+        bitmap = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample })
+        key = keyOf(file)
+        return bitmap
+    }
+}
+
 @Composable
 private fun StatsPreview(settings: DesktopSettings, screen: android.graphics.Rect, wallpaper: File) {
     val density = LocalDensity.current
     // Plasma's wallpaper, at about the preview's size; plain before a session copied it.
-    val picture by produceState<Bitmap?>(null, wallpaper) {
-        value = withContext(Dispatchers.IO) {
-            if (!wallpaper.isFile) return@withContext null
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }.also { BitmapFactory.decodeFile(wallpaper.path, it) }
-            var sample = 1
-            while (bounds.outWidth / (sample * 2) >= 1000) sample *= 2
-            BitmapFactory.decodeFile(wallpaper.path, BitmapFactory.Options().apply { inSampleSize = sample })
-        }
+    val picture by produceState(PreviewWallpaper.cached(wallpaper), wallpaper) {
+        if (value == null) value = withContext(Dispatchers.IO) { PreviewWallpaper.load(wallpaper) }
     }
     val width = with(density) { screen.width().toDp() }
     val height = with(density) { screen.height().toDp() }
