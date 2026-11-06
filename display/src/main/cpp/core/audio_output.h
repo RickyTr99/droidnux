@@ -24,6 +24,10 @@ void dnx_audio_output_set_playing_callback(dnx_audio_playing_callback callback);
 /* Silences the output (the ring keeps flowing) while another app has the focus. */
 void dnx_audio_output_set_muted(bool muted);
 
+/* The session is paused (its processes stopped): every stream stops, and the
+ * ones that were playing start again when it continues. */
+void dnx_audio_output_set_paused(bool paused);
+
 /* Android's media volume (linear, 0 to 1) and mute, for the sinks to show as
  * theirs: sent to each sink now and on connection. */
 void dnx_audio_output_set_volume(float volume, bool mute);

@@ -77,6 +77,11 @@ Java_app_droidnux_display_AudioFocus_nativeSetMuted(JNIEnv*, jclass, jboolean mu
     dnx_audio_output_set_muted(muted);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_AudioFocus_nativeSetPaused(JNIEnv*, jclass, jboolean paused) {
+    dnx_audio_output_set_paused(paused);
+}
+
 // -- Audio volume ------------------------------------------------------------
 
 namespace {

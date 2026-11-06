@@ -3,6 +3,7 @@
 #include <aaudio/AAudio.h>
 #include <android/log.h>
 #include <poll.h>
+#include <sys/eventfd.h>
 #include <pthread.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
@@ -42,6 +43,8 @@ constexpr int64_t kInputDelayNs = 500'000'000;
 std::atomic<int> gPlaying{0};
 std::atomic<dnx_audio_playing_callback> gPlayingCallback{nullptr};
 std::atomic<bool> gMuted{false};
+// The session is paused: its PipeWire is stopped, so no stream stays open for it.
+std::atomic<bool> gPaused{false};
 std::atomic<dnx_audio_volume_callback> gVolumeCallback{nullptr};
 
 class Session;
@@ -51,6 +54,8 @@ std::mutex gVolumeMutex;
 dnx_audio_volume gVolume{};
 bool gHaveVolume = false;
 std::vector<Session*> gSinks;
+// Every connection, sinks and sources, for a pause to wake.
+std::vector<Session*> gSessions;
 
 bool recvAll(int fd, void* data, size_t size) {
     auto* p = static_cast<uint8_t*>(data);
@@ -72,17 +77,19 @@ int64_t nowNs() {
 
 class Session {
 public:
-    explicit Session(int fd) : fd_(fd) {}
+    explicit Session(int fd) : fd_(fd), wake_(eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)) {}
 
     ~Session() {
         {
             std::lock_guard lock(gVolumeMutex);
             gSinks.erase(std::remove(gSinks.begin(), gSinks.end(), this), gSinks.end());
+            gSessions.erase(std::remove(gSessions.begin(), gSessions.end(), this), gSessions.end());
         }
         setPlaying(false);
         closeStream();
         if (ring_ != nullptr) munmap(ring_, size_);
         ::close(fd_);
+        if (wake_ >= 0) ::close(wake_);
     }
 
     // The connection's thread: plays the ring until the sink goes away.
@@ -90,18 +97,30 @@ public:
         pthread_setname_np(pthread_self(), "dnx-audio");
         if (!hello()) return;
         LOGI("sink connected: %u Hz, %u channels, ring of %u frames", rate_, channels_, frames_);
-        if (!input_) {
+        {
             std::lock_guard lock(gVolumeMutex);
-            gSinks.push_back(this);
-            if (gHaveVolume) sendVolume(gVolume);
+            gSessions.push_back(this);
+            if (!input_) {
+                gSinks.push_back(this);
+                if (gHaveVolume) sendVolume(gVolume);
+            }
         }
         for (;;) {
-            pollfd p{fd_, POLLIN, 0};
+            pollfd p[2] = {{fd_, POLLIN, 0}, {wake_, POLLIN, 0}};
             int timeout = playing_ ? kPollMs : -1;
             if (startAt_ != 0) timeout = static_cast<int>(std::max<int64_t>(startAt_ - nowNs(), 0) / 1'000'000 + 1);
-            int r = poll(&p, 1, timeout);
+            int r = poll(p, 2, timeout);
             if (r < 0 && errno != EINTR) break;
-            if (r > 0) {
+            if (r > 0 && (p[1].revents & POLLIN) != 0) {
+                eventfd_t ignored;
+                eventfd_read(wake_, &ignored);
+                if (gPaused.load()) {
+                    stop();
+                } else if (wanted_ && !playing_ && startAt_ == 0) {
+                    start();
+                }
+            }
+            if (r > 0 && p[0].revents != 0) {
                 dnx_audio_header header{};
                 if (!recvAll(fd_, &header, sizeof(header))) break;
                 if (header.type == DNX_AUDIO_VOLUME && header.size == sizeof(dnx_audio_volume)) {
@@ -113,12 +132,14 @@ public:
                 }
                 if (header.size != 0) break;
                 if (header.type == DNX_AUDIO_START) {
+                    wanted_ = true;
                     if (input_) {
                         startAt_ = nowNs() + kInputDelayNs;
                     } else {
                         start();
                     }
                 } else if (header.type == DNX_AUDIO_STOP) {
+                    wanted_ = false;
                     startAt_ = 0;
                     stop();
                 } else {
@@ -142,6 +163,9 @@ public:
         }
         LOGI("sink disconnected");
     }
+
+    // With gVolumeMutex held: the session's thread stops or restarts its stream.
+    void wake() { eventfd_write(wake_, 1); }
 
     // With gVolumeMutex held.
     void sendVolume(const dnx_audio_volume& volume) {
@@ -257,7 +281,9 @@ private:
         if (ring_ != nullptr) __atomic_store_n(&ring_->burst, 0u, __ATOMIC_RELAXED);
     }
 
+    // While paused, waits for the session to continue (wanted_ stays set).
     void start() {
+        if (gPaused.load()) return;
         playing_ = true;
         if (stream_ == nullptr && !openStream()) {
             playing_ = false;
@@ -365,6 +391,7 @@ private:
     }
 
     const int fd_;
+    const int wake_;
     dnx_audio_ring* ring_ = nullptr;
     size_t size_ = 0;
     float* samples_ = nullptr;
@@ -374,6 +401,7 @@ private:
     std::atomic<bool> playing_{false};
     std::atomic<bool> lost_{false};
     bool counted_ = false;  // in gPlaying (session thread only)
+    bool wanted_ = false;   // the client asked to play (session thread only)
     int64_t startAt_ = 0;   // when to open the microphone (session thread only)
     bool input_ = false;    // a source: the microphone
 };
@@ -429,6 +457,12 @@ extern "C" void dnx_audio_output_set_playing_callback(dnx_audio_playing_callback
 }
 
 extern "C" void dnx_audio_output_set_muted(bool muted) { gMuted.store(muted); }
+
+extern "C" void dnx_audio_output_set_paused(bool paused) {
+    std::lock_guard lock(gVolumeMutex);
+    gPaused.store(paused);
+    for (Session* session : gSessions) session->wake();
+}
 
 extern "C" void dnx_audio_output_set_volume(float volume, bool mute) {
     std::lock_guard lock(gVolumeMutex);

@@ -43,6 +43,9 @@ object AudioFocus {
         nativeInit()
     }
 
+    /** The session is paused: Android's streams stop (and the focus goes) until it continues. */
+    fun setPaused(paused: Boolean) = nativeSetPaused(paused)
+
     /** The desktop is back on screen: take the focus back if the desktop is still playing. */
     fun reclaim() {
         if (playing && !held) requestFocus()
@@ -82,4 +85,5 @@ object AudioFocus {
 
     @JvmStatic private external fun nativeInit()
     @JvmStatic private external fun nativeSetMuted(muted: Boolean)
+    @JvmStatic private external fun nativeSetPaused(paused: Boolean)
 }

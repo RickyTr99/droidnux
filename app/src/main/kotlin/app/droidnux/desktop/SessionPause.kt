@@ -4,6 +4,7 @@ import android.content.Context
 import android.system.Os
 import android.system.OsConstants
 import android.util.Log
+import app.droidnux.display.AudioFocus
 import java.io.File
 
 /**
@@ -21,6 +22,7 @@ object SessionPause {
 
     fun pause(context: Context) {
         file(context).createNewFile()
+        AudioFocus.setPaused(true)
         Log.i(TAG, "paused ${signal(context, OsConstants.SIGSTOP)} guest processes")
     }
 
@@ -28,6 +30,7 @@ object SessionPause {
     fun resume(context: Context) {
         if (!file(context).delete()) return
         Log.i(TAG, "resumed ${signal(context, OsConstants.SIGCONT)} guest processes")
+        AudioFocus.setPaused(false)
     }
 
     /** Sends [signal] to every guest process; returns how many got it. */
