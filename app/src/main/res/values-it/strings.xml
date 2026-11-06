@@ -343,6 +343,8 @@
     <string name="settings_components_update">Aggiornamento disponibile</string>
     <string name="settings_android">Android</string>
     <string name="settings_android_text">Permessi, batteria e GPU</string>
+    <string name="settings_group_desktop">Desktop</string>
+    <string name="settings_group_system">Sistema</string>
     <string name="settings_diagnostics_text">Prove del sistema e log</string>
     <string name="section_container">Container</string>
     <string name="diagnostics_spike_text">Prova dei buffer condivisi con la GPU</string>

@@ -146,6 +146,7 @@ import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.RadialGradientShader
 import androidx.compose.ui.graphics.Shader
 import androidx.compose.ui.graphics.ShaderBrush
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -206,14 +207,14 @@ private enum class Tab(val label: Int, val icon: ImageVector, val selectedIcon: 
     SETTINGS(R.string.tab_settings, Icons.Settings, Icons.SettingsFilled),
 }
 
-/** The Settings tab's pages. */
-private enum class Category(val title: Int, val icon: ImageVector) {
-    SCREEN(R.string.settings_screen, Icons.Desktop),
-    INPUT(R.string.settings_input, Icons.Keyboard),
-    ACCOUNT(R.string.settings_account, Icons.User),
-    COMPONENTS(R.string.settings_components, Icons.Package),
-    ANDROID(R.string.settings_android, Icons.Android),
-    DIAGNOSTICS(R.string.system_diagnostics, Icons.Pulse),
+/** The Settings tab's pages, in their groups. */
+private enum class Category(val title: Int, val icon: ImageVector, val group: Int) {
+    SCREEN(R.string.settings_screen, Icons.Desktop, R.string.settings_group_desktop),
+    INPUT(R.string.settings_input, Icons.Keyboard, R.string.settings_group_desktop),
+    ACCOUNT(R.string.settings_account, Icons.User, R.string.settings_group_desktop),
+    COMPONENTS(R.string.settings_components, Icons.Package, R.string.settings_group_system),
+    ANDROID(R.string.settings_android, Icons.Android, R.string.settings_group_system),
+    DIAGNOSTICS(R.string.system_diagnostics, Icons.Pulse, R.string.settings_group_system),
 }
 
 @Composable
@@ -1071,8 +1072,8 @@ private fun AppTile(
 // -- Settings ----------------------------------------------------------------
 
 /**
- * The categories and the chosen one's page: on a phone a grid of categories, each opening its page
- * (Back returns); on a tablet the list beside the page.
+ * The categories and the chosen one's page: on a phone the grouped list, each row opening its page
+ * (Back returns); on a tablet the same list beside the page.
  */
 @Composable
 private fun SettingsTab(
@@ -1137,11 +1138,7 @@ private fun SettingsTab(
                         stringResource(R.string.tab_settings), fontSize = 24.sp, fontWeight = FontWeight.Medium,
                         modifier = Modifier.padding(start = 4.dp).reachTitle(open),
                     )
-                    Category.entries.chunked(2).forEach { row ->
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            row.forEach { CategoryCard(it, summary(it), badge = it == Category.COMPONENTS && updates, Modifier.weight(1f)) { onCategory(it) } }
-                        }
-                    }
+                    CategoryGroups(selected = null, updates, summary) { onCategory(it) }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         FilledTonalIconButton(onClick = { onCategory(null) }) { Icon(Icons.Back, stringResource(R.string.action_back)) }
@@ -1154,28 +1151,12 @@ private fun SettingsTab(
     } else {
         val current = category ?: Category.SCREEN
         Row(Modifier.fillMaxSize().padding(padding), horizontalArrangement = Arrangement.spacedBy(40.dp)) {
-            Column(Modifier.width(280.dp).verticalScroll(rememberScrollState())) {
+            Column(Modifier.width(320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
                     stringResource(R.string.tab_settings), fontSize = 28.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(start = 16.dp, bottom = 20.dp),
+                    modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
                 )
-                Box {
-                    // The chosen row's background slides to it, as the bar's pill does.
-                    val y by animateDpAsState(
-                        (CategoryRowHeight + 4.dp) * current.ordinal,
-                        spring(dampingRatio = 0.8f, stiffness = Spring.StiffnessMediumLow),
-                        label = "category",
-                    )
-                    Box(
-                        Modifier.offset(y = y).fillMaxWidth().height(CategoryRowHeight).clip(RoundedCornerShape(18.dp))
-                            .background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                    )
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Category.entries.forEach {
-                            CategoryRow(it, selected = it == current, badge = it == Category.COMPONENTS && updates) { onCategory(it) }
-                        }
-                    }
-                }
+                CategoryGroups(selected = current, updates, summary) { onCategory(it) }
             }
             AnimatedContent(
                 current,
@@ -1260,52 +1241,84 @@ private fun Modifier.reachTitle(open: () -> Float) = graphicsLayer {
 /** Pixels a second: a flick at least this fast opens or closes the reach header. */
 private const val REACH_FLICK = 300f
 
-/** A category on a phone: its icon, its name and a line of its state. */
+/**
+ * The categories in their groups, each under its header: rows joined into one block, its outer corners round.
+ * On a tablet [selected] is the page beside the list; on a phone there is none and each row has a chevron.
+ */
 @Composable
-private fun CategoryCard(category: Category, summary: String, badge: Boolean, modifier: Modifier, onClick: () -> Unit) {
-    val press = remember { MutableInteractionSource() }
-    Box(
-        modifier.pressScale(press).heightIn(min = 120.dp).clip(RoundedCornerShape(22.dp)).background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .clickable(press, LocalIndication.current, onClick = onClick),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Box(
-                Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                contentAlignment = Alignment.Center,
-            ) { Icon(category.icon, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp)) }
-            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(stringResource(category.title), fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                // Two lines on every card, so a longer summary doesn't make its card taller than the others.
-                Text(
-                    summary, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    minLines = 2, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 16.sp,
-                )
+private fun CategoryGroups(selected: Category?, updates: Boolean, summary: @Composable (Category) -> String, onClick: (Category) -> Unit) {
+    Category.entries.groupBy { it.group }.forEach { (group, categories) ->
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            SectionHeader(stringResource(group), Modifier.padding(start = 20.dp, bottom = 10.dp))
+            categories.forEachIndexed { index, category ->
+                val top = if (index == 0) 24.dp else 6.dp
+                val bottom = if (index == categories.lastIndex) 24.dp else 6.dp
+                CategoryRow(
+                    category, summary(category), RoundedCornerShape(top, top, bottom, bottom),
+                    selected = category == selected, chevron = selected == null,
+                    badge = category == Category.COMPONENTS && updates,
+                ) { onClick(category) }
             }
         }
-        if (badge) Badge(Modifier.align(Alignment.TopEnd).padding(18.dp))
     }
 }
 
-private val CategoryRowHeight = 52.dp
-
-/** A category in the tablet's list (the chosen one's background is drawn under the list). */
+/** A category: its icon in a circle, its name and a line of its state; the desktop's in the primary tones, the system's in the secondary. */
 @Composable
-private fun CategoryRow(category: Category, selected: Boolean, badge: Boolean, onClick: () -> Unit) {
+private fun CategoryRow(
+    category: Category,
+    summary: String,
+    shape: Shape,
+    selected: Boolean,
+    chevron: Boolean,
+    badge: Boolean,
+    onClick: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    val desktop = category.group == R.string.settings_group_desktop
+    val background by animateColorAsState(if (selected) colors.secondaryContainer else colors.surfaceContainerLow, label = "row")
+    val circle by animateColorAsState(
+        when {
+            selected -> colors.primary
+            desktop -> colors.primaryContainer
+            else -> colors.secondaryContainer
+        },
+        label = "circle",
+    )
+    val icon by animateColorAsState(
+        when {
+            selected -> colors.onPrimary
+            desktop -> colors.onPrimaryContainer
+            else -> colors.onSecondaryContainer
+        },
+        label = "icon",
+    )
+    val press = remember { MutableInteractionSource() }
     Row(
-        Modifier.fillMaxWidth().height(CategoryRowHeight).clip(RoundedCornerShape(18.dp))
-            .selectable(selected, onClick = onClick).padding(horizontal = 16.dp),
+        Modifier.pressScale(press, 0.97f).fillMaxWidth().heightIn(min = 72.dp).clip(shape).background(background)
+            .selectable(selected, press, LocalIndication.current, onClick = onClick).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Icon(category.icon, null, tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(22.dp))
-        Text(
-            stringResource(category.title),
-            fontSize = 15.sp,
-            fontWeight = if (selected) FontWeight.Medium else FontWeight.Normal,
-            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.weight(1f),
-        )
+        Box(Modifier.size(40.dp).clip(CircleShape).background(circle), contentAlignment = Alignment.Center) {
+            Icon(category.icon, null, tint = icon, modifier = Modifier.size(22.dp))
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                stringResource(category.title), fontSize = 16.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = if (selected) colors.onSecondaryContainer else colors.onSurface,
+            )
+            Text(
+                summary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                color = when {
+                    badge -> colors.primary
+                    selected -> colors.onSecondaryContainer
+                    else -> colors.onSurfaceVariant
+                },
+            )
+        }
         if (badge) Badge()
+        if (chevron) Icon(Icons.Chevron, null, tint = colors.outline, modifier = Modifier.size(20.dp))
     }
 }
 
