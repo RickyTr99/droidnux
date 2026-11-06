@@ -6,7 +6,7 @@ DroidNux runs a real Linux desktop on Android without root: KDE Plasma on Debian
 video decoding. Made for tablets first, then phones, with touch, keyboard and trackpad.
 
 > [!WARNING]
-> Early development, no release yet. Tested on a Galaxy Tab S9+ and a Galaxy S26 Ultra.
+> Early development. The first release is coming in November 2026.
 
 <p align="center">
   <img src=".github/screenshots/home.png" alt="Home: the desktop, favorites and all apps" width="100%">
