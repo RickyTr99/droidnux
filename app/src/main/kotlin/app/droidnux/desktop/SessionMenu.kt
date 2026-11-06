@@ -311,7 +311,7 @@ class SessionMenu(
         isClickable = true
         isFocusable = false
         setOnClickListener { showConfirm(false) }
-        addView(confirmDialog, FrameLayout.LayoutParams(dp(CONFIRM_DP), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END))
+        addView(confirmDialog, FrameLayout.LayoutParams(dp(CONFIRM_DP), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.LEFT))
     }
 
     init {
@@ -329,7 +329,8 @@ class SessionMenu(
         confirmDialog.animate().cancel()
         if (show) {
             (confirmDialog.layoutParams as FrameLayout.LayoutParams).apply {
-                marginEnd = (view.width - barX(endButton.right.toFloat()).roundToInt()).coerceAtLeast(0)
+                // Its right edge under the End button's; leftMargin: a marginEnd set after layout is never resolved.
+                leftMargin = (barX(endButton.right.toFloat()).roundToInt() - dp(CONFIRM_DP)).coerceAtLeast(dp(8))
                 topMargin = barY(bar.height.toFloat()).roundToInt() + dp(8)
             }
             confirmDialog.requestLayout()
