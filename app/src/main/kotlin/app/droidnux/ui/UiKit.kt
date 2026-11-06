@@ -2,6 +2,7 @@ package app.droidnux.ui
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +63,7 @@ fun InfoRow(
     text: String? = null,
     icon: ImageVector? = null,
     iconTint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
+    image: Painter? = null,
     selected: Boolean = false,
     onClick: (() -> Unit)? = null,
     action: (@Composable () -> Unit)? = null,
@@ -83,6 +86,7 @@ fun InfoRow(
         horizontalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (icon != null) Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(26.dp))
+        if (image != null) Image(image, contentDescription = null, modifier = Modifier.size(40.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp, fontWeight = FontWeight.Medium)
             if (text != null) Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 14.sp)

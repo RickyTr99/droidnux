@@ -383,6 +383,13 @@
     <string name="settings_group_desktop">Desktop</string>
     <string name="settings_group_system">Sistema</string>
     <string name="settings_diagnostics_text">Prove del sistema e log</string>
+    <string name="settings_info">Info</string>
+    <string name="settings_name_change">Cambia nome</string>
+    <string name="info_version">Versione</string>
+    <string name="info_creator">Creatore</string>
+    <string name="info_source">Codice</string>
+    <string name="info_license">Licenza</string>
+    <string name="info_other_projects">Altri progetti</string>
     <string name="section_container">Container</string>
     <string name="diagnostics_desktop_log">Log dell’installazione del desktop</string>
     <string name="diagnostics_log">Log</string>

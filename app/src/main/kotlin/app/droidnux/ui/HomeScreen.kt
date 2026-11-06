@@ -100,6 +100,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -189,6 +190,10 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
@@ -198,7 +203,9 @@ import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.LifecycleStartEffect
 import app.droidnux.MainActivity
+import app.droidnux.BuildConfig
 import app.droidnux.R
+import app.droidnux.desktop.Account
 import app.droidnux.container.Component
 import app.droidnux.container.DesktopEnvironment.LinuxApp
 import app.droidnux.desktop.DesktopActivity
@@ -233,6 +240,7 @@ private enum class Category(val title: Int, val icon: ImageVector, val group: In
     COMPONENTS(R.string.settings_components, Icons.Package, R.string.settings_group_system),
     ANDROID(R.string.settings_android, Icons.Android, R.string.settings_group_system),
     DIAGNOSTICS(R.string.system_diagnostics, Icons.Pulse, R.string.settings_group_system),
+    INFO(R.string.settings_info, Icons.About, R.string.settings_group_system),
 }
 
 @Composable
@@ -1133,6 +1141,7 @@ private fun SettingsTab(
             Category.COMPONENTS -> stringResource(if (updates) R.string.settings_components_update else R.string.settings_components_ok)
             Category.ANDROID -> stringResource(R.string.settings_android_text)
             Category.DIAGNOSTICS -> stringResource(R.string.settings_diagnostics_text)
+            Category.INFO -> BuildConfig.VERSION_NAME
         }
     }
     val pageContent = @Composable { it: Category ->
@@ -1141,10 +1150,11 @@ private fun SettingsTab(
                 Category.DESKTOP -> DesktopPage(settings, screen, ::save)
                 Category.APP -> AppPage(settings, ::save)
                 Category.STATS -> StatsPage(settings, screen, viewModel.wallpaperFile, ::save)
-                Category.ACCOUNT -> AccountPage(settings)
+                Category.ACCOUNT -> AccountPage(settings, ::save)
                 Category.COMPONENTS -> ComponentsPage(state, viewModel)
                 Category.ANDROID -> SystemChecks(state.gpu)
                 Category.DIAGNOSTICS -> DiagnosticsPage(state, viewModel, settings, ::save)
+                Category.INFO -> InfoPage()
             }
         }
     }
@@ -1693,12 +1703,72 @@ private fun InputRows(settings: DesktopSettings, save: ((DesktopSettings) -> Des
 }
 
 @Composable
-private fun AccountPage(settings: DesktopSettings) {
+private fun AccountPage(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    var changingName by remember { mutableStateOf(false) }
     var changingPassword by remember { mutableStateOf(false) }
+    InfoRow(stringResource(R.string.wizard_account_name)) {
+        Text(settings.user, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
+        FilledTonalButton(onClick = { changingName = true }) { Text(stringResource(R.string.action_change)) }
+    }
     InfoRow(stringResource(R.string.wizard_account_password)) {
         FilledTonalButton(onClick = { changingPassword = true }) { Text(stringResource(R.string.action_change)) }
     }
+    // The session script renames the account, and moves its home, when the desktop next starts.
+    if (changingName) NameDialog(settings.user, onDismiss = { changingName = false }) { name -> save { it.copy(user = name) } }
     if (changingPassword) PasswordDialog(onDismiss = { changingPassword = false })
+}
+
+@Composable
+private fun NameDialog(current: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember { mutableStateOf(current) }
+    val ok = Account.isValidName(name)
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_name_change)) },
+        text = {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it.trim().lowercase() },
+                label = { Text(stringResource(R.string.wizard_account_name)) },
+                supportingText = {
+                    Text(stringResource(if (name.isEmpty() || ok) R.string.wizard_account_name_hint else R.string.wizard_account_name_bad))
+                },
+                isError = name.isNotEmpty() && !ok,
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Done),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onSave(name); onDismiss() }, enabled = ok && name != current) {
+                Text(stringResource(R.string.action_save))
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_cancel)) } },
+    )
+}
+
+@Composable
+private fun InfoPage() {
+    val uri = LocalUriHandler.current
+    val value = @Composable { text: String -> Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp) }
+    val open = @Composable { Icon(Icons.Open, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
+    InfoRow(stringResource(R.string.info_version)) { value(BuildConfig.VERSION_NAME) }
+    InfoRow(stringResource(R.string.info_creator)) { value("RickyTr99") }
+    InfoRow(stringResource(R.string.info_source), onClick = { uri.openUri("https://github.com/RickyTr99/droidnux") }) {
+        if (!isCompact()) value("RickyTr99/droidnux")
+        open()
+    }
+    InfoRow(stringResource(R.string.info_license)) { value("GPL-3.0") }
+    PageSection(R.string.info_other_projects)
+    InfoRow(
+        "MoonVibe",
+        image = painterResource(R.drawable.moonvibe),
+        onClick = { uri.openUri("https://github.com/RickyTr99/moonvibe") },
+    ) {
+        if (!isCompact()) value("RickyTr99/moonvibe")
+        open()
+    }
 }
 
 /** The accessibility service that hands the desktop Meta, Alt+Tab and the other keys Android keeps. */

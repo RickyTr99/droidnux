@@ -387,6 +387,13 @@
     <string name="settings_group_desktop">Desktop</string>
     <string name="settings_group_system">System</string>
     <string name="settings_diagnostics_text">System checks and logs</string>
+    <string name="settings_info">About</string>
+    <string name="settings_name_change">Change name</string>
+    <string name="info_version">Version</string>
+    <string name="info_creator">Creator</string>
+    <string name="info_source">Source code</string>
+    <string name="info_license">License</string>
+    <string name="info_other_projects">Other projects</string>
     <string name="diagnostics_desktop_log">Desktop install log</string>
     <string name="diagnostics_log">Log</string>
     <string name="diagnostics_detailed_logs">Detailed logs</string>
