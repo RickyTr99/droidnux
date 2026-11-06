@@ -115,6 +115,8 @@ struct impl {
     /* Main loop, sink only: the latency the stream's port reports (frames). */
     struct spa_source* latency_timer;
     uint32_t latency;
+    /* The graph's latency upstream of the port, which publish_latency keeps. */
+    struct spa_latency_info latency_output;
     /* Main loop, sink only: messages from the app; the node, bound through a
      * connection of its own to set its volume as the desktop does (neither
      * pw_stream_set_param nor the stream's own connection reach the node's
@@ -399,9 +401,10 @@ static void publish_latency(struct impl* impl, uint32_t frames) {
     uint8_t buffer[256];
     struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
     struct spa_latency_info latency = SPA_LATENCY_INFO(SPA_DIRECTION_INPUT, .min_rate = frames, .max_rate = frames);
-    const struct spa_pod* params[1] = {spa_latency_build(&b, SPA_PARAM_Latency, &latency)};
+    const struct spa_pod* params[2] = {spa_latency_build(&b, SPA_PARAM_Latency, &latency),
+                                       spa_latency_build(&b, SPA_PARAM_Latency, &impl->latency_output)};
     impl->latency = frames;
-    pw_stream_update_params(impl->stream, params, 1);
+    pw_stream_update_params(impl->stream, params, 2);
 }
 
 static void on_latency_timer(void* data, uint64_t expirations) {
@@ -450,6 +453,15 @@ static void apply_app_volume(struct impl* impl) {
  * apply_app_volume): Android's media volume follows. */
 static void stream_param_changed(void* data, uint32_t id, const struct spa_pod* param) {
     struct impl* impl = data;
+    /* The graph setting the port's latency replaces every Latency param of the
+     * stream, ours too: the sink's goes back (as module-raop-sink does). */
+    if (!impl->capture && id == SPA_PARAM_Latency) {
+        struct spa_latency_info info;
+        if (param != NULL && spa_latency_parse(param, &info) >= 0 && info.direction == SPA_DIRECTION_OUTPUT)
+            impl->latency_output = info;
+        if (impl->latency != 0) publish_latency(impl, impl->latency);
+        return;
+    }
     if (impl->capture || id != SPA_PARAM_Props || param == NULL || !spa_pod_is_object(param)) return;
     float volume = impl->volume;
     bool mute = impl->mute;
@@ -719,6 +731,7 @@ static int create_node(struct pw_impl_module* module, bool capture) {
     if (impl == NULL) return -errno;
     impl->capture = capture;
     impl->channels = capture ? 1u : 2u;
+    impl->latency_output = SPA_LATENCY_INFO(SPA_DIRECTION_OUTPUT);
     impl->sock = -1;
     impl->module = module;
     impl->context = context;
