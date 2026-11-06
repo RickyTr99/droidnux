@@ -26,6 +26,17 @@ android {
         }
     }
 
+    buildTypes {
+        debug {
+            externalNativeBuild {
+                cmake {
+                    // The compositor and presenter are on every frame: -O0 makes debug builds stutter.
+                    arguments += listOf("-DCMAKE_BUILD_TYPE=RelWithDebInfo")
+                }
+            }
+        }
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")
