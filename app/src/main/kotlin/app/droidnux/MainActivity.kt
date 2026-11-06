@@ -24,6 +24,9 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import app.droidnux.container.Container
+import app.droidnux.container.DesktopEnvironment
+import app.droidnux.container.Distro
 import app.droidnux.desktop.Account
 import app.droidnux.desktop.DesktopActivity
 import app.droidnux.desktop.DesktopSettings
@@ -45,6 +48,14 @@ class MainActivity : ComponentActivity() {
             }
             finish()
             return
+        }
+        // Started from the launcher with the setting on: the desktop at once, the Home behind it.
+        val settings = DesktopSettings.load(this)
+        if (savedInstanceState == null && intent.action == Intent.ACTION_MAIN && settings.openAtStart &&
+            settings.user.isNotEmpty() && Account.hasPassword(this) &&
+            DesktopEnvironment.isInstalled(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE))
+        ) {
+            startActivity(Intent(this, DesktopActivity::class.java))
         }
         setContent {
             DroidNuxTheme {

@@ -84,6 +84,8 @@ class SessionMenu(
     private var scale = 1f
     private var uiScale = 1f
     private var opened = false
+    /** The bar at the bottom of the screen, its popup and dialog above it (DesktopSettings.menuBottom). */
+    var atBottom = false
     private val applyScale = Runnable { listener.onScaleChanged(scale) }
     private val applyUiScale = Runnable { listener.onUiScaleChanged(uiScale) }
 
@@ -108,10 +110,10 @@ class SessionMenu(
         setPadding(barPadding, barPadding, barPadding, barPadding)
         isClickable = true // touches on the bar's background do not close the menu
         isFocusable = false // clickable implies focusable: focus belongs to the buttons
-        // Shrunk to fit (open), from its top center.
+        // Shrunk to fit (open), from the center of its screen edge.
         addOnLayoutChangeListener { bar, _, _, _, _, _, _, _, _ ->
             bar.pivotX = bar.width / 2f
-            bar.pivotY = 0f
+            bar.pivotY = if (atBottom) bar.height.toFloat() else 0f
         }
     }
     private val keyboardButton: View
@@ -142,6 +144,7 @@ class SessionMenu(
         setPadding(dp(8), dp(8), dp(8), dp(8))
         isClickable = true // a touch on the popup does not close it
         isFocusable = false
+        addOnLayoutChangeListener { popup, _, _, _, _, _, _, _, _ -> if (atBottom) popup.pivotY = popup.height.toFloat() }
     }
     /** Each popup button and its page. */
     private val pages = mutableListOf<Pair<View, LinearLayout>>()
@@ -219,9 +222,15 @@ class SessionMenu(
         val width = popup.layoutParams.width
         val center = barX(button.left + button.width / 2f)
         val x = (center - width / 2f).coerceIn(dp(8f), (view.width - width - dp(8)).toFloat().coerceAtLeast(dp(8f)))
-        popup.translationY = barY(bar.height.toFloat()) + dp(8f)
+        // Under the bar, or above it from the bottom (its height changes with the page).
+        (popup.layoutParams as FrameLayout.LayoutParams).apply {
+            gravity = (if (atBottom) Gravity.BOTTOM else Gravity.TOP) or Gravity.START
+            bottomMargin = if (atBottom) (view.height - barY(0f)).roundToInt() + dp(8) else 0
+        }
+        popup.requestLayout()
+        popup.translationY = if (atBottom) 0f else barY(bar.height.toFloat()) + dp(8f)
         popup.pivotX = center - x
-        popup.pivotY = 0f
+        popup.pivotY = if (atBottom) popup.height.toFloat() else 0f
         popup.animate().cancel()
         for ((_, other) in pages) if (other !== page && other !== previous) {
             other.animate().cancel()
@@ -297,10 +306,10 @@ class SessionMenu(
                 listener.onExit()
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)).apply { marginStart = dp(8) })
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
-        // It grows out of the End button, at its top right.
+        // It grows out of the End button, at its top right (bottom right under a bar at the bottom).
         addOnLayoutChangeListener { dialog, _, _, _, _, _, _, _, _ ->
             dialog.pivotX = dialog.width.toFloat()
-            dialog.pivotY = 0f
+            dialog.pivotY = if (atBottom) dialog.height.toFloat() else 0f
         }
     }
 
@@ -331,7 +340,9 @@ class SessionMenu(
             (confirmDialog.layoutParams as FrameLayout.LayoutParams).apply {
                 // Its right edge under the End button's; leftMargin: a marginEnd set after layout is never resolved.
                 leftMargin = (barX(endButton.right.toFloat()).roundToInt() - dp(CONFIRM_DP)).coerceAtLeast(dp(8))
-                topMargin = barY(bar.height.toFloat()).roundToInt() + dp(8)
+                gravity = (if (atBottom) Gravity.BOTTOM else Gravity.TOP) or Gravity.LEFT
+                topMargin = if (atBottom) 0 else barY(bar.height.toFloat()).roundToInt() + dp(8)
+                bottomMargin = if (atBottom) (view.height - barY(0f)).roundToInt() + dp(8) else 0
             }
             confirmDialog.requestLayout()
             confirmDialog.scaleX = 0.9f
@@ -353,16 +364,21 @@ class SessionMenu(
         showConfirm(false, animate = false)
         brightnessSlider.show(listener.brightness())
         volumeSlider.show(listener.volume())
-        // Clear of the camera hole at the top, and of the screen's edges.
+        // Clear of the camera hole, and of the screen's edges.
         val cutout = view.rootWindowInsets?.displayCutout
-        (bar.layoutParams as FrameLayout.LayoutParams).topMargin = (cutout?.safeInsetTop ?: 0) + dp(if (compact) 12 else 24)
+        (bar.layoutParams as FrameLayout.LayoutParams).apply {
+            gravity = (if (atBottom) Gravity.BOTTOM else Gravity.TOP) or Gravity.CENTER_HORIZONTAL
+            topMargin = if (atBottom) 0 else (cutout?.safeInsetTop ?: 0) + dp(if (compact) 12 else 24)
+            bottomMargin = if (atBottom) (cutout?.safeInsetBottom ?: 0) + dp(if (compact) 12 else 24) else 0
+        }
+        bar.requestLayout()
         fitBar((view.parent as View).width - (cutout?.safeInsetLeft ?: 0) - (cutout?.safeInsetRight ?: 0) - 2 * dp(16))
         cpuTicks = -1
         handler.removeCallbacks(sampler)
         sampler.run()
         opened = true
         fade(view, true)
-        bar.translationY = -dp(SLIDE_DP)
+        bar.translationY = slide()
         bar.animate().translationY(0f).setDuration(MEDIUM_MS).setInterpolator(DECELERATE).start()
         keyboardButton.requestFocus()
     }
@@ -405,7 +421,7 @@ class SessionMenu(
             }
         }
         fade(view, false)
-        bar.animate().translationY(-dp(SLIDE_DP)).setDuration(SHORT_MS).setInterpolator(ACCELERATE).start()
+        bar.animate().translationY(slide()).setDuration(SHORT_MS).setInterpolator(ACCELERATE).start()
         listener.onClosed()
     }
 
@@ -703,7 +719,10 @@ class SessionMenu(
 
     /** Where [x] and [y] of the bar's layout land in the menu's layer, the bar shrunk (fitBar) but not sliding. */
     private fun barX(x: Float) = bar.left + bar.pivotX + (x - bar.pivotX) * bar.scaleX
-    private fun barY(y: Float) = bar.top + y * bar.scaleY
+    private fun barY(y: Float) = bar.top + bar.pivotY + (y - bar.pivotY) * bar.scaleY
+
+    /** Where the bar slides in from and out to: off its screen edge. */
+    private fun slide() = if (atBottom) dp(SLIDE_DP) else -dp(SLIDE_DP)
 
     /** A round button in the bar: [icon] in [tint] on [fill], pressed in with a spring as in the Home. */
     @SuppressLint("ClickableViewAccessibility")

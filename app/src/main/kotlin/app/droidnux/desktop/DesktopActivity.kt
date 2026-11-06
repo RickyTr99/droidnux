@@ -74,6 +74,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     /** The touchscreen in trackpad mode: the finger moves the pointer instead of clicking where it lands. */
     private val screenTouchpad = CapturedTouchpad()
     private var trackpadMode = false
+    /** The settings the desktop follows (reloadSettings): what opens the menu, which keyboard, the screen. */
+    private var prefs = DesktopSettings()
     /** Interface size the user chose, 1 = the default; independent of the resolution ([desktopScale]). */
     private var uiScale = 1f
     private lateinit var menu: SessionMenu
@@ -223,6 +225,14 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     /** Settings changed in the app while the desktop was in the background apply on return. */
     private fun reloadSettings() {
         val settings = DesktopSettings.load(this)
+        prefs = settings
+        pcKeyboard.haptics = settings.haptics
+        menu.atBottom = settings.menuBottom
+        if (settings.keepScreenOn) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
         trackpadMode = settings.trackpad
         overlay?.apply(settings, animate = true)
         overlay?.visibility = if (settings.stats) View.VISIBLE else View.GONE
@@ -328,12 +338,16 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         clipboard.removePrimaryClipChangedListener(clipboardListener)
         super.onPause()
     }
+
     @Deprecated("Android 12 and older; newer versions use the OnBackInvokedCallback")
     override fun onBackPressed() = onBack()
 
-    /** Back hides the keyboard first, then opens or closes the menu. */
+    /** Back hides the keyboard first, then closes the menu, or opens it unless the settings say not to. */
     private fun onBack() {
-        if (pcKeyboard.isShown && !menu.isOpen) pcKeyboard.hide() else toggleMenu()
+        when {
+            pcKeyboard.isShown && !menu.isOpen -> pcKeyboard.hide()
+            menu.isOpen || prefs.menuBack -> toggleMenu()
+        }
     }
 
     override fun onDestroy() {
@@ -543,7 +557,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
 
     /** Ctrl+Alt+Space: free in Plasma and in common Linux apps. */
-    private fun isMenuShortcut(event: KeyEvent) =
+    private fun isMenuShortcut(event: KeyEvent) = prefs.menuShortcut &&
         event.keyCode == KeyEvent.KEYCODE_SPACE && event.isCtrlPressed && event.isAltPressed
 
     private fun isSystemKey(keyCode: Int) = keyCode == KeyEvent.KEYCODE_VOLUME_UP ||
@@ -632,6 +646,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             if (event.actionMasked == MotionEvent.ACTION_MOVE) DisplayServer.pointer(event.x * scale, event.y * scale)
             return true
         }
+        if (menuSwipe(event)) return true
         if (trackpadMode) {
             showCursor(true)
             // A finger crossing the screen moves the pointer across the desktop, before its acceleration.
@@ -646,6 +661,36 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             sendTouch(event)
         }
         return true
+    }
+
+    /** Where a finger that went down on the top edge started (y), while it may still be the menu's swipe. */
+    private var swipeFrom = -1f
+
+    /**
+     * A finger swiping down from the top edge opens the menu (when the settings ask for it).
+     * Its touch reaches the desktop until then, so a tap on the edge still works; once it
+     * is the swipe the desktop gets a cancel. True when the event is the swipe's.
+     */
+    private fun menuSwipe(event: MotionEvent): Boolean {
+        val density = resources.displayMetrics.density
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN ->
+                swipeFrom = if (prefs.menuSwipe && !menu.isOpen && event.y <= SWIPE_EDGE_DP * density) event.y else -1f
+            MotionEvent.ACTION_POINTER_DOWN -> swipeFrom = -1f
+            MotionEvent.ACTION_MOVE -> if (swipeFrom >= 0f && event.y - swipeFrom >= SWIPE_DP * density) {
+                swipeFrom = -2f // the swipe's, until the finger leaves
+                val cancel = MotionEvent.obtain(event).apply { action = MotionEvent.ACTION_CANCEL }
+                if (trackpadMode) screenTouchpad.onEvent(cancel, 1f / scale) else sendTouch(cancel)
+                cancel.recycle()
+                toggleMenu()
+                return true
+            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> if (swipeFrom == -2f) {
+                swipeFrom = -1f
+                return true
+            }
+        }
+        return swipeFrom == -2f
     }
 
     /** The fingers as touch points, for KWin and its apps to handle (taps, gestures, scrolling). */
@@ -715,7 +760,16 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     // -- Keyboard ------------------------------------------------------------
 
-    private fun showKeyboard() = pcKeyboard.show(DesktopSettings.load(this).xkbLayout())
+    /** The keyboard the settings chose: the full one, or Android's. */
+    private fun showKeyboard() {
+        if (prefs.androidKeyboard) showAndroidKeyboard() else pcKeyboard.show(prefs.xkbLayout())
+    }
+
+    private fun showAndroidKeyboard() {
+        pcKeyboard.hide()
+        surfaceView.requestFocus()
+        getSystemService(InputMethodManager::class.java).showSoftInput(surfaceView, 0)
+    }
 
     /** Hides whichever keyboard shows, or shows the full one. */
     private fun toggleKeyboard() {
@@ -738,11 +792,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 ?.toString()?.takeIf { it.isNotEmpty() }?.let { DisplayServer.commitText(it) }
         }
 
-        override fun onAndroidKeyboard() {
-            pcKeyboard.hide()
-            surfaceView.requestFocus()
-            getSystemService(InputMethodManager::class.java).showSoftInput(surfaceView, 0)
-        }
+        override fun onAndroidKeyboard() = showAndroidKeyboard()
 
         override fun onHeight(height: Int) {
             pcKeyboardHeight = height
@@ -922,6 +972,9 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val TAP_FOCUS_MS = 150L
         /** How long after a resize a brightness from KWin counts as its saved setting coming back, not the user. */
         private const val RESIZE_SETTLE_MS = 2000L
+        /** The menu's swipe: from this close to the top edge, at least this far down. */
+        private const val SWIPE_EDGE_DP = 24
+        private const val SWIPE_DP = 48
 
         /** The desktop on screen, if any (main thread only). */
         private var current: DesktopActivity? = null

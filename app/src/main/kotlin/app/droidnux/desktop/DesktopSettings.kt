@@ -37,6 +37,20 @@ data class DesktopSettings(
     val user: String = "",
     /** The app's theme color (ui/theme/ThemeColor); empty: the default. */
     val themeColor: String = "",
+    /** What opens the session's menu: Back (gesture or key), Ctrl+Alt+Space, a swipe down from the top edge. */
+    val menuBack: Boolean = true,
+    val menuShortcut: Boolean = true,
+    val menuSwipe: Boolean = false,
+    /** The menu's bar at the bottom of the screen instead of the top. */
+    val menuBottom: Boolean = false,
+    /** The keyboard the menu and text fields open: Android's instead of the full one (PcKeyboard). */
+    val androidKeyboard: Boolean = false,
+    /** Vibration on the full keyboard's keys. */
+    val haptics: Boolean = true,
+    /** The screen stays on while the desktop is shown. */
+    val keepScreenOn: Boolean = false,
+    /** The app opens straight into the desktop. */
+    val openAtStart: Boolean = false,
 ) {
     fun statsPosition(style: StatsStyle) = statsPositions[style] ?: style.defaultPosition
     fun statsItems(style: StatsStyle) = statsItemsByStyle[style] ?: style.defaultItems
@@ -89,6 +103,14 @@ data class DesktopSettings(
                 keyboardButtonY = props.getProperty("keyboardButtonY")?.toFloatOrNull()?.coerceIn(0f, 1f) ?: defaults.keyboardButtonY,
                 user = props.getProperty("user")?.takeIf { Account.isValidName(it) } ?: defaults.user,
                 themeColor = props.getProperty("themeColor") ?: defaults.themeColor,
+                menuBack = props.getProperty("menuBack")?.toBooleanStrictOrNull() ?: defaults.menuBack,
+                menuShortcut = props.getProperty("menuShortcut")?.toBooleanStrictOrNull() ?: defaults.menuShortcut,
+                menuSwipe = props.getProperty("menuSwipe")?.toBooleanStrictOrNull() ?: defaults.menuSwipe,
+                menuBottom = props.getProperty("menuBottom")?.toBooleanStrictOrNull() ?: defaults.menuBottom,
+                androidKeyboard = props.getProperty("androidKeyboard")?.toBooleanStrictOrNull() ?: defaults.androidKeyboard,
+                haptics = props.getProperty("haptics")?.toBooleanStrictOrNull() ?: defaults.haptics,
+                keepScreenOn = props.getProperty("keepScreenOn")?.toBooleanStrictOrNull() ?: defaults.keepScreenOn,
+                openAtStart = props.getProperty("openAtStart")?.toBooleanStrictOrNull() ?: defaults.openAtStart,
             )
         }
 
@@ -111,6 +133,14 @@ data class DesktopSettings(
                 setProperty("keyboardButtonY", settings.keyboardButtonY.toString())
                 setProperty("user", settings.user)
                 setProperty("themeColor", settings.themeColor)
+                setProperty("menuBack", settings.menuBack.toString())
+                setProperty("menuShortcut", settings.menuShortcut.toString())
+                setProperty("menuSwipe", settings.menuSwipe.toString())
+                setProperty("menuBottom", settings.menuBottom.toString())
+                setProperty("androidKeyboard", settings.androidKeyboard.toString())
+                setProperty("haptics", settings.haptics.toString())
+                setProperty("keepScreenOn", settings.keepScreenOn.toString())
+                setProperty("openAtStart", settings.openAtStart.toString())
             }
             val file = File(context.filesDir, FILE)
             val temp = File(context.filesDir, "$FILE.new")

@@ -4,8 +4,6 @@ import app.droidnux.ui.theme.darkColors
 import app.droidnux.ui.theme.ThemeColor
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.Role
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Context
@@ -96,6 +94,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
@@ -227,10 +226,10 @@ private enum class Tab(val label: Int, val icon: ImageVector, val selectedIcon: 
 
 /** The Settings tab's pages, in their groups. */
 private enum class Category(val title: Int, val icon: ImageVector, val group: Int) {
-    SCREEN(R.string.settings_screen, Icons.Desktop, R.string.settings_group_desktop),
-    INPUT(R.string.settings_input, Icons.Keyboard, R.string.settings_group_desktop),
+    DESKTOP(R.string.settings_desktop, Icons.Desktop, R.string.settings_group_desktop),
     STATS(R.string.settings_stats, Icons.Stats, R.string.settings_group_desktop),
     ACCOUNT(R.string.settings_account, Icons.User, R.string.settings_group_desktop),
+    APP(R.string.settings_app, Icons.Apps, R.string.settings_group_system),
     COMPONENTS(R.string.settings_components, Icons.Package, R.string.settings_group_system),
     ANDROID(R.string.settings_android, Icons.Android, R.string.settings_group_system),
     DIAGNOSTICS(R.string.system_diagnostics, Icons.Pulse, R.string.settings_group_system),
@@ -1119,10 +1118,15 @@ private fun SettingsTab(
     val screen = remember { context.getSystemService(WindowManager::class.java).maximumWindowMetrics.bounds }
     val summary = @Composable { it: Category ->
         when (it) {
-            Category.SCREEN -> "${(screen.width() * settings.scale).toInt() and 1.inv()} × ${(screen.height() * settings.scale).toInt() and 1.inv()} · " +
-                "${(settings.uiScale * 100).roundToInt()}%"
-            Category.INPUT -> layoutName(settings.layout) + " · " +
+            Category.DESKTOP -> "${(screen.width() * settings.scale).toInt() and 1.inv()} × ${(screen.height() * settings.scale).toInt() and 1.inv()} · " +
+                "${(settings.uiScale * 100).roundToInt()}% · " +
                 stringResource(if (settings.trackpad) R.string.menu_mode_trackpad else R.string.menu_mode_touch)
+            Category.APP -> stringResource(themeColorName(ThemeColor.picked ?: ThemeColor.resolve(settings.themeColor))) + " · " +
+                listOfNotNull(
+                    stringResource(R.string.settings_menu_back).takeIf { settings.menuBack },
+                    stringResource(R.string.settings_menu_shortcut).takeIf { settings.menuShortcut },
+                    stringResource(R.string.settings_menu_swipe).takeIf { settings.menuSwipe },
+                ).joinToString(", ").ifEmpty { stringResource(R.string.settings_menu_none) }
             Category.STATS -> stringResource(if (settings.stats) settings.statsStyle.label else R.string.stats_off)
             Category.ACCOUNT -> settings.user
             Category.COMPONENTS -> stringResource(if (updates) R.string.settings_components_update else R.string.settings_components_ok)
@@ -1133,8 +1137,8 @@ private fun SettingsTab(
     val pageContent = @Composable { it: Category ->
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             when (it) {
-                Category.SCREEN -> ScreenPage(settings, screen, ::save)
-                Category.INPUT -> InputPage(settings, ::save)
+                Category.DESKTOP -> DesktopPage(settings, screen, ::save)
+                Category.APP -> AppPage(settings, ::save)
                 Category.STATS -> StatsPage(settings, screen, viewModel.wallpaperFile, ::save)
                 Category.ACCOUNT -> AccountPage(settings)
                 Category.COMPONENTS -> ComponentsPage(state, viewModel)
@@ -1178,7 +1182,7 @@ private fun SettingsTab(
             }
         }
     } else {
-        val current = category ?: Category.SCREEN
+        val current = category ?: Category.DESKTOP
         // The bottom padding inside the scrolling columns: they run on under the floating bar.
         val direction = LocalLayoutDirection.current
         val bottom = padding.calculateBottomPadding()
@@ -1365,7 +1369,6 @@ private fun CategoryRow(
 }
 
 /** The theme color, as in MoonVibe: under its name a dot for each color, the chosen one bigger and with a check. */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ThemeColorRow(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
     val context = LocalContext.current
@@ -1378,7 +1381,8 @@ private fun ThemeColorRow(settings: DesktopSettings, save: ((DesktopSettings) ->
             Text(stringResource(R.string.theme_color), fontSize = 16.sp, fontWeight = FontWeight.Medium)
             Text(stringResource(themeColorName(chosen)), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        FlowRow(Modifier.padding(top = 4.dp).offset(x = (-8).dp)) {
+        // One row: on a phone it scrolls sideways instead of taking a second line.
+        Row(Modifier.padding(top = 4.dp).offset(x = (-8).dp).horizontalScroll(rememberScrollState())) {
             for (color in ThemeColor.choices) {
                 val selected = color == chosen
                 val scale by animateFloatAsState(if (selected) 1.15f else 1f, tween(150), label = "swatch")
@@ -1430,10 +1434,10 @@ private fun themeColorName(color: String) = when (color) {
     else -> R.string.theme_color_blue
 }
 
+/** The desktop's screen, then its keyboard and touch. */
 @Composable
-private fun ScreenPage(settings: DesktopSettings, screen: android.graphics.Rect, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
-    val context = LocalContext.current
-    ThemeColorRow(settings, save)
+private fun DesktopPage(settings: DesktopSettings, screen: android.graphics.Rect, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    PageSection(R.string.settings_screen, first = true)
     var scale by remember { mutableFloatStateOf(settings.scale) }
     SliderRow(
         stringResource(R.string.menu_resolution),
@@ -1448,6 +1452,59 @@ private fun ScreenPage(settings: DesktopSettings, screen: android.graphics.Rect,
         uiScale, DesktopSettings.MIN_UI_SCALE..DesktopSettings.MAX_UI_SCALE,
         onChange = { uiScale = it }, onDone = { save { it.copy(uiScale = uiScale) } },
     )
+    SwitchRow(R.string.settings_screen_on, settings.keepScreenOn) { on -> save { it.copy(keepScreenOn = on) } }
+    PageSection(R.string.settings_input)
+    InputRows(settings, save)
+}
+
+/** The app's own: its color, what opens the session's menu and how it looks, the start. */
+@Composable
+private fun AppPage(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    PageSection(R.string.settings_appearance, first = true)
+    ThemeColorRow(settings, save)
+    PageSection(R.string.settings_session_menu)
+    SwitchRow(R.string.settings_menu_back, settings.menuBack, R.string.settings_menu_back_text) { on -> save { it.copy(menuBack = on) } }
+    SwitchRow(R.string.settings_menu_shortcut, settings.menuShortcut) { on -> save { it.copy(menuShortcut = on) } }
+    SwitchRow(R.string.settings_menu_swipe, settings.menuSwipe, R.string.settings_menu_swipe_text) { on -> save { it.copy(menuSwipe = on) } }
+    ChoiceRow(R.string.settings_menu_position, settings.menuBottom, R.string.settings_menu_top, R.string.settings_menu_bottom) { bottom ->
+        save { it.copy(menuBottom = bottom) }
+    }
+    ChoiceRow(R.string.settings_keyboard_kind, settings.androidKeyboard, R.string.settings_keyboard_full, R.string.settings_keyboard_android) { android ->
+        save { it.copy(androidKeyboard = android) }
+    }
+    SwitchRow(R.string.settings_haptics, settings.haptics) { on -> save { it.copy(haptics = on) } }
+    PageSection(R.string.settings_startup)
+    SwitchRow(R.string.settings_open_at_start, settings.openAtStart) { on -> save { it.copy(openAtStart = on) } }
+}
+
+/** A section's title in a settings page. */
+@Composable
+private fun PageSection(title: Int, first: Boolean = false) {
+    SectionHeader(stringResource(title), Modifier.padding(start = 4.dp, top = if (first) 0.dp else 12.dp, bottom = 4.dp))
+}
+
+@Composable
+private fun SwitchRow(title: Int, checked: Boolean, text: Int? = null, onChange: (Boolean) -> Unit) {
+    InfoRow(stringResource(title), text = text?.let { stringResource(it) }, onClick = { onChange(!checked) }) {
+        Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/** Two choices side by side, [second] chosen when [value]. */
+@Composable
+private fun ChoiceRow(title: Int, value: Boolean, first: Int, second: Int, onChange: (Boolean) -> Unit) {
+    InfoRow(stringResource(title)) {
+        SingleChoiceSegmentedButtonRow {
+            listOf(false to first, true to second).forEachIndexed { index, (choice, label) ->
+                SegmentedButton(
+                    selected = value == choice,
+                    onClick = { onChange(choice) },
+                    shape = SegmentedButtonDefaults.itemShape(index, 2),
+                    icon = {},
+                ) { Text(stringResource(label)) }
+            }
+        }
+    }
 }
 
 /** The statistics over the desktop, as MoonVibe's: the style over a preview of the screen, then where, how opaque and what it shows. */
@@ -1598,19 +1655,10 @@ private fun StatsPreview(settings: DesktopSettings, screen: android.graphics.Rec
 }
 
 @Composable
-private fun InputPage(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+private fun InputRows(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
     var choosingLayout by remember { mutableStateOf(false) }
-    InfoRow(stringResource(R.string.settings_touch)) {
-        SingleChoiceSegmentedButtonRow {
-            listOf(false to R.string.menu_mode_touch, true to R.string.menu_mode_trackpad).forEachIndexed { index, (trackpad, label) ->
-                SegmentedButton(
-                    selected = settings.trackpad == trackpad,
-                    onClick = { save { it.copy(trackpad = trackpad) } },
-                    shape = SegmentedButtonDefaults.itemShape(index, 2),
-                    icon = {},
-                ) { Text(stringResource(label)) }
-            }
-        }
+    ChoiceRow(R.string.settings_touch, settings.trackpad, R.string.menu_mode_touch, R.string.menu_mode_trackpad) { trackpad ->
+        save { it.copy(trackpad = trackpad) }
     }
     InfoRow(stringResource(R.string.settings_layout), onClick = { choosingLayout = true }) {
         Text(layoutName(settings.layout), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
