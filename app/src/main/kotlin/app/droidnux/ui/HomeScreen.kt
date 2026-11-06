@@ -1332,24 +1332,9 @@ private fun CategoryRow(
     onClick: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
-    val desktop = category.group == R.string.settings_group_desktop
     val background by animateColorAsState(if (selected) colors.secondaryContainer else colors.surfaceContainerLow, label = "row")
-    val circle by animateColorAsState(
-        when {
-            selected -> colors.primary
-            desktop -> colors.primaryContainer
-            else -> colors.secondaryContainer
-        },
-        label = "circle",
-    )
-    val icon by animateColorAsState(
-        when {
-            selected -> colors.onPrimary
-            desktop -> colors.onPrimaryContainer
-            else -> colors.onSecondaryContainer
-        },
-        label = "icon",
-    )
+    val circle by animateColorAsState(if (selected) colors.primary else colors.secondaryContainer, label = "circle")
+    val icon by animateColorAsState(if (selected) colors.onPrimary else colors.onSecondaryContainer, label = "icon")
     val press = remember { MutableInteractionSource() }
     // Beside its page (no chevron) a row is chosen on touch down, as the bar's tabs; on a phone a scroll may start on it.
     if (!chevron) {
