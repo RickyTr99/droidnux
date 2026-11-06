@@ -8,5 +8,6 @@
 -keepclassmembers class app.droidnux.display.AudioVolume { void onDesktopVolume(float, boolean); }
 -keepclassmembers class app.droidnux.display.DisplayServer {
     void textInputFromWayland(boolean);
+    void scaleFromWayland(float);
     void clipboardFromDesktop(byte[]);
 }
