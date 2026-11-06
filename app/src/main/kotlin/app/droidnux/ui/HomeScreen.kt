@@ -137,6 +137,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -148,12 +149,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
@@ -1393,8 +1397,28 @@ private fun ThemeColorRow(settings: DesktopSettings, save: ((DesktopSettings) ->
             Text(stringResource(R.string.theme_color), fontSize = 16.sp, fontWeight = FontWeight.Medium)
             Text(stringResource(themeColorName(chosen)), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        // One row: on a phone it scrolls sideways instead of taking a second line.
-        Row(Modifier.padding(top = 4.dp).offset(x = (-8).dp).horizontalScroll(rememberScrollState())) {
+        // One row: on a phone it scrolls sideways instead of taking a second line, its cut sides fading out.
+        val scroll = rememberScrollState()
+        val fadeStart by animateFloatAsState(if (scroll.canScrollBackward) 1f else 0f, tween(150), label = "fadeStart")
+        val fadeEnd by animateFloatAsState(if (scroll.canScrollForward) 1f else 0f, tween(150), label = "fadeEnd")
+        Row(
+            Modifier.padding(top = 4.dp).offset(x = (-8).dp)
+                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                .drawWithContent {
+                    drawContent()
+                    val width = 32.dp.toPx()
+                    val edge = Size(width, size.height)
+                    drawRect(
+                        Brush.horizontalGradient(listOf(Color.Black.copy(alpha = 1f - fadeStart), Color.Black), endX = width),
+                        size = edge, blendMode = BlendMode.DstIn,
+                    )
+                    drawRect(
+                        Brush.horizontalGradient(listOf(Color.Black, Color.Black.copy(alpha = 1f - fadeEnd)), size.width - width, size.width),
+                        topLeft = Offset(size.width - width, 0f), size = edge, blendMode = BlendMode.DstIn,
+                    )
+                }
+                .horizontalScroll(scroll),
+        ) {
             for (color in ThemeColor.choices) {
                 val selected = color == chosen
                 val scale by animateFloatAsState(if (selected) 1.15f else 1f, tween(150), label = "swatch")
@@ -1579,16 +1603,26 @@ private fun StatsPage(settings: DesktopSettings, screen: android.graphics.Rect, 
     var step by remember { mutableFloatStateOf(1f) }
     val gap = with(LocalDensity.current) { 8.dp.toPx() }
     fun store(items: List<StatsItem>) = save { it.copy(statsItemsByStyle = it.statsItemsByStyle + (style to items)) }
-    for (item in order + StatsItem.entries.filter { it !in order }) key(item) {
+    (order + StatsItem.entries.filter { it !in order }).forEachIndexed { index, item -> key(item) {
         val shown = item in order
         val lifted = dragged == item
         val scale by animateFloatAsState(if (lifted) 1.02f else 1f, label = "lift")
+        // A row that changes place slides there from where it was.
+        val slide = remember { Animatable(0f) }
+        var last by remember { mutableIntStateOf(index) }
+        LaunchedEffect(index) {
+            val moved = last - index
+            last = index
+            if (!lifted && moved != 0) {
+                slide.snapTo(slide.value + moved * step)
+                slide.animateTo(0f, tween(200))
+            }
+        }
         fun toggle() = store(if (shown) order - item else order + item)
-        // shortcut: the other rows jump to their new place instead of sliding; animate them if it looks rough.
         InfoRow(
             stringResource(item.label),
             Modifier.onSizeChanged { step = it.height + gap }.zIndex(if (lifted) 1f else 0f).graphicsLayer {
-                translationY = if (lifted) drag else 0f
+                translationY = if (lifted) drag else slide.value
                 scaleX = scale
                 scaleY = scale
             },
@@ -1622,7 +1656,7 @@ private fun StatsPage(settings: DesktopSettings, screen: android.graphics.Rect, 
                 }
             }
         }
-    }
+    } }
 }
 
 /** The statistics over a screen of the device's shape, drawn at their real size and shrunk to fit. */

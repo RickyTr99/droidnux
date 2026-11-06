@@ -66,12 +66,9 @@ fun DiagnosticsPage(
     InfoRow(
         stringResource(R.string.section_container),
         text = if (installed) null else stringResource(R.string.container_hint),
-        action = if (installed) {
-            { FilledTonalButton(onClick = viewModel::runUname, enabled = !state.running) { Text(stringResource(R.string.action_run)) } }
-        } else {
-            null
-        },
-    )
+    ) {
+        if (installed) FilledTonalButton(onClick = viewModel::runUname, enabled = !state.running) { Text(stringResource(R.string.action_run)) }
+    }
     AnimatedVisibility(visible = state.running) { LinearProgressIndicator(Modifier.fillMaxWidth()) }
     state.guest?.let {
         Mono(it.output.ifEmpty { "—" })
