@@ -61,8 +61,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.InteractionSource
@@ -110,8 +108,6 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -152,9 +148,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -179,13 +173,11 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -204,9 +196,7 @@ import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Velocity
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -491,23 +481,7 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
             load.cancel()
         }
     }
-    // A tap anywhere but on the search field takes the focus off it; a drag scrolls and keeps it.
-    val focusManager = LocalFocusManager.current
-    var origin by remember { mutableStateOf(Offset.Zero) }
-    var search by remember { mutableStateOf(Rect.Zero) }
-    Box(
-        Modifier.fillMaxSize().onGloballyPositioned { origin = it.positionInRoot() }.pointerInput(Unit) {
-            awaitEachGesture {
-                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                while (true) {
-                    val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
-                    if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) return@awaitEachGesture
-                    if (!change.pressed) break
-                }
-                if (origin + down.position !in search) focusManager.clearFocus()
-            }
-        },
-    ) {
+    Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Hero(state, viewModel, side, thumbnail, Modifier.entrance(entrance, 0))
             Column(
@@ -528,7 +502,7 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
                 }
                 val next = if (updates) 2 else 1
                 QuickLaunch(state, viewModel, Modifier.entrance(entrance, next))
-                AllApps(state, viewModel, Modifier.entrance(entrance, next + 1)) { search = it }
+                AllApps(state, viewModel, Modifier.entrance(entrance, next + 1))
             }
         }
     }
@@ -917,82 +891,19 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
     }
 }
 
-/** A small pill to type a filter in, outlined in the accent while it has focus. */
-@OptIn(ExperimentalLayoutApi::class)
+/** Every app, programs before the desktop's settings. */
 @Composable
-private fun SearchField(text: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.colorScheme
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    val focusManager = LocalFocusManager.current
-    // Hiding the keyboard ends the search's focus too, or the field keeps it with nothing to take it away.
-    val ime = WindowInsets.isImeVisible
-    LaunchedEffect(ime) { if (!ime) focusManager.clearFocus() }
-    val outline by animateColorAsState(if (focused) colors.primary else Color.Transparent, label = "searchOutline")
-    BasicTextField(
-        value = text,
-        onValueChange = onChange,
-        singleLine = true,
-        interactionSource = interaction,
-        textStyle = TextStyle(color = colors.onSurface, fontSize = 15.sp),
-        cursorBrush = SolidColor(colors.primary),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions { focusManager.clearFocus() },
-        modifier = modifier.height(40.dp),
-        decorationBox = { field ->
-            Row(
-                Modifier.fillMaxSize().clip(RoundedCornerShape(20.dp)).background(colors.surfaceContainerLow)
-                    .border(2.dp, outline, RoundedCornerShape(20.dp)).padding(start = 14.dp, end = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Icon(Icons.Search, null, Modifier.size(18.dp), tint = if (focused) colors.primary else colors.onSurfaceVariant)
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
-                    if (text.isEmpty()) Text(stringResource(R.string.home_search_short), color = colors.onSurfaceVariant, fontSize = 15.sp, maxLines = 1)
-                    field()
-                }
-                if (text.isNotEmpty()) {
-                    IconButton(onClick = { onChange("") }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Close, stringResource(R.string.home_search_clear), Modifier.size(12.dp), tint = colors.onSurfaceVariant)
-                    }
-                }
-            }
-        },
-    )
-}
-
-/** Every app, programs before the desktop's settings; the small field beside the header filters them. */
-@Composable
-private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier, onSearchBounds: (Rect) -> Unit) {
-    var text by rememberSaveable { mutableStateOf("") }
-    var focused by remember { mutableStateOf(false) }
-    val focusManager = LocalFocusManager.current
-    BackHandler(enabled = focused || text.isNotEmpty()) { text = ""; focusManager.clearFocus() }
+private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val compact = isCompact()
-        Row(
-            Modifier.fillMaxWidth().height(40.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            SectionHeader(stringResource(R.string.home_all_apps), if (compact) Modifier else Modifier.weight(1f))
-            SearchField(text, { text = it }, (if (compact) Modifier.weight(1f) else Modifier.width(280.dp)).onFocusChanged { focused = it.isFocused }.onGloballyPositioned { onSearchBounds(it.boundsInRoot()) })
-        }
+        Box(Modifier.height(40.dp), contentAlignment = Alignment.CenterStart) { SectionHeader(stringResource(R.string.home_all_apps)) }
         val apps = state.apps
         if (apps == null) {
             LinearProgressIndicator(Modifier.fillMaxWidth())
             return@Column
         }
         val (settings, programs) = apps.partition { "Settings" in it.categories }
-        val shown = (programs + settings).filter { text.isBlank() || it.name.contains(text.trim(), ignoreCase = true) }
-        if (shown.isEmpty()) {
-            Text(
-                stringResource(R.string.store_no_results, text.trim()),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(vertical = 16.dp),
-            )
-            return@Column
-        }
+        val shown = programs + settings
         BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) { // The dock's inset: columns line up.
             val columns = appColumns(compact, maxWidth)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
