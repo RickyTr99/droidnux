@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Rect
-import android.graphics.Typeface
 import android.net.Uri
 import android.media.AudioManager
 import android.os.Build
@@ -18,8 +17,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
-import android.util.TypedValue
-import android.view.Gravity
 import android.view.View
 import android.view.InputDevice
 import android.view.KeyCharacterMap
@@ -37,7 +34,6 @@ import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import android.window.OnBackInvokedDispatcher
 import android.widget.FrameLayout
-import android.widget.TextView
 import app.droidnux.R
 import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
@@ -48,6 +44,7 @@ import app.droidnux.display.Presenter
 import app.droidnux.display.DisplayServer
 import java.io.File
 import java.util.Locale
+import java.util.concurrent.Executors
 import kotlin.math.roundToInt
 
 /**
@@ -57,7 +54,7 @@ import kotlin.math.roundToInt
 class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     private lateinit var surfaceView: SurfaceView
-    private var overlay: TextView? = null
+    private var overlay: StatsOverlay? = null
     private val handler = Handler(Looper.getMainLooper())
 
     /** Desktop pixels per surface pixel (the desktop runs below native resolution). */
@@ -132,16 +129,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             setBackgroundColor(Color.BLACK)
             addView(surfaceView)
         }
-        overlay = TextView(this).apply {
-            setTextColor(Color.WHITE)
-            setBackgroundColor(0x88000000.toInt())
-            typeface = Typeface.MONOSPACE
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setPadding(12, 6, 12, 6)
-        }
-        root.addView(overlay, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END,
-        ))
+        overlay = StatsOverlay(this)
+        root.addView(overlay, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
         pcKeyboard = PcKeyboard(this, keyboardListener)
         root.addView(pcKeyboard.view, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT,
@@ -234,6 +223,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private fun reloadSettings() {
         val settings = DesktopSettings.load(this)
         trackpadMode = settings.trackpad
+        overlay?.apply(settings, animate = true)
         overlay?.visibility = if (settings.stats) View.VISIBLE else View.GONE
         if (settings.scale != desktopScale) {
             desktopScale = settings.scale.coerceIn(MIN_SCALE, MAX_SCALE)
@@ -878,25 +868,29 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         menu.showUiScale(uiScale)
     }
 
-    // -- Debug overlay -----------------------------------------------------
+    // -- Statistics --------------------------------------------------------
 
     private var lastFrames = 0L
     private var lastFrameTime = 0L
+    private val statsSampler by lazy { StatsSampler(this) }
+    private val statsThread by lazy { Executors.newSingleThreadExecutor() }
     private val overlayUpdater = object : Runnable {
         override fun run() {
             val frames = Presenter.frameCount
             val frameTime = Presenter.frameTimeTotalNanos
-            val maxMs = Presenter.takeFrameTimeMaxNanos() / 1e6
-            val count = frames - lastFrames
+            val maxMs = Presenter.takeFrameTimeMaxNanos() / 1e6f
+            val count = (frames - lastFrames).toInt()
             // Frame time: copying the damage and submitting it, not the whole pipeline.
-            val time = if (count > 0) {
-                String.format(Locale.ROOT, " · frame %.1f ms (max %.1f)", (frameTime - lastFrameTime) / 1e6 / count, maxMs)
-            } else {
-                ""
-            }
-            overlay?.text = "$count fps$time · desktop ${(scale * 100).toInt()}%"
+            val ms = if (count > 0) (frameTime - lastFrameTime) / 1e6f / count else null
             lastFrames = frames
             lastFrameTime = frameTime
+            val refresh = window.decorView.display?.refreshRate ?: 60f
+            val width = (surfaceWidth * desktopScale).toInt() and 1.inv()
+            val height = (surfaceHeight * desktopScale).toInt() and 1.inv()
+            statsThread.execute {
+                val sample = statsSampler.sample(count, ms, if (count > 0) maxMs else null, refresh, width, height)
+                handler.post { overlay?.show(sample) }
+            }
             handler.postDelayed(this, 1000)
         }
     }

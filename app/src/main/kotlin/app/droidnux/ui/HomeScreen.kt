@@ -64,6 +64,8 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.requiredSize
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -169,6 +171,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -194,6 +198,11 @@ import app.droidnux.desktop.DesktopActivity
 import app.droidnux.desktop.DesktopKeysService
 import app.droidnux.desktop.DesktopSessionService
 import app.droidnux.desktop.DesktopSettings
+import app.droidnux.desktop.StatsItem
+import app.droidnux.desktop.StatsOverlay
+import app.droidnux.desktop.StatsPosition
+import app.droidnux.desktop.StatsSample
+import app.droidnux.desktop.StatsStyle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -211,6 +220,7 @@ private enum class Tab(val label: Int, val icon: ImageVector, val selectedIcon: 
 private enum class Category(val title: Int, val icon: ImageVector, val group: Int) {
     SCREEN(R.string.settings_screen, Icons.Desktop, R.string.settings_group_desktop),
     INPUT(R.string.settings_input, Icons.Keyboard, R.string.settings_group_desktop),
+    STATS(R.string.settings_stats, Icons.Stats, R.string.settings_group_desktop),
     ACCOUNT(R.string.settings_account, Icons.User, R.string.settings_group_desktop),
     COMPONENTS(R.string.settings_components, Icons.Package, R.string.settings_group_system),
     ANDROID(R.string.settings_android, Icons.Android, R.string.settings_group_system),
@@ -1096,6 +1106,7 @@ private fun SettingsTab(
                 "${(settings.uiScale * 100).roundToInt()}%"
             Category.INPUT -> layoutName(settings.layout) + " · " +
                 stringResource(if (settings.trackpad) R.string.menu_mode_trackpad else R.string.menu_mode_touch)
+            Category.STATS -> stringResource(if (settings.stats) settings.statsStyle.label else R.string.stats_off)
             Category.ACCOUNT -> settings.user
             Category.COMPONENTS -> stringResource(if (updates) R.string.settings_components_update else R.string.settings_components_ok)
             Category.ANDROID -> stringResource(R.string.settings_android_text)
@@ -1107,6 +1118,7 @@ private fun SettingsTab(
             when (it) {
                 Category.SCREEN -> ScreenPage(settings, screen, ::save)
                 Category.INPUT -> InputPage(settings, ::save)
+                Category.STATS -> StatsPage(settings, screen, ::save)
                 Category.ACCOUNT -> AccountPage(settings)
                 Category.COMPONENTS -> ComponentsPage(state, viewModel)
                 Category.ANDROID -> SystemChecks(state.gpu)
@@ -1406,12 +1418,104 @@ private fun ScreenPage(settings: DesktopSettings, screen: android.graphics.Rect,
         uiScale, DesktopSettings.MIN_UI_SCALE..DesktopSettings.MAX_UI_SCALE,
         onChange = { uiScale = it }, onDone = { save { it.copy(uiScale = uiScale) } },
     )
-    InfoRow(
-        stringResource(R.string.settings_stats),
-        text = stringResource(R.string.settings_stats_text),
-        onClick = { save { it.copy(stats = !it.stats) } },
-    ) {
+}
+
+/** The statistics over the desktop, as MoonVibe's: the style over a preview of the screen, then where, how opaque and what it shows. */
+@Composable
+private fun StatsPage(settings: DesktopSettings, screen: android.graphics.Rect, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    val style = settings.statsStyle
+    var opacity by remember { mutableFloatStateOf(settings.statsOpacity) }
+    InfoRow(stringResource(R.string.stats_show), onClick = { save { it.copy(stats = !it.stats) } }) {
         Switch(checked = settings.stats, onCheckedChange = { checked -> save { it.copy(stats = checked) } })
+    }
+    SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        StatsStyle.entries.forEachIndexed { index, each ->
+            SegmentedButton(
+                selected = style == each,
+                onClick = { save { it.copy(statsStyle = each) } },
+                shape = SegmentedButtonDefaults.itemShape(index, StatsStyle.entries.size),
+                icon = {},
+            ) { Text(stringResource(each.label)) }
+        }
+    }
+    StatsPreview(settings.copy(statsOpacity = opacity), screen)
+    var choosingPosition by remember { mutableStateOf(false) }
+    Box {
+        InfoRow(stringResource(R.string.stats_position), onClick = { choosingPosition = true }) {
+            Text(stringResource(settings.statsPosition(style).label), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
+        }
+        DropdownMenu(expanded = choosingPosition, onDismissRequest = { choosingPosition = false }, modifier = Modifier.align(Alignment.TopEnd)) {
+            StatsPosition.entries.forEach { position ->
+                DropdownMenuItem(
+                    text = { Text(stringResource(position.label)) },
+                    onClick = {
+                        choosingPosition = false
+                        save { it.copy(statsPositions = it.statsPositions + (style to position)) }
+                    },
+                )
+            }
+        }
+    }
+    SliderRow(
+        stringResource(R.string.stats_opacity), "${(opacity * 100).roundToInt()}%",
+        opacity, DesktopSettings.MIN_STATS_OPACITY..1f,
+        onChange = { opacity = it }, onDone = { save { it.copy(statsOpacity = opacity) } },
+    )
+    InfoRow(stringResource(R.string.stats_warnings), onClick = { save { it.copy(statsWarnings = !it.statsWarnings) } }) {
+        Switch(checked = settings.statsWarnings, onCheckedChange = { checked -> save { it.copy(statsWarnings = checked) } })
+    }
+    SectionHeader(
+        stringResource(
+            when (style) {
+                StatsStyle.BAR -> R.string.stats_items_bar
+                StatsStyle.PANEL -> R.string.stats_items_panel
+                StatsStyle.MINI -> R.string.stats_items_mini
+            },
+        ),
+        Modifier.padding(start = 20.dp, top = 12.dp, bottom = 4.dp),
+    )
+    val shown = settings.statsItems(style)
+    for (item in StatsItem.entries) {
+        fun toggle() = save {
+            val items = it.statsItems(style)
+            it.copy(statsItemsByStyle = it.statsItemsByStyle + (style to StatsItem.entries.filter { each -> (each in items) != (each == item) }))
+        }
+        InfoRow(
+            stringResource(item.label),
+            icon = ImageVector.vectorResource(item.icon),
+            iconTint = MaterialTheme.colorScheme.primary,
+            onClick = ::toggle,
+        ) {
+            Switch(checked = item in shown, onCheckedChange = { toggle() })
+        }
+    }
+}
+
+/** The statistics over a screen of the device's shape, drawn at their real size and shrunk to fit. */
+@Composable
+private fun StatsPreview(settings: DesktopSettings, screen: android.graphics.Rect) {
+    val density = LocalDensity.current
+    val width = with(density) { screen.width().toDp() }
+    val height = with(density) { screen.height().toDp() }
+    BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        // A tall screen (a phone held upright) as wide as fits under 360 dp of height.
+        val shown = minOf(maxWidth, 360.dp * (width / height))
+        Box(
+            Modifier.width(shown).aspectRatio(width / height).clip(CardShape).background(MaterialTheme.colorScheme.surfaceContainerHighest),
+            contentAlignment = Alignment.Center,
+        ) {
+            AndroidView(
+                factory = { StatsOverlay(it) },
+                update = {
+                    it.apply(settings, animate = true)
+                    it.show(StatsSample.SAMPLE)
+                },
+                modifier = Modifier.requiredSize(width, height).graphicsLayer {
+                    scaleX = shown / width
+                    scaleY = shown / width
+                },
+            )
+        }
     }
 }
 
