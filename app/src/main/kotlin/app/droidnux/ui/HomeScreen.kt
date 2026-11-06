@@ -61,6 +61,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.InteractionSource
@@ -81,7 +83,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -109,8 +110,6 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.relocation.BringIntoViewRequester
-import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -180,11 +179,13 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -204,7 +205,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.res.painterResource
@@ -259,6 +259,7 @@ private enum class Category(val title: Int, val icon: ImageVector, val group: In
     INFO(R.string.settings_info, Icons.About, R.string.settings_group_system),
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(state: AppState, viewModel: AppViewModel) {
     // The pages side by side: a swipe moves between them, a tab slides to its page.
@@ -307,15 +308,22 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
                 }
             }
         }
-        BottomBar(
-            tab,
-            // The pill follows the pages, under the finger too.
-            position = { pager.currentPage + pager.currentPageOffsetFraction },
-            badge = if (updates) Tab.SETTINGS else null,
-            // Not safeDrawing: with the IME in it the bar would ride up on the keyboard.
-            modifier = Modifier.align(Alignment.BottomCenter).windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
-                .padding(bottom = if (isCompact()) 12.dp else 24.dp),
-        ) { if (it != tab) select(it) }
+        // Away while the keyboard is up: the window shrinks for it, and the bar would ride up on it.
+        AnimatedVisibility(
+            !WindowInsets.isImeVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = fadeIn() + slideInVertically { it / 2 },
+            exit = fadeOut() + slideOutVertically { it / 2 },
+        ) {
+            BottomBar(
+                tab,
+                // The pill follows the pages, under the finger too.
+                position = { pager.currentPage + pager.currentPageOffsetFraction },
+                badge = if (updates) Tab.SETTINGS else null,
+                modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
+                    .padding(bottom = if (isCompact()) 12.dp else 24.dp),
+            ) { if (it != tab) select(it) }
+        }
     }
 }
 
@@ -483,7 +491,23 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
             load.cancel()
         }
     }
-    Box(Modifier.fillMaxSize()) {
+    // A tap anywhere but on the search field takes the focus off it; a drag scrolls and keeps it.
+    val focusManager = LocalFocusManager.current
+    var origin by remember { mutableStateOf(Offset.Zero) }
+    var search by remember { mutableStateOf(Rect.Zero) }
+    Box(
+        Modifier.fillMaxSize().onGloballyPositioned { origin = it.positionInRoot() }.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                while (true) {
+                    val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
+                    if ((change.position - down.position).getDistance() > viewConfiguration.touchSlop) return@awaitEachGesture
+                    if (!change.pressed) break
+                }
+                if (origin + down.position !in search) focusManager.clearFocus()
+            }
+        },
+    ) {
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
             Hero(state, viewModel, side, thumbnail, Modifier.entrance(entrance, 0))
             Column(
@@ -504,7 +528,7 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
                 }
                 val next = if (updates) 2 else 1
                 QuickLaunch(state, viewModel, Modifier.entrance(entrance, next))
-                AllApps(state, viewModel, Modifier.entrance(entrance, next + 1))
+                AllApps(state, viewModel, Modifier.entrance(entrance, next + 1)) { search = it }
             }
         }
     }
@@ -938,22 +962,13 @@ private fun SearchField(text: String, onChange: (String) -> Unit, modifier: Modi
 }
 
 /** Every app, programs before the desktop's settings; the small field beside the header filters them. */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier) {
+private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier, onSearchBounds: (Rect) -> Unit) {
     var text by rememberSaveable { mutableStateOf("") }
     var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     BackHandler(enabled = focused || text.isNotEmpty()) { text = ""; focusManager.clearFocus() }
-    // Once the keyboard is up (sooner, the field's own scroll to itself cancels this): the header goes under the status
-    // bar, so the results show above the keyboard. Scrolling per keystroke fought that scroll, and the page bounced.
-    val section = remember { BringIntoViewRequester() }
-    val density = LocalDensity.current
-    val top = WindowInsets.statusBars.getTop(density).toFloat()
-    val window = LocalWindowInfo.current.containerSize.height
-    val raised = focused && WindowInsets.isImeVisible
-    LaunchedEffect(raised) { if (raised) section.bringIntoView(Rect(0f, -top, 1f, window - top)) }
-    Column(modifier.bringIntoViewRequester(section), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val compact = isCompact()
         Row(
             Modifier.fillMaxWidth().height(40.dp),
@@ -961,7 +976,7 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             SectionHeader(stringResource(R.string.home_all_apps), if (compact) Modifier else Modifier.weight(1f))
-            SearchField(text, { text = it }, (if (compact) Modifier.weight(1f) else Modifier.width(280.dp)).onFocusChanged { focused = it.isFocused })
+            SearchField(text, { text = it }, (if (compact) Modifier.weight(1f) else Modifier.width(280.dp)).onFocusChanged { focused = it.isFocused }.onGloballyPositioned { onSearchBounds(it.boundsInRoot()) })
         }
         val apps = state.apps
         if (apps == null) {
