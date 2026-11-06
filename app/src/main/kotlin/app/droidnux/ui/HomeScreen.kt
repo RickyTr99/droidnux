@@ -21,6 +21,7 @@ import android.view.View
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.ContentTransform
@@ -77,7 +78,10 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -108,6 +112,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -199,6 +204,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.res.painterResource
@@ -744,8 +750,7 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
             val stepX = with(density) { (cell + gap).toPx() }
             val stepY = with(density) { (height + gap).toPx() }
             fun origin(index: Int) = DpOffset((cell + gap) * (index % columns), (height + gap) * (index / columns))
-            // After the apps: "Edit", or "Add" and "Done" while editing; "Add" alone in place of an empty dock.
-            val add = editing || order.isEmpty()
+            // After the apps: "Edit", which turns into "Add" beside "Done" while editing; "Add" alone in an empty dock.
             val pencil = !editing && order.isNotEmpty()
             val count = order.size + if (editing) 2 else 1
             val boxHeight by animateDpAsState(height * ((count + columns - 1) / columns) + gap * ((count - 1) / columns), label = "dock")
@@ -852,9 +857,9 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                     }
                 }
                 val iconSize = if (compact) 52.dp else 56.dp
-                // Only fades: "Add" grows in its place, and two tiles scaling there at once bounce.
-                DockAction(pencil, origin(order.size), cell, height, iconSize, Icons.Edit, R.string.home_edit, filled = false, grow = false) { editing = true }
-                DockAction(add, origin(order.size), cell, height, iconSize, Icons.Plus, R.string.home_add, filled = false) { adding = true }
+                DockAction(true, origin(order.size), cell, height, iconSize, if (pencil) Icons.Edit else Icons.Plus, if (pencil) R.string.home_edit else R.string.home_add, filled = false) {
+                    if (pencil) editing = true else adding = true
+                }
                 DockAction(editing, origin(order.size + 1), cell, height, iconSize, Icons.Selected, R.string.home_done, filled = true) { editing = false }
             }
         }
@@ -889,11 +894,16 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
 }
 
 /** A small pill to type a filter in, outlined in the accent while it has focus. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SearchField(text: String, onChange: (String) -> Unit, modifier: Modifier = Modifier) {
     val colors = MaterialTheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val focused by interaction.collectIsFocusedAsState()
+    val focusManager = LocalFocusManager.current
+    // Hiding the keyboard ends the search's focus too, or the field keeps it with nothing to take it away.
+    val ime = WindowInsets.isImeVisible
+    LaunchedEffect(ime) { if (!ime) focusManager.clearFocus() }
     val outline by animateColorAsState(if (focused) colors.primary else Color.Transparent, label = "searchOutline")
     BasicTextField(
         value = text,
@@ -903,6 +913,7 @@ private fun SearchField(text: String, onChange: (String) -> Unit, modifier: Modi
         textStyle = TextStyle(color = colors.onSurface, fontSize = 15.sp),
         cursorBrush = SolidColor(colors.primary),
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions { focusManager.clearFocus() },
         modifier = modifier.height(40.dp),
         decorationBox = { field ->
             Row(
@@ -927,15 +938,22 @@ private fun SearchField(text: String, onChange: (String) -> Unit, modifier: Modi
 }
 
 /** Every app, programs before the desktop's settings; the small field beside the header filters them. */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier = Modifier) {
     var text by rememberSaveable { mutableStateOf("") }
+    var focused by remember { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
-    BackHandler(enabled = text.isNotEmpty()) { text = ""; focusManager.clearFocus() }
-    // The results scroll up above the keyboard (the window shrinks for it) as far as the page goes, no further.
-    val results = remember { BringIntoViewRequester() }
-    LaunchedEffect(text) { if (text.isNotEmpty()) results.bringIntoView() }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    BackHandler(enabled = focused || text.isNotEmpty()) { text = ""; focusManager.clearFocus() }
+    // Once the keyboard is up (sooner, the field's own scroll to itself cancels this): the header goes under the status
+    // bar, so the results show above the keyboard. Scrolling per keystroke fought that scroll, and the page bounced.
+    val section = remember { BringIntoViewRequester() }
+    val density = LocalDensity.current
+    val top = WindowInsets.statusBars.getTop(density).toFloat()
+    val window = LocalWindowInfo.current.containerSize.height
+    val raised = focused && WindowInsets.isImeVisible
+    LaunchedEffect(raised) { if (raised) section.bringIntoView(Rect(0f, -top, 1f, window - top)) }
+    Column(modifier.bringIntoViewRequester(section), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         val compact = isCompact()
         Row(
             Modifier.fillMaxWidth().height(40.dp),
@@ -943,7 +961,7 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             SectionHeader(stringResource(R.string.home_all_apps), if (compact) Modifier else Modifier.weight(1f))
-            SearchField(text, { text = it }, if (compact) Modifier.weight(1f) else Modifier.width(280.dp))
+            SearchField(text, { text = it }, (if (compact) Modifier.weight(1f) else Modifier.width(280.dp)).onFocusChanged { focused = it.isFocused })
         }
         val apps = state.apps
         if (apps == null) {
@@ -960,7 +978,7 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
             )
             return@Column
         }
-        BoxWithConstraints(Modifier.fillMaxWidth().bringIntoViewRequester(results).padding(horizontal = 6.dp)) { // The dock's inset: columns line up.
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 6.dp)) { // The dock's inset: columns line up.
             val columns = appColumns(compact, maxWidth)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 shown.chunked(columns).forEach { row ->
@@ -1065,7 +1083,6 @@ private fun DockAction(
     icon: ImageVector,
     label: Int,
     filled: Boolean,
-    grow: Boolean = true,
     onClick: () -> Unit,
 ) {
     // Unhurried both ways: a tile appearing in place of another needs time to read.
@@ -1075,7 +1092,7 @@ private fun DockAction(
     val colors = MaterialTheme.colorScheme
     Column(
         Modifier.offset(position.x, position.y).size(width, height)
-            .graphicsLayer { alpha = shown; if (grow) { scaleX = 0.4f + 0.6f * shown; scaleY = scaleX } }
+            .graphicsLayer { alpha = shown; scaleX = 0.4f + 0.6f * shown; scaleY = scaleX }
             .clip(CardShape).clickable(enabled = visible, onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -1084,14 +1101,15 @@ private fun DockAction(
             Modifier.size(iconSize).clip(RoundedCornerShape(16.dp))
                 .then(if (filled) Modifier.background(colors.primary) else Modifier.border(2.dp, colors.outlineVariant, RoundedCornerShape(16.dp))),
             contentAlignment = Alignment.Center,
-        ) { Icon(icon, null, tint = if (filled) colors.onPrimary else colors.onSurfaceVariant) }
-        Text(
-            stringResource(label),
-            fontSize = if (isCompact()) 12.sp else 14.sp,
-            color = if (filled) colors.primary else colors.onSurfaceVariant,
-            maxLines = 1,
-            modifier = Modifier.padding(top = 8.dp),
-        )
+        ) { Crossfade(icon, label = "actionIcon") { Icon(it, null, tint = if (filled) colors.onPrimary else colors.onSurfaceVariant) } }
+        Crossfade(label, Modifier.padding(top = 8.dp), label = "actionLabel") {
+            Text(
+                stringResource(it),
+                fontSize = if (isCompact()) 12.sp else 14.sp,
+                color = if (filled) colors.primary else colors.onSurfaceVariant,
+                maxLines = 1,
+            )
+        }
     }
 }
 
