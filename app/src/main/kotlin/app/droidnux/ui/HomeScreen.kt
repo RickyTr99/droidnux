@@ -157,6 +157,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -295,12 +296,12 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
     }
 }
 
-/** The selected tab's pill: lit from above, like a raised key. */
-private val PillBrush = object : ShaderBrush() {
+/** The selected tab's pill in the theme's accent [color]: lit from above, like a raised key. */
+private fun pillBrush(color: Color) = object : ShaderBrush() {
     override fun createShader(size: Size): Shader {
         val center = Offset(size.width / 2, size.height * 0.35f)
         val radius = hypot(size.width / 2, size.height * 0.65f)
-        return RadialGradientShader(center, radius, listOf(Color(0xFF4A4C53), Color(0xFF33353A)), listOf(0f, 0.75f))
+        return RadialGradientShader(center, radius, listOf(lerp(color, Color.White, 0.12f), color), listOf(0f, 0.75f))
     }
 }
 private val TabColor = Color(0xFFA9ABB3)
@@ -360,15 +361,19 @@ private fun BottomBar(current: Tab, position: () -> Float, badge: Tab?, modifier
     BoxWithConstraints(modifier.padding(horizontal = if (compact) 12.dp else 0.dp)) {
         // Tabs just wide enough for "Impostazioni": the bar stays a pill in the middle, also on a phone.
         val item = minOf(if (compact) 88.dp else 108.dp, (maxWidth - if (compact) 12.dp else 44.dp) / Tab.entries.size)
+        val accent = MaterialTheme.colorScheme.primaryContainer
+        val pill = remember(accent) { pillBrush(accent) }
         Box(Modifier.clip(RoundedCornerShape(40.dp)).background(MaterialTheme.colorScheme.surfaceContainer).padding(6.dp)) {
             Box(
                 Modifier.offset { IntOffset((item.toPx() * position()).roundToInt(), 0) }.size(item, height)
-                    .clip(RoundedCornerShape(height / 2)).background(PillBrush),
+                    .clip(RoundedCornerShape(height / 2)).background(pill),
             )
             Row {
                 Tab.entries.forEach { tab ->
                     val selected = tab == current
-                    val color by animateColorAsState(if (selected) Color.White else TabColor, tween(150), label = "tab")
+                    val color by animateColorAsState(
+                        if (selected) MaterialTheme.colorScheme.onPrimaryContainer else TabColor, tween(150), label = "tab",
+                    )
                     // The icon hops when its tab is chosen.
                     val hop = remember { Animatable(1f) }
                     var wasSelected by remember { mutableStateOf(selected) }
