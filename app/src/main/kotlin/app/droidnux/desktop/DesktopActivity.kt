@@ -268,12 +268,18 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     // Plasma's brightness slider: powerdevil's helper writes the backlight's brightness (DesktopEnvironment.backlightDevice).
     private val backlight by lazy { DesktopEnvironment.backlightDevice(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)) }
     @Volatile private var backlightValue = -1
+    /** When the desktop last changed size: KWin then applies its saved output settings, an old brightness among them. */
+    @Volatile private var resizedAt = 0L
     private val backlightWatch by lazy {
         object : FileObserver(backlight, CLOSE_WRITE) {
             override fun onEvent(event: Int, path: String?) {
                 if (path != "brightness") return
                 val value = runCatching { File(backlight, path).readText().trim().toInt() }.getOrNull() ?: return
                 if (value == backlightValue) return
+                if (SystemClock.uptimeMillis() - resizedAt < RESIZE_SETTLE_MS) {
+                    runOnUiThread { writeBacklight(menuListener.brightness()) }
+                    return
+                }
                 backlightValue = value
                 runCatching { File(backlight, "actual_brightness").writeText("$value\n") }
                 runOnUiThread { setBrightness(value.toFloat() / DesktopEnvironment.BACKLIGHT_MAX, ask = false) }
@@ -395,6 +401,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout())
             clipboardToDesktop()
         } else {
+            resizedAt = SystemClock.uptimeMillis()
             DisplayServer.resize(desktopWidth, desktopHeight)
         }
         DisplayServer.redraw()
@@ -898,6 +905,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val TAG = "DroidNux.Desktop"
         /** How long after a finger leaves a focused text field its tap may still reach it. */
         private const val TAP_FOCUS_MS = 150L
+        /** How long after a resize a brightness from KWin counts as its saved setting coming back, not the user. */
+        private const val RESIZE_SETTLE_MS = 2000L
 
         /** The desktop on screen, if any (main thread only). */
         private var current: DesktopActivity? = null
