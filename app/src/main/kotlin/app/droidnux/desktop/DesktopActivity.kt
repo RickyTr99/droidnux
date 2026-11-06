@@ -246,6 +246,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE,
                 Settings.System.SCREEN_BRIGHTNESS_MODE_MANUAL)
             Settings.System.putInt(contentResolver, Settings.System.SCREEN_BRIGHTNESS, Brightness.toSetting(brightness))
+            // The window's own brightness, set before the permission was granted, would keep overriding Android's.
+            if (window.attributes.screenBrightness >= 0f) {
+                window.attributes = window.attributes.apply {
+                    screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                }
+            }
             return
         }
         window.attributes = window.attributes.apply { screenBrightness = brightness }
