@@ -11,9 +11,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
-import android.graphics.drawable.ClipDrawable
 import android.graphics.drawable.GradientDrawable
-import android.graphics.drawable.LayerDrawable
 import android.graphics.drawable.RippleDrawable
 import android.os.BatteryManager
 import android.os.Handler
@@ -28,11 +26,11 @@ import android.view.PointerIcon
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.animation.OvershootInterpolator
 import android.view.animation.PathInterpolator
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import android.widget.TextView
 import app.droidnux.R
 import java.io.File
@@ -42,11 +40,12 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * The menu over the desktop: a panel on the right edge with quick tiles
- * (keyboard, trackpad, screenshot, statistics), brightness and volume, the
- * desktop's resolution and interface size, the session's CPU, memory and
- * battery, and the session's actions (Home, Pause, End). On a phone the same
- * panel, narrower, without the header; its content scrolls.
+ * The menu over the desktop: a bar at the top with the quick toggles
+ * (keyboard, trackpad, screenshot, statistics), buttons that open a popup
+ * with brightness, volume or the desktop's size (the settings' slider rows),
+ * gauges of the session's CPU, memory and battery, and the session's actions
+ * (Home, Pause, End). On a phone the same bar, smaller; where it is still too
+ * wide the gauges drop their text, then the whole bar shrinks to fit.
  */
 class SessionMenu(
     private val context: Context,
@@ -74,8 +73,12 @@ class SessionMenu(
         fun onClosed()
     }
 
+    private val colors = DesktopColors(context)
     private val handler = Handler(Looper.getMainLooper())
     private val compact = context.resources.configuration.smallestScreenWidthDp < 600
+    private val buttonSize = dp(if (compact) 44 else 56)
+    private val barGap = dp(if (compact) 4 else 8)
+    private val barPadding = dp(if (compact) 6 else 8)
     private var trackpad = false
     private var stats = false
     private var scale = 1f
@@ -84,7 +87,7 @@ class SessionMenu(
     private val applyScale = Runnable { listener.onScaleChanged(scale) }
     private val applyUiScale = Runnable { listener.onUiScaleChanged(uiScale) }
 
-    /** Full-screen layer: a touch outside the panel closes the menu. */
+    /** Full-screen layer: a touch outside the bar closes its popup, or the menu. */
     val view: FrameLayout = FrameLayout(context).apply {
         visibility = View.GONE
         isClickable = true
@@ -98,167 +101,217 @@ class SessionMenu(
 
     val isOpen: Boolean get() = opened
 
-    private val panel = LinearLayout(context).apply {
-        orientation = LinearLayout.VERTICAL
-        background = GradientDrawable().apply {
-            setColor(SURFACE)
-            val radius = dp(if (compact) 20f else 24f)
-            cornerRadii = floatArrayOf(radius, radius, 0f, 0f, 0f, 0f, radius, radius)
-        }
-        isClickable = true // touches on the panel's background do not close the menu
+    private val bar = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        background = rounded(colors.surface, buttonSize / 2f + barPadding)
+        setPadding(barPadding, barPadding, barPadding, barPadding)
+        isClickable = true // touches on the bar's background do not close the menu
         isFocusable = false // clickable implies focusable: focus belongs to the buttons
+        // Shrunk to fit (open), from its top center.
+        addOnLayoutChangeListener { bar, _, _, _, _, _, _, _, _ ->
+            bar.pivotX = bar.width / 2f
+            bar.pivotY = 0f
+        }
     }
-    private val subtitle = label("", ON_SURFACE_VARIANT, sp = 13f)
-    private val trackpadTile: View
-    private val statsTile: View
-    private val resolutionSlider: Slider
-    private val interfaceSlider: Slider
-    private val brightnessSlider: Slider
-    private val volumeSlider: Slider
-    private val cpu = StatCard(R.string.menu_cpu, PRIMARY)
-    private val memory = StatCard(R.string.menu_memory, PRIMARY)
-    private val battery = StatCard(R.string.menu_battery, GREEN)
-    private val firstTile: View
-    private val endButton: TextView
+    private val keyboardButton: View
+    private val trackpadButton: View
+    private val statsButton: View
+    private val endButton: View
+    private val cpu = Gauge(R.drawable.ic_menu_cpu, R.string.menu_cpu, "100 %")
+    private val memory = Gauge(R.drawable.ic_menu_memory, R.string.menu_memory, "00,0 GB")
+    private val battery = Gauge(R.drawable.ic_menu_battery, R.string.menu_battery, "100 %")
+
+    // -- The popup: one page at a time, under its button --------------------
+
+    private val brightnessSlider = Slider(STEP) { listener.onBrightnessChanged(it) }
+    private val volumeSlider = Slider(1f / listener.volumeSteps().coerceAtLeast(1)) { listener.onVolumeChanged(it) }
+    private val resolutionSlider = Slider(STEP, DesktopActivity.MIN_SCALE, DesktopActivity.MAX_SCALE, listener::resolutionFor) {
+        scale = it
+        interfaceSlider.show(kwinScale()) // the elements keep their size: KWin's scale follows
+        apply(applyScale)
+    }
+    // KWin's scale, as Plasma's display settings show it.
+    private val interfaceSlider: Slider = Slider(STEP, MIN_KWIN_SCALE, MAX_KWIN_SCALE, { percent((it * 20).roundToInt() / 20f) }) {
+        uiScale = it * DesktopActivity.DEFAULT_SCALE / scale
+        apply(applyUiScale)
+    }
+    private val popup = FrameLayout(context).apply {
+        visibility = View.GONE
+        background = rounded(colors.surface, dp(24f))
+        setPadding(dp(8), dp(8), dp(8), dp(8))
+        isClickable = true // a touch on the popup does not close it
+        isFocusable = false
+    }
+    /** Each popup button and its page. */
+    private val pages = mutableListOf<Pair<View, LinearLayout>>()
+    /** The page shown, null while the popup is closed (or closing). */
+    private var shownPage: LinearLayout? = null
 
     init {
-        val gap = dp(if (compact) 10 else 18)
-        val content = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        fun section(child: View, top: Int = gap) = content.addView(child, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
-        ).apply { topMargin = if (content.childCount == 0) 0 else top })
-
-        if (!compact) {
-            // The session: a live dot, what runs, its resolution and the menu's shortcut.
-            panel.addView(LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                addView(View(context).apply { background = rounded(GREEN, dp(5f)) }, LinearLayout.LayoutParams(dp(10), dp(10)))
-                addView(LinearLayout(context).apply {
-                    orientation = LinearLayout.VERTICAL
-                    addView(label(context.getString(R.string.home_title), sp = 18f, medium = true))
-                    addView(subtitle)
-                }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = dp(12) })
-                addView(roundButton(R.drawable.ic_menu_chevron, R.string.menu_close) { close() })
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                bottomMargin = gap
-            })
-        }
-
-        // Quick tiles.
-        val tiles = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        firstTile = tile(tiles, R.drawable.ic_menu_keyboard, R.string.menu_keyboard) {
+        keyboardButton = button(R.drawable.ic_menu_keyboard, R.string.menu_keyboard) {
             close()
             listener.onToggleKeyboard()
         }
-        trackpadTile = tile(tiles, R.drawable.ic_menu_trackpad, R.string.menu_mode_trackpad) {
+        trackpadButton = button(R.drawable.ic_menu_trackpad, R.string.menu_mode_trackpad) {
             trackpad = !trackpad
-            updateTiles()
+            updateButtons()
             listener.onTrackpadChanged(trackpad)
         }
-        tile(tiles, R.drawable.ic_menu_screenshot, R.string.menu_screenshot) {
+        button(R.drawable.ic_menu_screenshot, R.string.menu_screenshot) {
             close()
             listener.onScreenshot()
         }
-        statsTile = tile(tiles, R.drawable.ic_menu_stats, R.string.menu_stats) {
+        statsButton = button(R.drawable.ic_menu_stats, R.string.menu_stats) {
             stats = !stats
-            close() // the counter shows on the desktop, under the panel
+            updateButtons()
             listener.onStatsChanged(stats)
         }
-        section(tiles)
-
-        // Brightness and volume, then the desktop's size: rows as in the app's settings. Stacked
-        // on a tablet, two side by side on a phone.
-        brightnessSlider = Slider(STEP) { listener.onBrightnessChanged(it) }
-        volumeSlider = Slider(1f / listener.volumeSteps().coerceAtLeast(1)) { listener.onVolumeChanged(it) }
-        resolutionSlider = Slider(STEP, DesktopActivity.MIN_SCALE, DesktopActivity.MAX_SCALE, listener::resolutionFor) {
-            scale = it
-            updateSize()
-            interfaceSlider.show(kwinScale()) // the elements keep their size: KWin's scale follows
-            apply(applyScale)
-        }
-        // KWin's scale, as Plasma's display settings show it.
-        interfaceSlider = Slider(STEP, MIN_KWIN_SCALE, MAX_KWIN_SCALE, { percent((it * 20).roundToInt() / 20f) }) {
-            uiScale = it * DesktopActivity.DEFAULT_SCALE / scale
-            apply(applyUiScale)
-        }
-        val light = listOf(sliderRow(R.string.menu_brightness, brightnessSlider), sliderRow(R.string.menu_volume, volumeSlider))
-        val screen = listOf(sliderRow(R.string.menu_resolution, resolutionSlider), sliderRow(R.string.menu_interface, interfaceSlider))
-        for ((header, rows) in listOf(R.string.menu_device to light, R.string.menu_desktop to screen)) {
-            section(label(context.getString(header), PRIMARY, sp = 12f, medium = true).apply { letterSpacing = 0.07f })
-            if (compact) section(row(*rows.toTypedArray()), top = dp(4)) else rows.forEach { section(it, top = dp(4)) }
-        }
-
-        // What the session costs.
-        section(row(cpu.view, memory.view, battery.view))
-
-        val scroll = ScrollView(context).apply {
-            isVerticalScrollBarEnabled = false
-            overScrollMode = View.OVER_SCROLL_NEVER
-            addView(content)
-        }
-        panel.addView(scroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-
-        // The session's actions, always in sight.
-        val actionHeight = dp(if (compact) 44 else 52)
-        val actions = LinearLayout(context).apply { orientation = LinearLayout.HORIZONTAL }
-        actions.addView(action(R.drawable.ic_menu_home, R.string.menu_home, ON_SURFACE, SURFACE_HIGH, corners(20f, 8f)) {
+        separator()
+        page(R.drawable.ic_menu_brightness, R.string.menu_brightness, sliderRow(R.string.menu_brightness, brightnessSlider))
+        page(R.drawable.ic_menu_volume, R.string.menu_volume, sliderRow(R.string.menu_volume, volumeSlider))
+        page(
+            R.drawable.ic_menu_display, R.string.menu_screen,
+            sliderRow(R.string.menu_resolution, resolutionSlider), sliderRow(R.string.menu_interface, interfaceSlider),
+        )
+        separator()
+        for (gauge in listOf(cpu, memory, battery)) addToBar(gauge.view, ViewGroup.LayoutParams.WRAP_CONTENT)
+        separator()
+        button(R.drawable.ic_menu_home, R.string.menu_home) {
             close()
             listener.onBackToAndroid()
-        }, LinearLayout.LayoutParams(0, actionHeight, 1f))
-        actions.addView(action(R.drawable.ic_menu_pause, R.string.menu_pause, ON_SURFACE, SURFACE_HIGH, corners(8f, 8f)) {
+        }
+        button(R.drawable.ic_menu_pause, R.string.menu_pause) {
             close()
             listener.onPauseSession()
-        }, LinearLayout.LayoutParams(0, actionHeight, 1f).apply { marginStart = dp(3) })
-        endButton = action(R.drawable.ic_menu_power, R.string.menu_end, ON_ERROR, ERROR, corners(8f, 20f)) {
-            showConfirm(true)
-        }.apply { typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL) }
-        actions.addView(endButton, LinearLayout.LayoutParams(0, actionHeight, 1f).apply { marginStart = dp(3) })
-        panel.addView(actions, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = if (compact) dp(10) else dp(12)
-        })
+        }
+        endButton = button(R.drawable.ic_menu_power, R.string.menu_end, colors.error, colors.onError) { showConfirm(true) }
 
-        view.addView(panel, FrameLayout.LayoutParams(dp(if (compact) 344 else 400), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END))
+        view.addView(bar, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+        ))
+        view.addView(popup, FrameLayout.LayoutParams(dp(if (compact) 320 else 360), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START))
+    }
+
+    /** A button opening [rows] in the popup. */
+    private fun page(icon: Int, description: Int, vararg rows: View) {
+        val page = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            for (row in rows) addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                if (childCount > 0) topMargin = dp(4)
+            })
+        }
+        popup.addView(page, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        lateinit var button: View
+        button = button(icon, description) { if (shownPage === page) hidePopup() else showPopup(button, page) }
+        pages += button to page
+    }
+
+    /**
+     * Opens [page] under [button]: the popup grows out of it, or, when another
+     * page is open, glides there while the pages fade through.
+     */
+    private fun showPopup(button: View, page: LinearLayout) {
+        val previous = shownPage
+        shownPage = page
+        updateButtons()
+        val width = popup.layoutParams.width
+        val center = barX(button.left + button.width / 2f)
+        val x = (center - width / 2f).coerceIn(dp(8f), (view.width - width - dp(8)).toFloat().coerceAtLeast(dp(8f)))
+        popup.translationY = barY(bar.height.toFloat()) + dp(8f)
+        popup.pivotX = center - x
+        popup.pivotY = 0f
+        popup.animate().cancel()
+        for ((_, other) in pages) if (other !== page && other !== previous) {
+            other.animate().cancel()
+            other.visibility = View.GONE
+        }
+        if (previous == null) {
+            page.animate().cancel()
+            page.alpha = 1f
+            page.translationY = 0f
+            page.visibility = View.VISIBLE
+            if (popup.visibility != View.VISIBLE) {
+                popup.alpha = 0f
+                popup.scaleX = POPUP_FROM
+                popup.scaleY = POPUP_FROM
+                popup.visibility = View.VISIBLE
+            }
+            popup.translationX = x
+            popup.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(MEDIUM_MS).setInterpolator(DECELERATE).start()
+        } else {
+            popup.animate().translationX(x).alpha(1f).scaleX(1f).scaleY(1f).setDuration(GLIDE_MS).setInterpolator(EMPHASIZED).start()
+            previous.animate().cancel()
+            previous.animate().alpha(0f).setDuration(FADE_OUT_MS).setInterpolator(ACCELERATE).withEndAction {
+                previous.visibility = View.GONE
+                page.alpha = 0f
+                page.translationY = dp(6f)
+                page.visibility = View.VISIBLE
+                page.animate().alpha(1f).translationY(0f).setDuration(FADE_IN_MS).setInterpolator(EMPHASIZED).start()
+            }.start()
+        }
+        page.getChildAt(0).findFocusable()?.requestFocus()
+    }
+
+    private fun hidePopup(animate: Boolean = true) {
+        val page = shownPage ?: return
+        shownPage = null
+        updateButtons()
+        pages.firstOrNull { it.second === page }?.first?.requestFocus()
+        popup.animate().cancel()
+        if (!animate) {
+            popup.visibility = View.GONE
+            return
+        }
+        popup.animate().alpha(0f).scaleX(POPUP_FROM).scaleY(POPUP_FROM).setDuration(SHORT_MS).setInterpolator(ACCELERATE)
+            .withEndAction { popup.visibility = View.GONE }.start()
+    }
+
+    private fun View.findFocusable(): View? = when {
+        this is Slider -> this
+        this is ViewGroup -> (0 until childCount).firstNotNullOfOrNull { getChildAt(it).findFocusable() }
+        else -> null
     }
 
     // -- Ending the session: Material 3's basic dialog, as the Home asks -----
 
-    private val confirmCancel = textButton(R.string.action_cancel, PRIMARY) { showConfirm(false) }
+    private val confirmCancel = textButton(R.string.action_cancel, colors.primary) { showConfirm(false) }
     private val confirmDialog = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        background = rounded(SURFACE_HIGH, dp(20f))
+        background = rounded(colors.surfaceHigh, dp(20f))
         setPadding(dp(20), dp(18), dp(12), dp(8))
         isClickable = true // a touch on the dialog does not dismiss it
         isFocusable = false
         addView(label(context.getString(R.string.menu_exit_title), sp = 16f, medium = true))
-        addView(label(context.getString(R.string.menu_exit_text), ON_SURFACE_VARIANT, sp = 13f).apply {
+        addView(label(context.getString(R.string.menu_exit_text), colors.onSurfaceVariant, sp = 13f).apply {
             setPadding(0, 0, dp(8), 0)
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
             addView(confirmCancel)
-            addView(textButton(R.string.menu_exit_confirm, ERROR) {
+            addView(textButton(R.string.menu_exit_confirm, colors.error) {
                 showConfirm(false, animate = false)
                 close()
                 listener.onExit()
             }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40)).apply { marginStart = dp(8) })
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(12) })
-        // It grows out of the End button, at its bottom right.
+        // It grows out of the End button, at its top right.
         addOnLayoutChangeListener { dialog, _, _, _, _, _, _, _, _ ->
             dialog.pivotX = dialog.width.toFloat()
-            dialog.pivotY = dialog.height.toFloat()
+            dialog.pivotY = 0f
         }
     }
 
-    /** The dialog over a scrim on the whole screen, above the End button; a touch on the scrim dismisses it. */
+    /** The dialog over a scrim on the whole screen, under the End button; a touch on the scrim dismisses it. */
     private val confirm = FrameLayout(context).apply {
         visibility = View.GONE
         setBackgroundColor(SCRIM)
         isClickable = true
         isFocusable = false
         setOnClickListener { showConfirm(false) }
-        addView(confirmDialog, FrameLayout.LayoutParams(dp(CONFIRM_DP), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.END))
+        addView(confirmDialog, FrameLayout.LayoutParams(dp(CONFIRM_DP), ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.END))
     }
 
     init {
@@ -271,14 +324,13 @@ class SessionMenu(
             confirm.visibility = View.GONE
             return
         }
+        if (show) hidePopup()
         fade(confirm, show)
         confirmDialog.animate().cancel()
         if (show) {
-            val button = IntArray(2).also { endButton.getLocationInWindow(it) }
-            val layer = IntArray(2).also { view.getLocationInWindow(it) }
             (confirmDialog.layoutParams as FrameLayout.LayoutParams).apply {
-                marginEnd = (view.width - (button[0] - layer[0] + endButton.width)).coerceAtLeast(0)
-                bottomMargin = view.height - (button[1] - layer[1]) + dp(8)
+                marginEnd = (view.width - barX(endButton.right.toFloat()).roundToInt()).coerceAtLeast(0)
+                topMargin = barY(bar.height.toFloat()).roundToInt() + dp(8)
             }
             confirmDialog.requestLayout()
             confirmDialog.scaleX = 0.9f
@@ -293,35 +345,53 @@ class SessionMenu(
         this.stats = stats
         this.scale = scale
         this.uiScale = uiScale
-        updateTiles()
-        updateSize()
+        hidePopup(animate = false)
+        updateButtons()
         resolutionSlider.show(scale)
         interfaceSlider.show(kwinScale())
         showConfirm(false, animate = false)
         brightnessSlider.show(listener.brightness())
         volumeSlider.show(listener.volume())
-        // Clear of the camera hole on the right edge, and of a phone's held upright at the top.
+        // Clear of the camera hole at the top, and of the screen's edges.
         val cutout = view.rootWindowInsets?.displayCutout
-        val padding = dp(if (compact) 14 else 20)
-        panel.setPadding(
-            padding, maxOf(dp(if (compact) 14 else 24), (cutout?.safeInsetTop ?: 0) + dp(8)),
-            padding + (cutout?.safeInsetRight ?: 0), dp(if (compact) 12 else 20),
-        )
+        (bar.layoutParams as FrameLayout.LayoutParams).topMargin = (cutout?.safeInsetTop ?: 0) + dp(if (compact) 12 else 24)
+        fitBar((view.parent as View).width - (cutout?.safeInsetLeft ?: 0) - (cutout?.safeInsetRight ?: 0) - 2 * dp(16))
         cpuTicks = -1
         handler.removeCallbacks(sampler)
         sampler.run()
         opened = true
         fade(view, true)
-        panel.translationX = dp(SLIDE_DP)
-        panel.animate().translationX(0f).setDuration(MEDIUM_MS).setInterpolator(DECELERATE).start()
-        firstTile.requestFocus()
+        bar.translationY = -dp(SLIDE_DP)
+        bar.animate().translationY(0f).setDuration(MEDIUM_MS).setInterpolator(DECELERATE).start()
+        keyboardButton.requestFocus()
     }
 
-    /** Closes the menu, or only its dialog while that is open (Back, Escape). */
+    /** The gauges' text goes first, then the bar shrinks, until it fits in [available] pixels. */
+    private fun fitBar(available: Int) {
+        val unbounded = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        fun width(): Int {
+            bar.measure(unbounded, unbounded)
+            return bar.measuredWidth
+        }
+        for (gauge in listOf(cpu, memory, battery)) gauge.showText(true)
+        if (width() > available) for (gauge in listOf(cpu, memory, battery)) gauge.showText(false)
+        val natural = width()
+        // Laid out whole, wider than the screen if it must, then shrunk.
+        bar.layoutParams.width = natural
+        val fit = if (available > 0) (available.toFloat() / natural).coerceAtMost(1f) else 1f
+        bar.scaleX = fit
+        bar.scaleY = fit
+    }
+
+    /** Closes the menu, or only its dialog or popup while one is open (Back, Escape, a touch outside). */
     fun close() {
         if (!opened) return
         if (confirm.visibility == View.VISIBLE && confirm.alpha > 0f) {
             showConfirm(false)
+            return
+        }
+        if (shownPage != null) {
+            hidePopup()
             return
         }
         opened = false
@@ -334,7 +404,7 @@ class SessionMenu(
             }
         }
         fade(view, false)
-        panel.animate().translationX(dp(SLIDE_DP)).setDuration(SHORT_MS).setInterpolator(ACCELERATE).start()
+        bar.animate().translationY(-dp(SLIDE_DP)).setDuration(SHORT_MS).setInterpolator(ACCELERATE).start()
         listener.onClosed()
     }
 
@@ -346,13 +416,15 @@ class SessionMenu(
 
     private fun kwinScale() = uiScale * scale / DesktopActivity.DEFAULT_SCALE
 
-    private fun updateTiles() {
-        animateColor(trackpadTile, if (trackpad) SELECTED else SURFACE_HIGH)
-        animateColor(statsTile, if (stats) SELECTED else SURFACE_HIGH)
-    }
-
-    private fun updateSize() {
-        subtitle.text = "${listener.resolutionFor(scale)} · ${context.getString(R.string.menu_shortcut)}"
+    /** Toggles on in the primary color, the open popup's button in the selected one. */
+    private fun updateButtons() {
+        for ((button, on) in listOf(trackpadButton to trackpad, statsButton to stats)) {
+            animateColors(button, if (on) colors.primary else colors.surfaceHigh, if (on) colors.onPrimary else colors.onSurface)
+        }
+        for ((button, page) in pages) {
+            val open = page === shownPage
+            animateColors(button, if (open) colors.selected else colors.surfaceHigh, if (open) colors.onSelected else colors.onSurface)
+        }
     }
 
     /** Applying a size costs a redraw (or a guest command): only once the slider rests. */
@@ -388,10 +460,7 @@ class SessionMenu(
                     cpuTicks = ticks
                     cpuAt = at
                     val used = memoryInfo.totalMem - memoryInfo.availMem
-                    memory.show(
-                        String.format(Locale.getDefault(), "%.1f / %d GB", used / GB, (memoryInfo.totalMem / GB).roundToInt()),
-                        used.toFloat() / memoryInfo.totalMem,
-                    )
+                    memory.show(String.format(Locale.getDefault(), "%.1f GB", used / GB), used.toFloat() / memoryInfo.totalMem)
                     battery.show("$level %", level / 100f)
                 }
             }
@@ -408,26 +477,89 @@ class SessionMenu(
         }.getOrDefault(0L)
     }
 
-    private inner class StatCard(title: Int, color: Int) {
-        private val value = label("", sp = if (compact) 13f else 14f, medium = true)
-        private val fill = ClipDrawable(rounded(color, dp(2f)), Gravity.START, ClipDrawable.HORIZONTAL)
-        val view = LinearLayout(context).apply {
+    /** A gauge in the bar: Material 3's circular indicator around [icon], its value and [name] beside it. */
+    private inner class Gauge(icon: Int, private val name: Int, widest: String) {
+        private val ring = Ring(icon)
+        private val value = label("", sp = if (compact) 13f else 14f, medium = true).apply {
+            isSingleLine = true
+            minWidth = paint.measureText(widest).roundToInt() // the bar keeps its width as values change
+        }
+        private val text = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            background = rounded(SURFACE_HIGH, dp(12f))
-            val padding = dp(if (compact) 12 else 14)
-            setPadding(padding, dp(if (compact) 8 else 10), padding, dp(if (compact) 8 else 10))
-            addView(label(context.getString(title), ON_SURFACE_VARIANT, sp = if (compact) 11f else 12f))
-            addView(value, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(2)
+            addView(value)
+            addView(label(context.getString(name), colors.onSurfaceVariant, sp = 11f).apply { isSingleLine = true })
+        }
+        val view = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(colors.surfaceHigh, buttonSize / 2f)
+            addView(ring, LinearLayout.LayoutParams(ring.size, ring.size))
+            addView(text, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = dp(if (compact) 6 else 10)
             })
-            addView(View(context).apply {
-                background = LayerDrawable(arrayOf(rounded(SURFACE_HIGHEST, dp(2f)), fill))
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(4)).apply { topMargin = dp(6) })
+        }
+
+        /** Without its text the gauge is a round button's size. */
+        fun showText(shown: Boolean) {
+            text.visibility = if (shown) View.VISIBLE else View.GONE
+            val inset = (buttonSize - ring.size) / 2
+            view.setPadding(inset, 0, if (shown) dp(if (compact) 10 else 14) else inset, 0)
         }
 
         fun show(text: String, fraction: Float) {
             value.text = text
-            fill.level = (fraction.coerceIn(0f, 1f) * 10000).roundToInt()
+            view.contentDescription = "${context.getString(name)} $text"
+            ring.show(fraction.coerceIn(0f, 1f))
+        }
+    }
+
+    /** Material 3's circular progress indicator, with a gap at each end of the active arc, around an icon. */
+    @SuppressLint("ViewConstructor")
+    private inner class Ring(icon: Int) : View(context) {
+        val size = dp(if (compact) 36 else 44)
+        private val stroke = dp(4f)
+        private val iconSize = dp(if (compact) 18 else 20)
+        private val drawable = context.getDrawable(icon)!!.mutate().apply { setTint(colors.primary) }
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = stroke
+            strokeCap = Paint.Cap.ROUND
+        }
+        private val oval = RectF()
+        private var fraction = 0f
+        private var animator: ValueAnimator? = null
+
+        fun show(to: Float) {
+            animator?.cancel()
+            animator = ValueAnimator.ofFloat(fraction, to).apply {
+                duration = MEDIUM_MS
+                interpolator = EMPHASIZED
+                addUpdateListener {
+                    fraction = it.animatedValue as Float
+                    invalidate()
+                }
+                start()
+            }
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            oval.set(stroke / 2, stroke / 2, width - stroke / 2, height - stroke / 2)
+            val radius = oval.width() / 2
+            // The gap between the arcs, round caps included.
+            val gap = Math.toDegrees(((dp(4f) + stroke) / radius).toDouble()).toFloat()
+            val sweep = fraction * 360f
+            paint.color = colors.selected
+            if (sweep <= 0f) {
+                canvas.drawArc(oval, 0f, 360f, false, paint)
+            } else if (sweep < 360f - 2 * gap) {
+                canvas.drawArc(oval, -90f + sweep + gap, 360f - sweep - 2 * gap, false, paint)
+            }
+            paint.color = colors.primary
+            if (sweep > 0f) canvas.drawArc(oval, -90f, sweep.coerceAtMost(360f - gap), false, paint)
+            val left = (width - iconSize) / 2
+            val top = (height - iconSize) / 2
+            drawable.setBounds(left, top, left + iconSize, top + iconSize)
+            drawable.draw(canvas)
         }
     }
 
@@ -502,9 +634,9 @@ class SessionMenu(
                 paint.color = color
                 canvas.drawPath(path, paint)
             }
-            part(0f, x - thumb / 2 - gap, outer, inner, PRIMARY)
-            part(x + thumb / 2 + gap, width.toFloat(), inner, outer, SELECTED)
-            paint.color = PRIMARY
+            part(0f, x - thumb / 2 - gap, outer, inner, colors.primary)
+            part(x + thumb / 2 + gap, width.toFloat(), inner, outer, colors.selected)
+            paint.color = colors.primary
             if (x + thumb / 2 + gap < width - outer - inner) canvas.drawCircle(width - outer, height / 2f, inner, paint)
             rect.set(x - thumb / 2, (height - dp(THUMB_DP)) / 2, x + thumb / 2, (height + dp(THUMB_DP)) / 2)
             canvas.drawRoundRect(rect, thumb / 2, thumb / 2, paint)
@@ -520,7 +652,7 @@ class SessionMenu(
                 MotionEvent.ACTION_MOVE -> {
                     if (!dragging && abs(event.x - downX) > slop) {
                         dragging = true
-                        parent.requestDisallowInterceptTouchEvent(true) // the panel's scroll leaves it
+                        parent.requestDisallowInterceptTouchEvent(true)
                     }
                     if (dragging) set(valueAt(event.x))
                 }
@@ -539,15 +671,17 @@ class SessionMenu(
         }
     }
 
-    /** A row as in the app's settings, without its card: [title] and the value over [slider]. */
+    /** A row as in the app's settings (SliderRow): [title] and the value over [slider]. */
     private fun sliderRow(title: Int, slider: Slider) = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        val value = label("", ON_SURFACE_VARIANT, sp = 13f)
+        background = rounded(colors.surfaceHigh, dp(12f))
+        setPadding(dp(20), dp(12), dp(20), dp(12))
+        val value = label("", colors.onSurfaceVariant, sp = 15f).apply { isSingleLine = true }
         slider.valueLabel = value
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             addView(
-                label(context.getString(title), sp = 14f, medium = true).apply { maxLines = 1 },
+                label(context.getString(title), sp = 16f, medium = true).apply { isSingleLine = true },
                 LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
             )
             addView(value)
@@ -557,35 +691,45 @@ class SessionMenu(
 
     // -- Building blocks -----------------------------------------------------
 
-    /** A quick tile in [row]: icon over its name. */
-    private fun tile(row: LinearLayout, icon: Int, name: Int, onClick: () -> Unit): View {
-        val tile = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            background = ripple(SURFACE_HIGH, dp(if (compact) 16f else 20f))
+    private fun addToBar(child: View, width: Int) = bar.addView(child, LinearLayout.LayoutParams(width, buttonSize).apply {
+        if (bar.childCount > 0) marginStart = barGap
+    })
+
+    private fun separator() = bar.addView(View(context).apply { setBackgroundColor(colors.outlineVariant) }, LinearLayout.LayoutParams(dp(1), dp(32)).apply {
+        marginStart = barGap + dp(if (compact) 2 else 6)
+        marginEnd = dp(if (compact) 2 else 6)
+    })
+
+    /** Where [x] and [y] of the bar's layout land in the menu's layer, the bar shrunk (fitBar) but not sliding. */
+    private fun barX(x: Float) = bar.left + bar.pivotX + (x - bar.pivotX) * bar.scaleX
+    private fun barY(y: Float) = bar.top + y * bar.scaleY
+
+    /** A round button in the bar: [icon] in [tint] on [fill], pressed in with a spring as in the Home. */
+    @SuppressLint("ClickableViewAccessibility")
+    private fun button(icon: Int, description: Int, fill: Int = colors.surfaceHigh, tint: Int = colors.onSurface, onClick: () -> Unit): View {
+        val button = FrameLayout(context).apply {
+            contentDescription = context.getString(description)
+            tooltipText = contentDescription
+            background = ripple(fill, buttonSize / 2f)
             isFocusable = true
             pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_HAND)
             setOnClickListener { onClick() }
+            setOnTouchListener { button, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> button.animate().scaleX(PRESSED).scaleY(PRESSED).setDuration(PRESS_MS).setInterpolator(DECELERATE).start()
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                        button.animate().scaleX(1f).scaleY(1f).setDuration(RELEASE_MS).setInterpolator(SPRING).start()
+                }
+                false
+            }
             val size = dp(if (compact) 22 else 24)
-            addView(icon(icon, ON_SURFACE), LinearLayout.LayoutParams(size, size))
-            addView(label(context.getString(name), sp = if (compact) 11f else 12f).apply {
-                maxLines = 1
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dp(if (compact) 4 else 6)
-            })
+            addView(ImageView(context).apply {
+                setImageResource(icon)
+                imageTintList = ColorStateList.valueOf(tint)
+            }, FrameLayout.LayoutParams(size, size, Gravity.CENTER))
         }
-        row.addView(tile, LinearLayout.LayoutParams(0, dp(if (compact) 60 else 76), 1f).apply {
-            if (row.childCount > 0) marginStart = dp(if (compact) 6 else 8)
-        })
-        return tile
-    }
-
-    /** [children] side by side in equal widths. */
-    private fun row(vararg children: View, height: Int = ViewGroup.LayoutParams.WRAP_CONTENT) = LinearLayout(context).apply {
-        orientation = LinearLayout.HORIZONTAL
-        for ((i, child) in children.withIndex()) {
-            addView(child, LinearLayout.LayoutParams(0, height, 1f).apply { if (i > 0) marginStart = dp(if (compact) 6 else 8) })
-        }
+        addToBar(button, buttonSize)
+        return button
     }
 
     /** Material 3's text button: a label in [color], 40 dp tall. */
@@ -604,55 +748,7 @@ class SessionMenu(
         layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(40))
     }
 
-    private fun roundButton(icon: Int, description: Int, onClick: () -> Unit) = LinearLayout(context).apply {
-        gravity = Gravity.CENTER
-        contentDescription = context.getString(description)
-        background = ripple(SURFACE_HIGH, dp(22f))
-        isFocusable = true
-        pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_HAND)
-        setOnClickListener { onClick() }
-        addView(icon(icon, ON_SURFACE), LinearLayout.LayoutParams(dp(20), dp(20)))
-        layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
-    }
-
-    /** A segment of the session's actions: [radii] are its outer and inner corners. */
-    private fun action(icon: Int, text: Int, color: Int, fill: Int, radii: FloatArray, onClick: () -> Unit) =
-        TextView(context).apply {
-            setText(text)
-            setTextColor(color)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, if (compact) 13f else 14f)
-            gravity = Gravity.CENTER
-            maxLines = 1
-            background = RippleDrawable(ColorStateList.valueOf(RIPPLE), GradientDrawable().apply {
-                setColor(fill)
-                cornerRadii = radii
-            }, null)
-            if (!compact) {
-                setCompoundDrawablesRelativeWithIntrinsicBounds(context.getDrawable(icon)?.mutate()?.apply {
-                    setTint(color)
-                    setBounds(0, 0, dp(18), dp(18))
-                }, null, null, null)
-                compoundDrawablePadding = dp(8)
-                setPadding(dp(12), 0, dp(12), 0)
-            }
-            isFocusable = true
-            pointerIcon = PointerIcon.getSystemIcon(context, PointerIcon.TYPE_HAND)
-            setOnClickListener { onClick() }
-        }
-
-    /** Corner radii (dp) of a segment: [start] on the left, [end] on the right. */
-    private fun corners(start: Float, end: Float): FloatArray {
-        val s = dp(start)
-        val e = dp(end)
-        return floatArrayOf(s, s, e, e, e, e, s, s)
-    }
-
-    private fun icon(resource: Int, tint: Int) = ImageView(context).apply {
-        setImageResource(resource)
-        imageTintList = ColorStateList.valueOf(tint)
-    }
-
-    private fun label(text: String, color: Int = ON_SURFACE, sp: Float = 15f, medium: Boolean = false) =
+    private fun label(text: String, color: Int = colors.onSurface, sp: Float = 15f, medium: Boolean = false) =
         TextView(context).apply {
             this.text = text
             setTextColor(color)
@@ -668,14 +764,20 @@ class SessionMenu(
     private fun ripple(fill: Int, radius: Float) =
         RippleDrawable(ColorStateList.valueOf(RIPPLE), rounded(fill, radius), rounded(Color.WHITE, radius))
 
-    /** Selected state of a tile or box: its fill fades between colors. */
-    private fun animateColor(button: View, to: Int) {
-        val fill = ((button.background as RippleDrawable).getDrawable(0) as GradientDrawable)
-        val from = fill.color?.defaultColor ?: Color.TRANSPARENT
-        if (from == to) return
-        ValueAnimator.ofObject(ArgbEvaluator(), from, to).apply {
+    /** A button's fill and icon fade to new colors. */
+    private fun animateColors(button: View, fill: Int, tint: Int) {
+        val background = ((button.background as RippleDrawable).getDrawable(0) as GradientDrawable)
+        val icon = (button as ViewGroup).getChildAt(0) as ImageView
+        val fromFill = background.color?.defaultColor ?: Color.TRANSPARENT
+        val fromTint = icon.imageTintList?.defaultColor ?: tint
+        if (fromFill == fill && fromTint == tint) return
+        val evaluator = ArgbEvaluator()
+        ValueAnimator.ofFloat(0f, 1f).apply {
             duration = SHORT_MS
-            addUpdateListener { fill.setColor(it.animatedValue as Int) }
+            addUpdateListener {
+                background.setColor(evaluator.evaluate(it.animatedFraction, fromFill, fill) as Int)
+                icon.imageTintList = ColorStateList.valueOf(evaluator.evaluate(it.animatedFraction, fromTint, tint) as Int)
+            }
             start()
         }
     }
@@ -703,25 +805,22 @@ class SessionMenu(
     }
 
     internal companion object {
-        // MoonVibe's dark palette (blue fallback), as in the app's theme.
-        const val SURFACE = 0xF71A1B20.toInt()     // surfaceContainerLow, nearly opaque
-        const val SURFACE_HIGH = 0xFF282A2F.toInt()
-        const val SURFACE_HIGHEST = 0xFF33353A.toInt()
-        const val SELECTED = 0xFF3E4759.toInt()    // secondaryContainer
-        const val PRIMARY = 0xFF82A6E8.toInt()
-        const val GREEN = 0xFF3DDC84.toInt()
-        const val ON_SURFACE = 0xFFE2E2E9.toInt()
-        const val ON_SURFACE_VARIANT = 0xFFC4C6D0.toInt()
-        const val ERROR = 0xFFFFB4AB.toInt()
-        const val ON_ERROR = 0xFF690005.toInt()
         const val VEIL = 0x52000000                // the desktop stays in sight
         const val SCRIM = 0x52000000               // Material 3's, at 32%
         const val RIPPLE = 0x33FFFFFF
         const val SHORT_MS = 150L
         const val MEDIUM_MS = 250L
+        // The popup gliding to another button, its pages fading through (as the Home's pages).
+        const val GLIDE_MS = 320L
+        const val FADE_OUT_MS = 90L
+        const val FADE_IN_MS = 210L
+        const val PRESS_MS = 100L
+        const val RELEASE_MS = 350L
+        const val PRESSED = 0.88f
+        const val POPUP_FROM = 0.8f
         const val RESIZE_DELAY_MS = 300L
         const val STATS_MS = 1000L
-        const val SLIDE_DP = 32f
+        const val SLIDE_DP = 16f
         const val CONFIRM_DP = 264
         const val STEP = 0.05f
         // Material 3's slider, as Compose draws it in the app's settings.
@@ -734,5 +833,9 @@ class SessionMenu(
         const val GB = 1e9f
         val DECELERATE = PathInterpolator(0.05f, 0.7f, 0.1f, 1f)
         val ACCELERATE = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
+        // Compose's Emphasized, as the Home uses it.
+        val EMPHASIZED = PathInterpolator(0.2f, 0f, 0f, 1f)
+        // Near the Home's press spring (damping 0.4): a small overshoot on release.
+        val SPRING = OvershootInterpolator(2.5f)
     }
 }

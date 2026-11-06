@@ -1,5 +1,11 @@
 package app.droidnux.ui
 
+import app.droidnux.ui.theme.darkColors
+import app.droidnux.ui.theme.ThemeColor
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.Role
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import android.app.ActivityOptions
 import android.content.ComponentName
 import android.content.Context
@@ -1303,9 +1309,76 @@ private fun CategoryRow(category: Category, selected: Boolean, badge: Boolean, o
     }
 }
 
+/** The theme color, as in MoonVibe: under its name a dot for each color, the chosen one bigger and with a check. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ThemeColorRow(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+    val context = LocalContext.current
+    val chosen = ThemeColor.picked ?: ThemeColor.resolve(settings.themeColor)
+    Column(
+        Modifier.fillMaxWidth().clip(RowShape).background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 8.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(stringResource(R.string.theme_color), fontSize = 16.sp, fontWeight = FontWeight.Medium)
+            Text(stringResource(themeColorName(chosen)), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        FlowRow(Modifier.padding(top = 4.dp).offset(x = (-8).dp)) {
+            for (color in ThemeColor.choices) {
+                val selected = color == chosen
+                val scale by animateFloatAsState(if (selected) 1.15f else 1f, tween(150), label = "swatch")
+                val check by animateFloatAsState(if (selected) 1f else 0f, tween(150), label = "check")
+                Box(
+                    Modifier.size(44.dp).clip(CircleShape)
+                        .selectable(selected, role = Role.RadioButton) {
+                            ThemeColor.picked = color
+                            save { it.copy(themeColor = color) }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    val swatch = remember(color) { themeSwatch(context, color) }
+                    Box(
+                        Modifier.size(28.dp).graphicsLayer { scaleX = scale; scaleY = scale }.background(swatch, CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Check, stringResource(themeColorName(color)),
+                            tint = MaterialTheme.colorScheme.surfaceContainerLow,
+                            modifier = Modifier.size(18.dp).graphicsLayer { alpha = check },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** A color's dot: its primary color, or the wallpaper's colors around the circle. */
+private fun themeSwatch(context: android.content.Context, color: String): Brush =
+    if (color == ThemeColor.DYNAMIC && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+        val first = Color(context.getColor(android.R.color.system_accent1_300))
+        Brush.sweepGradient(listOf(first, Color(context.getColor(android.R.color.system_accent2_300)), Color(context.getColor(android.R.color.system_accent3_300)), first))
+    } else {
+        SolidColor(darkColors(context, color).primary)
+    }
+
+private fun themeColorName(color: String) = when (color) {
+    ThemeColor.DYNAMIC -> R.string.theme_color_dynamic
+    "purple" -> R.string.theme_color_purple
+    "pink" -> R.string.theme_color_pink
+    "red" -> R.string.theme_color_red
+    "orange" -> R.string.theme_color_orange
+    "yellow" -> R.string.theme_color_yellow
+    "green" -> R.string.theme_color_green
+    "teal" -> R.string.theme_color_teal
+    "gray" -> R.string.theme_color_gray
+    else -> R.string.theme_color_blue
+}
+
 @Composable
 private fun ScreenPage(settings: DesktopSettings, screen: android.graphics.Rect, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
     val context = LocalContext.current
+    ThemeColorRow(settings, save)
     var scale by remember { mutableFloatStateOf(settings.scale) }
     SliderRow(
         stringResource(R.string.menu_resolution),

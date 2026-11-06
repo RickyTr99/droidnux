@@ -23,14 +23,7 @@ import app.droidnux.R
 import app.droidnux.desktop.SessionMenu.Companion.ACCELERATE
 import app.droidnux.desktop.SessionMenu.Companion.DECELERATE
 import app.droidnux.desktop.SessionMenu.Companion.MEDIUM_MS
-import app.droidnux.desktop.SessionMenu.Companion.ON_SURFACE
-import app.droidnux.desktop.SessionMenu.Companion.ON_SURFACE_VARIANT
-import app.droidnux.desktop.SessionMenu.Companion.PRIMARY
-import app.droidnux.desktop.SessionMenu.Companion.SELECTED
 import app.droidnux.desktop.SessionMenu.Companion.SHORT_MS
-import app.droidnux.desktop.SessionMenu.Companion.SURFACE
-import app.droidnux.desktop.SessionMenu.Companion.SURFACE_HIGH
-import app.droidnux.desktop.SessionMenu.Companion.SURFACE_HIGHEST
 import java.util.Locale
 import kotlin.math.hypot
 import kotlin.math.min
@@ -46,6 +39,7 @@ import kotlin.math.roundToInt
  * other keys are touched, it comes up with the finger.
  */
 class PcKeyboard(private val context: Context, private val listener: Listener) {
+    private val colors = DesktopColors(context)
 
     interface Listener {
         fun onKey(evdevKeycode: Int, down: Boolean)
@@ -71,7 +65,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
 
     private val panel = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        background = GradientDrawable().apply { setColor(SURFACE) }
+        background = GradientDrawable().apply { setColor(this@PcKeyboard.colors.surface) }
         // Rounded on top only: the outline reaches past the bottom edge.
         val radius = dp(if (compact) 18f else 24f)
         outlineProvider = object : ViewOutlineProvider() {
@@ -84,11 +78,11 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
         if (!compact) setPadding(dp(24), dp(10), dp(24), dp(18)) // a phone's: in place()
     }
     private val keyRows = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-    private val hint = label("", ON_SURFACE_VARIANT, 12f)
-    private val preview = label("", ON_SURFACE, if (compact) 22f else 26f, medium = true).apply {
+    private val hint = label("", colors.onSurfaceVariant, 12f)
+    private val preview = label("", colors.onSurface, if (compact) 22f else 26f, medium = true).apply {
         gravity = Gravity.CENTER
         includeFontPadding = false
-        background = rounded(SURFACE_HIGHEST, dp(12f))
+        background = rounded(colors.surfaceHighest, dp(12f))
         alpha = 0f
     }
     private val hidePreview = Runnable { preview.animate().alpha(0f).setDuration(SHORT_MS).start() }
@@ -105,7 +99,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
     private val bubble = ImageView(context).apply {
         setImageResource(R.drawable.ic_menu_keyboard)
         scaleType = ImageView.ScaleType.CENTER
-        background = rounded(SELECTED, dp(if (compact) 14f else 16f))
+        background = rounded(colors.selected, dp(if (compact) 14f else 16f))
         contentDescription = context.getString(R.string.kbd_show)
         visibility = View.GONE
     }
@@ -116,7 +110,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
         background = GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             setColor(SCRIM)
-            setStroke(dp(2), ON_SURFACE)
+            setStroke(dp(2), this@PcKeyboard.colors.onSurface)
         }
         visibility = View.GONE
     }
@@ -458,7 +452,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
             setOnTouchListener { _, event -> onTouch(key, event) }
         }
         val character = key.kind == Kind.CHAR
-        val label = label(key.text ?: "", ON_SURFACE, if (character) (if (compact) 16f else 20f) else (if (compact) 12f else 14f),
+        val label = label(key.text ?: "", colors.onSurface, if (character) (if (compact) 16f else 20f) else (if (compact) 12f else 14f),
             medium = !character).apply {
             includeFontPadding = false
             maxLines = 1
@@ -466,7 +460,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
         key.label = label
         key.view.addView(label, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
         if (character && !compact) {
-            key.sub = label("", ON_SURFACE_VARIANT, 11f).also {
+            key.sub = label("", colors.onSurfaceVariant, 11f).also {
                 key.view.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                     Gravity.TOP or Gravity.END).apply {
                     topMargin = dp(4)
@@ -506,11 +500,11 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
             val locked = (key.kind == Kind.MODIFIER || key.kind == Kind.FN) && state(key.code.takeIf { it != 0 } ?: FN) == LOCKED
             key.background.setColor(when {
                 key.pressed -> PRESSED
-                on -> SELECTED
-                key.kind == Kind.CHAR -> SURFACE_HIGH
-                else -> SURFACE_HIGHEST
+                on -> colors.selected
+                key.kind == Kind.CHAR -> colors.surfaceHigh
+                else -> colors.surfaceHighest
             })
-            key.label?.setTextColor(if (locked || key.kind == Kind.CAPS && capsLock) PRIMARY else ON_SURFACE)
+            key.label?.setTextColor(if (locked || key.kind == Kind.CAPS && capsLock) colors.primary else colors.onSurface)
         }
         val active = modifiers.filterValues { it != OFF }.keys.mapNotNull { code -> keys.firstOrNull { (it.code.takeIf { c -> c != 0 } ?: FN) == code }?.text }
         hint.text = when {
@@ -599,11 +593,11 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
 
     // -- Building blocks -------------------------------------------------------
 
-    private fun chip(text: String, onClick: () -> Unit) = label(text, ON_SURFACE, 13f).apply {
+    private fun chip(text: String, onClick: () -> Unit) = label(text, colors.onSurface, 13f).apply {
         gravity = Gravity.CENTER
         minHeight = dp(if (compact) 30 else 36)
         setPadding(dp(14), 0, dp(14), 0)
-        background = rounded(SURFACE_HIGH, dp(18f))
+        background = rounded(colors.surfaceHigh, dp(18f))
         setOnClickListener { onClick() }
     }
 
@@ -611,7 +605,7 @@ class PcKeyboard(private val context: Context, private val listener: Listener) {
         setImageResource(icon)
         scaleType = ImageView.ScaleType.CENTER_INSIDE
         setPadding(dp(10), dp(8), dp(10), dp(8))
-        background = rounded(SURFACE_HIGH, dp(18f))
+        background = rounded(colors.surfaceHigh, dp(18f))
         contentDescription = context.getString(description)
         setOnClickListener { onClick() }
     }

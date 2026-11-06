@@ -28,6 +28,8 @@ data class DesktopSettings(
     val keyboardButtonY: Float = 1f,
     /** The Linux account's name, empty until the user chose one; see [Account]. */
     val user: String = "",
+    /** The app's theme color (ui/theme/ThemeColor); empty: the default. */
+    val themeColor: String = "",
 ) {
     /** The layout the session uses. */
     fun xkbLayout(): String = layout.ifEmpty {
@@ -63,6 +65,7 @@ data class DesktopSettings(
                 keyboardButtonLeft = props.getProperty("keyboardButtonLeft")?.toBooleanStrictOrNull() ?: defaults.keyboardButtonLeft,
                 keyboardButtonY = props.getProperty("keyboardButtonY")?.toFloatOrNull()?.coerceIn(0f, 1f) ?: defaults.keyboardButtonY,
                 user = props.getProperty("user")?.takeIf { Account.isValidName(it) } ?: defaults.user,
+                themeColor = props.getProperty("themeColor") ?: defaults.themeColor,
             )
         }
 
@@ -79,6 +82,7 @@ data class DesktopSettings(
                 setProperty("keyboardButtonLeft", settings.keyboardButtonLeft.toString())
                 setProperty("keyboardButtonY", settings.keyboardButtonY.toString())
                 setProperty("user", settings.user)
+                setProperty("themeColor", settings.themeColor)
             }
             val file = File(context.filesDir, FILE)
             val temp = File(context.filesDir, "$FILE.new")
