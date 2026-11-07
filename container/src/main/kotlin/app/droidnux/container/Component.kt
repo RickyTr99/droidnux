@@ -28,10 +28,10 @@ data class Component(
         /** Turnip (Vulkan on Adreno through KGSL), Zink (OpenGL on Vulkan), GBM (KWin) and the VA-API driver: guest/mesa, guest/va. */
         val MESA = Component(
             id = "mesa",
-            version = "26.2.5-dn8",
-            url = "$RELEASES/mesa-26.2.5-dn8/droidnux-mesa-26.2.5-dn8-arm64.tar.xz",
-            sha256 = "c4f0818f251c18383b28779c6ba0055e3a2465fb7af5b2ae1c81bcfbe18aaa4e",
-            sizeBytes = 5_223_644,
+            version = "26.2.5-dn9",
+            url = "$RELEASES/mesa-26.2.5-dn9/droidnux-mesa-26.2.5-dn9-arm64.tar.xz",
+            sha256 = "c955ca0cfb072d3f583eec24f64805956bc578719bed9f52849ccae8287cee07",
+            sizeBytes = 5_228_484,
             guestPath = DesktopEnvironment.MESA_PREFIX,
         )
 
@@ -50,12 +50,12 @@ data class Component(
         /** [MESA] as Flatpak's GL extension, one per Freedesktop runtime branch (guest/mesa/flatpak.sh): the session installs it. */
         val FLATPAK_GL = listOf(
             FlatpakExtension(
-                "25.08", "$RELEASES/mesa-26.2.5-dn8/droidnux-mesa-26.2.5-dn8-flatpak-25.08-arm64.flatpak",
-                "245b6217173633aaecddedc777a94110514722a76657ce7a899d61cd3b6a96f4",
+                "25.08", "$RELEASES/mesa-26.2.5-dn9/droidnux-mesa-26.2.5-dn9-flatpak-25.08-arm64.flatpak",
+                "4253bea5e137bbfd5469cb53bd472bb0d5a5ada6e352a17af19147e043f3ff1d",
             ),
             FlatpakExtension(
-                "26.08", "$RELEASES/mesa-26.2.5-dn8/droidnux-mesa-26.2.5-dn8-flatpak-26.08-arm64.flatpak",
-                "70879d160a919212b9bb2d78826970398ca900302c0e2efd27f5158dd3ca825e",
+                "26.08", "$RELEASES/mesa-26.2.5-dn9/droidnux-mesa-26.2.5-dn9-flatpak-26.08-arm64.flatpak",
+                "8d589b8713d19bb3dc99d12ee9dbd4a1213b57802a7eafe0eb1d7c045a1a7c7a",
             ),
         )
     }
