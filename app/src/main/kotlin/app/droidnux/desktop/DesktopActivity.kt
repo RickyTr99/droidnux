@@ -275,15 +275,19 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     // Plasma's brightness slider: powerdevil's helper writes the backlight's brightness (DesktopEnvironment.backlightDevice).
     private val backlight by lazy { DesktopEnvironment.backlightDevice(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)) }
     @Volatile private var backlightValue = -1
-    /** When the desktop last changed size: KWin then applies its saved output settings, an old brightness among them. */
-    @Volatile private var resizedAt = 0L
+    /**
+     * Until when a brightness from the session is its own setting coming back, not the user: KWin applies its saved
+     * output settings after a resize, and powerdevil writes its own brightness while the session starts (seen: its
+     * minimum, and once the maximum). Android's stays.
+     */
+    @Volatile private var settleUntil = 0L
     private val backlightWatch by lazy {
         object : FileObserver(backlight, CLOSE_WRITE) {
             override fun onEvent(event: Int, path: String?) {
                 if (path != "brightness") return
                 val value = runCatching { File(backlight, path).readText().trim().toInt() }.getOrNull() ?: return
                 if (value == backlightValue) return
-                if (SystemClock.uptimeMillis() - resizedAt < RESIZE_SETTLE_MS) {
+                if (SystemClock.uptimeMillis() < settleUntil) {
                     runOnUiThread { writeBacklight(menuListener.brightness()) }
                     return
                 }
@@ -420,12 +424,13 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
         if (!DisplayServer.running) {
             val rootfs = Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)
+            settleUntil = SystemClock.uptimeMillis() + START_SETTLE_MS
             val started = DisplayServer.start(rootfs, desktopWidth, desktopHeight)
             Log.i(TAG, "display server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
             DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout())
             clipboardToDesktop()
         } else {
-            resizedAt = SystemClock.uptimeMillis()
+            settleUntil = maxOf(settleUntil, SystemClock.uptimeMillis() + RESIZE_SETTLE_MS)
             DisplayServer.resize(desktopWidth, desktopHeight)
         }
         DisplayServer.redraw()
@@ -940,6 +945,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val TAP_FOCUS_MS = 150L
         /** How long after a resize a brightness from KWin counts as its saved setting coming back, not the user. */
         private const val RESIZE_SETTLE_MS = 2000L
+        /** How long after the session starts a brightness from it counts as powerdevil's own (Plasma starts in ~20 s). */
+        private const val START_SETTLE_MS = 60_000L
 
         /** The desktop on screen, if any (main thread only). */
         private var current: DesktopActivity? = null
