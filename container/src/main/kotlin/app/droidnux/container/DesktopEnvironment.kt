@@ -1673,17 +1673,13 @@ ${PLASMASHELL_WATCH.prependIndent("        ")}
     private val FLATPAK_GL = """
         #!/bin/sh
         # Written by DroidNux: our Mesa as Flatpak's GL extension (org.freedesktop.Platform.GL.droidnux),
-        # for each branch of it the installed runtimes take, as Flathub has no build of it.
+        # for each branch of the Freedesktop runtime installed, as Flathub has no build of it.
         command -v flatpak > /dev/null || exit 0
         scope=--user
         [ "${'$'}(id -u)" != 0 ] || scope=--system
         stamps=${'$'}{XDG_DATA_HOME:-${'$'}HOME/.local/share}/flatpak/.droidnux-gl
-        # Not only Freedesktop's runtimes: GNOME's and KDE's are built on one and take its GL branch
-        # (Telegram's GNOME 51 takes 26.08's, and rendered in software without it).
-        branches=${'$'}(flatpak list --runtime --columns=ref | while read -r ref; do flatpak info -m "${'$'}ref" 2> /dev/null; done |
-            sed -n '/^\[Extension org.freedesktop.Platform.GL\]/,/^\[/s/^versions *= *//p' | tr ';' '\n')
         while read -r branch url sha; do
-            [ -n "${'$'}sha" ] && echo "${'$'}branches" | grep -qx "${'$'}branch" || continue
+            [ -n "${'$'}sha" ] && flatpak info org.freedesktop.Platform//${'$'}branch > /dev/null 2>&1 || continue
             # Pinned: nothing uses an extension chosen by FLATPAK_GL_DRIVERS, so "uninstall --unused" would take it.
             ref=runtime/org.freedesktop.Platform.GL.droidnux/${'$'}(flatpak --default-arch)/${'$'}branch
             flatpak pin ${'$'}scope "${'$'}ref" 2> /dev/null
