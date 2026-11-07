@@ -29,7 +29,7 @@ object DesktopEnvironment {
     /** The shadow hash the app's password got last (USER_SESSION), root's only. */
     private const val PASSWORD_STAMP = "/var/lib/droidnux/password-hash"
 
-    /** KWin's render time prediction (guest/kwin-pacing), preloaded into Plasma. */
+    /** KWin's render time prediction and Qt's animation timer (guest/kwin-pacing), preloaded into Plasma. */
     private const val KWIN_LIBRARY = "libdroidnux-guest-kwin.so"
     private const val GUEST_LIB_DIR = "/usr/local/lib/droidnux"
 
@@ -765,7 +765,7 @@ ${GPU_ENV.prependIndent("            ")}
             # Turnip on KGSL has no calibrated timestamps: Zink answers
             # GL_TIMESTAMP with a GPU round trip, which KWin asks every frame.
             export KWIN_NO_TIMER_QUERY=1
-            # KWin's render time prediction (guest/kwin-pacing): clients at the full refresh rate.
+            # KWin's render time prediction and Qt's animation timer (guest/kwin-pacing): clients at the full refresh rate.
             export LD_PRELOAD=$GUEST_LIB_DIR/$KWIN_LIBRARY${'$'}{LD_PRELOAD:+:${'$'}LD_PRELOAD}
             mkdir -p "${'$'}XDG_RUNTIME_DIR" && chmod 700 "${'$'}XDG_RUNTIME_DIR"
             # The wallet's key, from the environment (D-Bus would pass it to every service) to a private file.

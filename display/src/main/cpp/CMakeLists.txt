@@ -21,10 +21,11 @@ target_compile_options(droidnux-display PRIVATE
 target_compile_definitions(droidnux-display PRIVATE __ANDROID_UNAVAILABLE_SYMBOLS_ARE_WEAK__)
 target_link_libraries(droidnux-display PRIVATE aaudio android log mediandk nativewindow EGL GLESv3 dl)
 
-# Preload library for KWin (guest/kwin-pacing): its render time prediction.
-# It runs under glibc, so it links to nothing from the NDK: its few libc
-# symbols are resolved by glibc at load time.
-add_library(droidnux-guest-kwin SHARED ${GUEST_DIR}/kwin-pacing/droidnux-kwin-pacing.c)
+# Preload library for the Plasma session (guest/kwin-pacing): KWin's render
+# time prediction and Qt's animation timer. It runs under glibc, so it links to
+# nothing from the NDK: its few libc symbols are resolved by glibc at load time.
+add_library(droidnux-guest-kwin SHARED ${GUEST_DIR}/kwin-pacing/droidnux-kwin-pacing.c
+    ${GUEST_DIR}/kwin-pacing/droidnux-qt-animations.c)
 target_compile_options(droidnux-guest-kwin PRIVATE
     -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -mno-outline-atomics
     -U_FORTIFY_SOURCE -fno-asynchronous-unwind-tables -fvisibility=hidden)
