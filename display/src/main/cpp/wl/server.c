@@ -323,7 +323,34 @@ void dnx_wl_post_buffer_event(struct dnx_wl_dmabuf* buffer, bool released) {
 
 /* -- Events on the compositor thread -------------------------------------- */
 
+/* GPU boost (Mesa patch 0009): while this file's mtime is in the future, the
+ * guest's GPU queues ask KGSL for the highest clock. KGSL's governor keeps a
+ * desktop's frames at the lowest one (74 fps instead of 107 dragging with
+ * the mouse); boosting all the time cost 46% more power on a page animating
+ * by itself, boosting after input nothing measurable. */
+#define GPU_BOOST_NS 1000000000LL
+static char* gpu_boost_path;
+
+static void boost_gpu(void) {
+    static int64_t until;
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    int64_t t = (int64_t) now.tv_sec * 1000000000 + now.tv_nsec;
+    if (until - t > GPU_BOOST_NS - 100000000) return; /* moved less than 100 ms ago */
+    until = t + GPU_BOOST_NS;
+    struct timespec times[2] = {{.tv_nsec = UTIME_OMIT}, {.tv_sec = until / 1000000000, .tv_nsec = until % 1000000000}};
+    if (utimensat(AT_FDCWD, gpu_boost_path, times, 0) != 0 && errno == ENOENT) {
+        int fd = open(gpu_boost_path, O_WRONLY | O_CREAT | O_CLOEXEC, 0644);
+        if (fd >= 0) {
+            futimens(fd, times);
+            close(fd);
+        }
+    }
+}
+
 static void handle_event(const struct event* e) {
+    /* EVENT_KEY..EVENT_SCROLL and the touch events are the user's input. */
+    if (e->type <= EVENT_SCROLL || (e->type >= EVENT_TOUCH_DOWN && e->type <= EVENT_TOUCH_UP)) boost_gpu();
     switch (e->type) {
     case EVENT_KEY:
         dnx_wl_seat_key(e->a, e->b);
@@ -477,6 +504,8 @@ bool dnx_wl_start(const dnx_wl_config* config) {
     asprintf(&path, "%s/.droidnux-audio", config->tmp_dir);
     dnx_audio_output_start(path);
     free(path);
+    free(gpu_boost_path);
+    asprintf(&gpu_boost_path, "%s/.droidnux-gpu-boost", config->tmp_dir);
 
     if (pipe2(event_pipe, O_CLOEXEC | O_NONBLOCK) != 0 ||
         (vsync_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK)) < 0 ||
