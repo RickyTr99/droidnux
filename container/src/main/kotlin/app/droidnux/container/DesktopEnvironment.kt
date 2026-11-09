@@ -267,6 +267,9 @@ object DesktopEnvironment {
         writeFile(rootfs, FIREFOX_PREFS_PATH, FIREFOX_PREFS.toByteArray())
         writeFile(rootfs, CHROMIUM_FLAGS_PATH, CHROMIUM_FLAGS.toByteArray())
         OBSOLETE_FILES.forEach { removeFile(rootfs, it) }
+        // systemd's ssh proxy (Host unix/* vsock/* .host) needs systemd's sockets, which never exist here; editors
+        // list ".host" as the only remote host (VS Code's Remote - SSH) and fail. systemd's upgrades bring it back.
+        removeFile(rootfs, "/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf")
     }
 
     /** Printed by the session script when the desktop logs out. */
