@@ -20,9 +20,16 @@ SRC=$WORK/fex-$FEX_VERSION
 
 if [ "${DROIDNUX_FEX_DEPS:-}" = install ]; then
     export DEBIAN_FRONTEND=noninteractive
+    # The thunks' guest halves are x86 libraries, built against Debian's amd64 and i386 multiarch packages.
+    dpkg --add-architecture amd64
+    dpkg --add-architecture i386
     apt-get update -q
     apt-get install -y -q --no-install-recommends \
-        ca-certificates git xz-utils patch clang lld llvm cmake ninja-build python3 pkg-config file
+        ca-certificates git xz-utils patch clang lld llvm cmake ninja-build python3 pkg-config file \
+        libclang-dev llvm-dev libssl-dev \
+        libegl-dev libgl-dev libvulkan-dev libdrm-dev libwayland-dev libasound2-dev libx11-dev libxcb1-dev \
+        libc6-dev:amd64 libstdc++-14-dev:amd64 libgcc-14-dev:amd64 \
+        libc6-dev:i386 libstdc++-14-dev:i386 libgcc-14-dev:i386
 fi
 
 if [ ! -d "$SRC" ]; then
@@ -40,7 +47,7 @@ cmake -S "$SRC" -B "$SRC/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PREFIX" \
     -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DUSE_LINKER=lld -DCMAKE_CXX_SCAN_FOR_MODULES=OFF \
     -DTUNE_CPU=none -DTUNE_ARCH=armv8-a \
-    -DBUILD_TESTING=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_ASSERTIONS=OFF -DBUILD_THUNKS=OFF \
+    -DBUILD_TESTING=OFF -DBUILD_FEXCONFIG=OFF -DENABLE_ASSERTIONS=OFF -DBUILD_THUNKS=ON -DX86_DEV_ROOTFS=/ \
     -DENABLE_CCACHE=OFF -DENABLE_OFFLINE_TELEMETRY=OFF
 ninja -C "$SRC/build"
 rm -rf "$WORK/stage"
@@ -55,6 +62,17 @@ for ARCH in x86_64 i386; do
         -fno-asynchronous-unwind-tables -fvisibility=hidden -Wl,-z,undefs -Wl,--hash-style=both \
         -o "$WORK/stage$PREFIX/lib/$ARCH-linux-gnu/libdroidnux-guest-kwin.so" "$HERE/../kwin-pacing/droidnux-qt-animations.c"
 done
+
+# FEX's global configuration. RootFS "/": the x86 libraries are the rootfs's own multiarch ones, and
+# with no RootFS FEX looks for /usr/lib/x86_64-linux-gnu from the working directory, missing the
+# thunks' overlays. The thunks hand GLX and Vulkan to the arm64 Mesa (Zink and Turnip). Not yet
+# WaylandClient (its guest library lacks wl_list_*: libdecor and GTK fail) nor EGL (a stub upstream).
+cat > "$WORK/stage$PREFIX/share/fex-emu/Config.json" << 'EOF'
+{
+  "Config": {"RootFS": "/"},
+  "ThunksDB": {"GL": 1, "Vulkan": 1}
+}
+EOF
 
 NAME=droidnux-fex-${FEX_VERSION#FEX-}-dn$DROIDNUX_REVISION-arm64
 tar -C "$WORK/stage$PREFIX" -cJf "$OUT/$NAME.tar.xz" .
