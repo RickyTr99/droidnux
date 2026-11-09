@@ -39,6 +39,8 @@ class Burrow(context: Context) {
             if (dnsPort > 0) { add("-d"); add(dnsPort.toString()) }
             // Per-syscall counts of Burrow's handler while the file exists (tools/burrow-stats.py).
             if (statsFile.exists()) { add("-s"); add(statsFile.absolutePath) }
+            // x86 programs run through FEX, once its component is in the rootfs.
+            if (File(rootfs, FEX.removePrefix("/")).exists()) { add("-x"); add(FEX) }
             for (bind in DEFAULT_BINDS) {
                 add("-b"); add(bind)
             }
@@ -119,6 +121,7 @@ class Burrow(context: Context) {
     private companion object {
         const val KGSL_DEVICE = "/dev/kgsl-3d0"
         const val RENDER_NODE = "renderD128"
+        const val FEX = "/opt/droidnux/fex/bin/FEX"
 
         val DEFAULT_BINDS = listOf("/dev", "/proc", "/sys")
         const val MEDIA_RW = "/mnt/media_rw"
