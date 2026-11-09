@@ -1801,6 +1801,7 @@ ${Component.FLATPAK_GL.joinToString("\n") { "        ${it.branch} ${it.url} ${it
         # (--seccomp) and read-only mounts are not applied. It replaces the distro's
         # /usr/bin/bwrap (diverted by the session), so Flatpak runs its apps with it.
         import ctypes
+        import fcntl
         import json
         import os
         import shutil
@@ -2040,8 +2041,11 @@ ${Component.FLATPAK_GL.joinToString("\n") { "        ${it.branch} ${it.url} ${it
                         json.dump({"child-pid": os.getpid()}, f)
                         f.write("\n")
                 elif name == "--lock-file":
+                    # A read lock, as bwrap takes: Flatpak deletes an app's /tmp and runtime
+                    # directories when it can write-lock their .ref, so while no instance runs.
                     try:
                         keep.append(os.open(root + "/" + args[0].lstrip("/"), os.O_RDONLY))
+                        fcntl.lockf(keep[-1], fcntl.LOCK_SH | fcntl.LOCK_NB)
                     except OSError:
                         pass
                 elif name == "--die-with-parent":
