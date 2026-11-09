@@ -46,6 +46,16 @@ ninja -C "$SRC/build"
 rm -rf "$WORK/stage"
 DESTDIR="$WORK/stage" ninja -C "$SRC/build" install
 
+# The session's preload (guest/kwin-pacing, Qt's animation timer) for x86 programs: their ld.so
+# looks for it in its own $LIB, where the app links lib/<multiarch> of this component.
+for ARCH in x86_64 i386; do
+    mkdir -p "$WORK/stage$PREFIX/lib/$ARCH-linux-gnu"
+    clang --target=$ARCH-linux-gnu -O2 -fPIC -shared -nostdlib -fuse-ld=lld \
+        -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -U_FORTIFY_SOURCE \
+        -fno-asynchronous-unwind-tables -fvisibility=hidden -Wl,-z,undefs -Wl,--hash-style=both \
+        -o "$WORK/stage$PREFIX/lib/$ARCH-linux-gnu/libdroidnux-guest-kwin.so" "$HERE/../kwin-pacing/droidnux-qt-animations.c"
+done
+
 NAME=droidnux-fex-${FEX_VERSION#FEX-}-dn$DROIDNUX_REVISION-arm64
 tar -C "$WORK/stage$PREFIX" -cJf "$OUT/$NAME.tar.xz" .
 (cd "$OUT" && sha256sum "$NAME.tar.xz" > "$NAME.tar.xz.sha256")

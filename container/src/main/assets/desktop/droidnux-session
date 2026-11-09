@@ -195,7 +195,8 @@ if [ "$1" != --in-dbus ]; then
     # GL_TIMESTAMP with a GPU round trip, which KWin asks every frame.
     export KWIN_NO_TIMER_QUERY=1
     # KWin's render time prediction and Qt's animation timer (guest/kwin-pacing): clients at the full refresh rate.
-    export LD_PRELOAD=@GUEST_LIB_DIR@/@KWIN_LIBRARY@${LD_PRELOAD:+:$LD_PRELOAD}
+    # ld.so expands $LIB to its multiarch directory, so x86 programs (FEX) load their own build.
+    export LD_PRELOAD='/usr/local/$LIB/droidnux/@KWIN_LIBRARY@'${LD_PRELOAD:+:$LD_PRELOAD}
     mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
     # The wallet's key, from the environment (D-Bus would pass it to every service) to a private file.
     if [ -n "$DROIDNUX_WALLET" ]; then

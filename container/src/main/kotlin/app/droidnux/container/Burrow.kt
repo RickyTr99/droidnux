@@ -121,7 +121,7 @@ class Burrow(context: Context) {
     private companion object {
         const val KGSL_DEVICE = "/dev/kgsl-3d0"
         const val RENDER_NODE = "renderD128"
-        const val FEX = "/opt/droidnux/fex/bin/FEX"
+        const val FEX = "${DesktopEnvironment.FEX_PREFIX}/bin/FEX"
 
         val DEFAULT_BINDS = listOf("/dev", "/proc", "/sys")
         const val MEDIA_RW = "/mnt/media_rw"
