@@ -94,6 +94,13 @@ object DesktopEnvironment {
     /** bubblewrap for Flatpak, on what Burrow emulates ([BWRAP]). */
     private const val BWRAP_SCRIPT = "$GUEST_LIB_DIR/droidnux-bwrap"
 
+    /**
+     * The document portal without FUSE ([DOCUMENTS]), started on demand by the session bus: its
+     * directory comes before /usr/share's, so it takes the place of xdg-document-portal.
+     */
+    private const val DOCUMENTS_SCRIPT = "$GUEST_LIB_DIR/droidnux-documents"
+    private const val DOCUMENTS_SERVICE = "/usr/local/share/dbus-1/services/org.freedesktop.portal.Documents.service"
+
     /** Groups the desktop's processes by app for System Monitor ([APP_GROUPS]). */
     private const val APP_GROUPS_SCRIPT = "$GUEST_LIB_DIR/droidnux-app-groups"
 
@@ -238,6 +245,11 @@ object DesktopEnvironment {
         writeFile(rootfs, PLACES_SCRIPT, PLACES.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, APP_GROUPS_SCRIPT, APP_GROUPS.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, BWRAP_SCRIPT, BWRAP.toByteArray(), mode = 0x1ED)
+        writeFile(rootfs, DOCUMENTS_SCRIPT, DOCUMENTS.toByteArray(), mode = 0x1ED)
+        writeFile(
+            rootfs, DOCUMENTS_SERVICE,
+            "[D-BUS Service]\nName=org.freedesktop.portal.Documents\nExec=$DOCUMENTS_SCRIPT\n".toByteArray(),
+        )
         writeFile(rootfs, FLATPAK_GL_SCRIPT, FLATPAK_GL.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, WALLPAPER_SCRIPT, WALLPAPER.toByteArray(), mode = 0x1ED)
         writeFile(rootfs, SYSTEM_BUS_CONF, SYSTEM_BUS.toByteArray())
@@ -538,6 +550,11 @@ object DesktopEnvironment {
         $APP_GROUPS_SCRIPT &
         $WALLPAPER_SCRIPT &
         [ -z "${'$'}FLATPAK_GL_DRIVERS" ] || $FLATPAK_GL_SCRIPT &
+        # Flatpak's apps see the user's files: the portals take them for host apps (Burrow's chroot is not
+        # in /proc/<pid>/root) and hand over real paths, which the document portal (FUSE) cannot export.
+        # Without these, saving, opening and dropping files fail (Telegram).
+        ! command -v flatpak > /dev/null ||
+            flatpak override --user --filesystem=home --filesystem=/sdcard --filesystem=/mnt/media_rw &
     """.trimIndent()
 
     /** Session script part, inside D-Bus: apps the app starts, once the process LAUNCH_AFTER runs. */
@@ -735,6 +752,9 @@ ${USER_SESSION.prependIndent("        ")}
             # Electron apps (VS Code, Discord, Obsidian): Chromium's sandbox needs user
             # namespaces or its set-user-ID helper, neither of which Android allows.
             export ELECTRON_DISABLE_SANDBOX=1
+            # Set by startplasma-wayland too, but xdg-desktop-portal starts on the bus before it
+            # (SESSION_SERVICES) and without it takes no backend: no file chooser, no settings.
+            export XDG_CURRENT_DESKTOP=KDE
             # Their menu entries, as Flatpak's profile.d script would add after a login.
             export XDG_DATA_DIRS=${'$'}HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:${'$'}{XDG_DATA_DIRS:-/usr/local/share:/usr/share}
 ${GPU_ENV.prependIndent("            ")}
@@ -805,10 +825,15 @@ ${USER_DIRS.prependIndent("            ")}
         fi
 
         # KDE's wallet, opened with the account's password (USER_SESSION) as pam_kwallet does at login.
+        # Once KWin is up: kwalletd and xdg-desktop-portal (which Qt asks for its settings) take the bus's
+        # environment when they start, and before it they would show their windows outside KWin.
+        rm -f "${'$'}XDG_RUNTIME_DIR/wayland-0"
         if [ -f "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet" ]; then
             key=${'$'}(sed -n 1p "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet")
             before=${'$'}(sed -n 2p "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet")
             rm -f "${'$'}XDG_RUNTIME_DIR/.droidnux-wallet"
+            (until [ -S "${'$'}XDG_RUNTIME_DIR/wayland-0" ]; do sleep 0.2; done
+            dbus-update-activation-environment WAYLAND_DISPLAY=wayland-0
             if [ -n "${'$'}before" ]; then
                 # The keys on its input: the command line is visible to every process.
                 (printf '%s\n%s\n' "${'$'}key" "${'$'}before" | $WALLET_SCRIPT "${'$'}HOME/.local/share/kwalletd" &&
@@ -816,7 +841,7 @@ ${USER_DIRS.prependIndent("            ")}
             else
                 gdbus call --session --dest org.kde.kwalletd6 --object-path /modules/kwalletd6 \
                     --method org.kde.KWallet.pamOpen kdewallet "${'$'}key" 0 > /dev/null 2>&1 &
-            fi
+            fi) &
             unset key before
         fi
 ${SESSION_SERVICES.prependIndent("        ")}
@@ -1702,6 +1727,60 @@ ${Component.FLATPAK_GL.joinToString("\n") { "        ${it.branch} ${it.url} ${it
     """.trimIndent()
 
     /**
+     * The document portal ([DOCUMENTS_SCRIPT]) that gives Flatpak's apps the real paths of the files
+     * they are handed: xdg-document-portal exports them through a FUSE file system, which apps
+     * cannot mount on Android, and without it the file chooser gives them nothing. The session
+     * lets them see the user's files (SESSION_SERVICES).
+     */
+    private val DOCUMENTS = """
+        #!/usr/bin/python3
+        # Written by DroidNux: org.freedesktop.portal.Documents without its FUSE file system.
+        # Every file is "already visible to the app" (an empty document id), so the portals
+        # hand the app its real path, which Flatpak's apps see here (filesystems=home).
+        from gi.repository import Gio, GLib
+
+        NAME = "org.freedesktop.portal.Documents"
+        PATH = "/org/freedesktop/portal/documents"
+        NODE = Gio.DBusNodeInfo.new_for_xml(""${'"'}<node><interface name="org.freedesktop.portal.Documents">
+          <property name="version" type="u" access="read"/>
+          <method name="GetMountPoint"><arg type="ay" direction="out"/></method>
+          <method name="Add"><arg type="h"/><arg type="b"/><arg type="b"/><arg type="s" direction="out"/></method>
+          <method name="AddNamed"><arg type="h"/><arg type="ay"/><arg type="b"/><arg type="b"/>
+            <arg type="s" direction="out"/></method>
+          <method name="AddFull"><arg type="ah"/><arg type="u"/><arg type="s"/><arg type="as"/>
+            <arg type="as" direction="out"/><arg type="a{sv}" direction="out"/></method>
+          <method name="AddNamedFull"><arg type="h"/><arg type="ay"/><arg type="u"/><arg type="s"/><arg type="as"/>
+            <arg type="s" direction="out"/><arg type="a{sv}" direction="out"/></method>
+          <method name="GrantPermissions"><arg type="s"/><arg type="s"/><arg type="as"/></method>
+          <method name="RevokePermissions"><arg type="s"/><arg type="s"/><arg type="as"/></method>
+          <method name="Delete"><arg type="s"/></method>
+        </interface></node>""${'"'})
+
+
+        def call(connection, sender, path, interface, method, parameters, invocation):
+            if method == "GetMountPoint":
+                # No mount point: Flatpak then binds no /run/flatpak/doc into the sandbox.
+                invocation.return_dbus_error("org.freedesktop.DBus.Error.NotSupported", "no FUSE on Android")
+            elif method in ("Add", "AddNamed"):
+                invocation.return_value(GLib.Variant("(s)", ("",)))
+            elif method == "AddFull":
+                invocation.return_value(GLib.Variant("(asa{sv})", ([""] * len(parameters[0]), {})))
+            elif method == "AddNamedFull":
+                invocation.return_value(GLib.Variant("(sa{sv})", ("", {})))
+            else:
+                invocation.return_value(None)
+
+
+        def acquired(connection, name):
+            connection.register_object(PATH, NODE.interfaces[0], call, lambda *_: GLib.Variant("u", 4), None)
+
+
+        loop = GLib.MainLoop()
+        Gio.bus_own_name(Gio.BusType.SESSION, NAME, Gio.BusNameOwnerFlags.NONE, acquired, None, lambda *_: loop.quit())
+        loop.run()
+    """.trimIndent() + "\n"
+
+    /**
      * bwrap for Flatpak ([BWRAP_SCRIPT]): the sandbox built with what Burrow emulates
      * (unshare, bind mounts as bindings, chroot), since Android allows apps no user namespaces.
      */
@@ -1899,6 +1978,13 @@ ${Component.FLATPAK_GL.joinToString("\n") { "        ${it.branch} ${it.url} ${it
                 elif name in ("--file", "--bind-data", "--ro-bind-data"):
                     data = read_fd(args[0])
                     target = at(args[1])
+                    if os.path.dirname(target) == root:
+                        # In the new root itself, not in a binding: written there, so other processes
+                        # see it too (the portals read /proc/<pid>/root/.flatpak-info).
+                        with open(target, "wb") as f:
+                            f.write(data)
+                        os.chmod(target, mode(0o666 if name == "--file" else 0o600))
+                        continue
                     source = fresh("file")
                     with open(source, "wb") as f:
                         f.write(data)
