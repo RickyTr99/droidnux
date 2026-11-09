@@ -44,7 +44,7 @@ class Burrow(context: Context) {
             }
             // Android has no /dev/shm; glibc shm_open() needs one.
             add("-b"); add("${File(rootfs, SHM_DIR).apply { mkdirs() }.absolutePath}:/dev/shm")
-            // The desktop's own cgroup tree (DesktopEnvironment's APP_GROUPS): Android's is not readable.
+            // The desktop's own cgroup tree (DesktopEnvironment's droidnux-app-groups): Android's is not readable.
             val cgroups = File(rootfs, CGROUP_DIR).apply { mkdirs() }
             File(cgroups, CGROUP_MARKER).createNewFile()
             add("-b"); add("${cgroups.absolutePath}:/sys/fs/cgroup")

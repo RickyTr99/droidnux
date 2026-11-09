@@ -1,0 +1,2 @@
+# Written by DroidNux: Android gives apps no user namespaces for Chromium's sandbox.
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox"

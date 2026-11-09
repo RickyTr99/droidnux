@@ -31,7 +31,7 @@ object AppStore {
 
     /**
      * Flathub's apps, system-wide (the store runs as root), Flatpak and the remote set up the
-     * first time; then DroidNux's GL extension for their runtime (DesktopEnvironment's FLATPAK_GL).
+     * first time; then DroidNux's GL extension for their runtime (DesktopEnvironment's droidnux-flatpak-gl).
      */
     private fun flatpakInstallScript(ids: List<String>, glScript: String) = """
         $HEADER
@@ -47,7 +47,7 @@ object AppStore {
         set -e
         flatpak uninstall --system --noninteractive -y ${ids.joinToString(" ")}
         flatpak uninstall --system --noninteractive -y --unused || true
-        # Our GL extension is pinned (FLATPAK_GL): it goes with the last runtime taking its branch (GNOME's and KDE's too).
+        # Our GL extension is pinned (droidnux-flatpak-gl): it goes with the last runtime taking its branch (GNOME's and KDE's too).
         branches=${'$'}(flatpak list --system --runtime --columns=ref | while read -r ref; do flatpak info --system -m "${'$'}ref" 2> /dev/null; done |
             sed -n '/^\[Extension org.freedesktop.Platform.GL\]/,/^\[/s/^versions *= *//p' | tr ';' '\n')
         for b in ${'$'}(flatpak list --system --runtime --columns=application,branch | awk '${'$'}1 == "org.freedesktop.Platform.GL.droidnux" { print ${'$'}2 }'); do

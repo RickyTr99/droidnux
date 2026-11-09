@@ -426,7 +426,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         appsJob = viewModelScope.launch {
             val apps = runCatching {
                 withContext(Dispatchers.IO) {
-                    DesktopEnvironment.prepare(rootfs, File(getApplication<Application>().applicationInfo.nativeLibraryDir))
+                    DesktopEnvironment.prepare(getApplication(), rootfs)
                 }
                 val result = container.shell(_state.value.distro, DesktopEnvironment.appsCommand(Locale.getDefault().language))
                 DesktopEnvironment.parseApps(result.output).also { apps ->

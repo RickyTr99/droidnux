@@ -77,7 +77,7 @@ class DesktopSessionService : Service() {
         val distro = Distro.DEBIAN_TRIXIE
         val container = Container(this)
         val rootfs = container.installer.rootfsDir(distro)
-        DesktopEnvironment.prepare(rootfs, java.io.File(applicationInfo.nativeLibraryDir))
+        DesktopEnvironment.prepare(this, rootfs)
         // Android's battery in the desktop (sticky: the first call comes at once).
         if (battery == null) {
             battery = object : BroadcastReceiver() {
