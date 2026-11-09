@@ -143,6 +143,8 @@ object DesktopEnvironment {
         // Digest::SHA, for the wallet's key (droidnux-session); perl-base lacks it.
         "perl",
         "konsole", "dolphin", "kwrite", "ark", "gwenview", "okular", "kde-spectacle",
+        // Dolphin's image and video previews: only recommended, so --no-install-recommends drops them.
+        "kio-extras", "ffmpegthumbs",
         // GTK apps (Firefox) in Breeze, set from System Settings.
         "breeze-gtk-theme", "kde-config-gtk-style",
     )
@@ -234,7 +236,11 @@ object DesktopEnvironment {
         writeFile(rootfs, "$GUEST_LIB_DIR/$KWIN_LIBRARY", File(nativeLibraryDir, KWIN_LIBRARY).readBytes())
         writeFile(rootfs, "$PIPEWIRE_MODULE_DIR/$PIPEWIRE_MODULE", File(nativeLibraryDir, PIPEWIRE_MODULE).readBytes())
         writeFile(rootfs, IM_PROGRAM, File(nativeLibraryDir, IM_LIBRARY).readBytes(), mode = 0x1ED)
-        writeFile(rootfs, "$PLASMA_DEFAULTS/kdeglobals", "[KDE]\nLookAndFeelPackage=org.droidnux.desktop\n".toByteArray())
+        // KIO counts Android's storage (FUSE) as remote, where previews are off by default: allow files up to 50 MiB.
+        writeFile(
+            rootfs, "$PLASMA_DEFAULTS/kdeglobals",
+            "[KDE]\nLookAndFeelPackage=org.droidnux.desktop\n\n[PreviewSettings]\nMaximumRemoteSize=52428800\n".toByteArray(),
+        )
         writeFile(
             rootfs, DOCUMENTS_SERVICE,
             "[D-BUS Service]\nName=org.freedesktop.portal.Documents\nExec=$DOCUMENTS_SCRIPT\n".toByteArray(),
