@@ -2063,6 +2063,10 @@ ${Component.FLATPAK_GL.joinToString("\n") { "        ${it.branch} ${it.url} ${it
                     env.pop(name, None)
                 if os.path.exists("/dev/kgsl-3d0") and os.path.isfile(root + GL_EXTENSION + "/droidnux-mesa.version"):
                     env.update(GL_EXTENSION_VARIABLES)
+                    # Its libraries before those of the runtime's own GL extension, mounted too (FLATPAK_GL_DRIVERS)
+                    # and first in ld.so's cache: they share names (libgallium-<version>.so, libgbm.so.1), and our
+                    # EGL with the other gallium corrupts the heap (Telegram aborted closing its image viewer).
+                    env["LD_LIBRARY_PATH"] = ":".join(filter(None, (GL_EXTENSION + "/lib", env.get("LD_LIBRARY_PATH"))))
                     # The runtime's Vulkan loader first: apps bundling Chromium's older one (ONLYOFFICE,
                     # LD_LIBRARY_PATH=./) leave Zink without an instance, and GLX without a visual.
                     loader = "/usr/lib/aarch64-linux-gnu/libvulkan.so.1"
