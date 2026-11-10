@@ -427,6 +427,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             settleUntil = SystemClock.uptimeMillis() + START_SETTLE_MS
             val started = DisplayServer.start(rootfs, desktopWidth, desktopHeight)
             Log.i(TAG, "display server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
+            applyUiScale()
             DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout())
             clipboardToDesktop()
         } else {
@@ -900,8 +901,9 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     private fun applyUiScale() {
         if (!DisplayServer.running) return
-        // KWin's output scale, in the 5% steps of Plasma's display settings. Only on a change:
-        // KWin keeps it across sessions, and the display settings may set it too.
+        // KWin's output scale, in the 5% steps of Plasma's display settings: on a change, and when
+        // the server starts, for a KWin that lost the one it keeps across sessions (killed while
+        // saving it). The display settings may set it too, and the app follows (followKWinScale).
         DisplayServer.setScale((dpi() * 20f / BASE_DPI).roundToInt() / 20f)
     }
 

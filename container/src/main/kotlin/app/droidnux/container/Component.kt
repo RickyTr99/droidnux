@@ -84,7 +84,10 @@ data class Component(
                     printf 'Package: droidnux-x86\nVersion: 1\nArchitecture: %s\nMulti-Arch: same\nProvides: %s\nMaintainer: DroidNux\nDescription: arm64 GL and tools for x86 programs (FEX)\n' ${'$'}arch "${'$'}provides" > ${'$'}dir/${'$'}arch/DEBIAN/control
                     dpkg-deb -b ${'$'}dir/${'$'}arch ${'$'}dir/droidnux-x86_${'$'}arch.deb > /dev/null
                 done
-                apt-get install -y -q --no-install-recommends ${'$'}dir/droidnux-x86_*.deb \
+                # dpkg, not apt: it replaces an installed droidnux-x86 of the same or a newer version, whose
+                # Provides may name versions of the tools that are gone.
+                dpkg -i ${'$'}dir/droidnux-x86_*.deb
+                apt-get install -y -q --no-install-recommends \
                     libc6:amd64 libgl1:amd64 libvulkan1:amd64 libc6:i386 libgl1:i386 libvulkan1:i386
                 rm -rf ${'$'}dir
                 ln -sf ${DesktopEnvironment.FEX_PREFIX}/bin/ldd /usr/local/bin/ldd
