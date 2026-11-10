@@ -1,0 +1,656 @@
+FEX's internal host threads (the DiskCache writer, the gdb server) showed in
+the guest's own /proc: /proc/<pid>/task entries and link count, Threads: in
+status and num_threads in stat. Chromium's zygote checks it is single-threaded
+before forking and stops on int3, so no Chromium/Electron child started with
+the disk cache on. They are now hidden from every view of the process itself.
+
+A forked child also kept the Writer object without its thread, and shared the
+parent's flock()ed cache files. The disk cache locks are taken across fork; the
+child restarts its writer and reopens its own cache DB on first use.
+
+--- a/FEXCore/Source/Interface/Core/Core.cpp
++++ b/FEXCore/Source/Interface/Core/Core.cpp
+@@ -453,6 +453,7 @@
+ #ifndef _WIN32
+ void ContextImpl::UnlockAfterFork(FEXCore::Core::InternalThreadState* LiveThread, bool Child) {
+   Allocator::UnlockAfterFork(LiveThread, Child);
++  DiskCache.UnlockAfterFork(Child);
+ 
+   Profiler::PostForkAction(Child);
+   if (Child) {
+@@ -474,6 +475,7 @@
+ 
+ void ContextImpl::LockBeforeFork(FEXCore::Core::InternalThreadState* Thread) {
+   CodeInvalidationMutex.lock();
++  DiskCache.LockBeforeFork();
+   Allocator::LockBeforeFork(Thread);
+   if (Config.StrictInProcessSplitLocks) {
+     FEXCore::Utils::SpinWaitLock::lock(&StrictSplitLockMutex);
+--- a/FEXCore/Source/Interface/Core/DiskCache.cpp
++++ b/FEXCore/Source/Interface/Core/DiskCache.cpp
+@@ -439,7 +439,7 @@
+       FileMapper = nullptr;
+     }
+ 
+-    const auto RWDBBasePath = fextl::fmt::format("{}RWCacheDB_{:016x}", BasePath, ProcessBucketHash);
++    RWDBBasePath = fextl::fmt::format("{}RWCacheDB_{:016x}", BasePath, ProcessBucketHash);
+     OpenCacheDB(RWDBBasePath, false);
+ 
+     if (RWCacheDB && !FoundMetadata) {
+@@ -478,6 +478,47 @@
+     }
+   }
+ 
++  void DiskCache::LockBeforeFork() {
++    // Taken before the allocator lock: the Writer allocates while holding them.
++    RestartLock.lock();
++    IndexLock.lock();
++    MemoryLRULock.lock();
++  }
++
++  void DiskCache::UnlockAfterFork(bool Child) {
++    MemoryLRULock.unlock();
++    IndexLock.unlock();
++    RestartLock.unlock();
++    if (Child && Writer) {
++      // Restarted on first use, so a child that only execs pays nothing.
++      // Not here: thread setup after a fork frees every stack but the forking thread's.
++      WriterLostToFork.store(true, std::memory_order_release);
++    }
++  }
++
++  void DiskCache::RestartWriterAfterFork() {
++    std::lock_guard lk {RestartLock};
++    if (!WriterLostToFork.load(std::memory_order_relaxed)) {
++      return;
++    }
++
++    // Joining the old Writer would wait forever on a thread that didn't survive the fork. Its queued work is the parent's to write.
++    (void)Writer.release();
++
++    // Index entries keep reading the inherited DB. New stores go to the DB opened here, so flock() excludes the parent again.
++    auto DB = fextl::make_unique<IndexedDB>();
++    if (DB->Open(RWDBBasePath, false)) {
++      ROCacheDBs.push_back(std::move(RWCacheDB));
++      RWCacheDB = std::move(DB);
++    } else {
++      WritingDiskCache = false;
++    }
++
++    FEXCore::Threads::Flags WriterThreadFlags = {.LowPriority = true, .Internal = true};
++    Writer = fextl::make_unique<WorkQueueThread>(WriterThreadFlags, "FEX:DiskCache");
++    WriterLostToFork.store(false, std::memory_order_release);
++  }
++
+   uint64_t DiskCache::MakeLookupKey(Core::InternalThreadState* Thread, const uint64_t CodeKey, bool Writable, bool MonoBackpatcher) {
+     struct __attribute__((packed)) {
+       uint64_t CodeKey;
+@@ -826,6 +867,9 @@
+     }
+ 
+     if (StoreInMemory && MemoryLRUCurrentSize > MemoryLRUMaxSize + MemoryLRUEvictThreshold) {
++      if (WriterLostToFork.load(std::memory_order_acquire)) {
++        RestartWriterAfterFork();
++      }
+       Writer->QueueWork(fextl::make_unique<PruneMemoryLRUWorkItem>(this));
+     }
+ 
+@@ -975,6 +1019,9 @@
+   bool DiskCache::Store(Core::InternalThreadState* Thread, std::optional<ExecutableFileSectionInfo> Region, uint64_t GuestRIP,
+                         uint64_t GuestCodeKey, std::span<const uint8_t> GuestCode, const CPU::CPUBackend::CompiledCode& CompiledCode,
+                         std::span<const FEXCore::CPU::Relocation> Relocations, const Frontend::Decoder::DecodedBlockInformation* DecodedBlockInfo) {
++    if (WriterLostToFork.load(std::memory_order_acquire)) {
++      RestartWriterAfterFork();
++    }
+     if (!IsWritingDiskCache()) {
+       return false;
+     }
+--- a/FEXCore/Source/Interface/Core/DiskCache.h
++++ b/FEXCore/Source/Interface/Core/DiskCache.h
+@@ -16,6 +16,7 @@
+ #include <FEXCore/fextl/map.h>
+ #include <FEXCore/fextl/vector.h>
+ #include <stdint.h>
++#include <atomic>
+ #include <mutex>
+ #include <optional>
+ #include <span>
+@@ -209,13 +210,21 @@
+       return Validation;
+     }
+ 
++    void LockBeforeFork();
++    void UnlockAfterFork(bool Child);
++
+   private:
++    void RestartWriterAfterFork();
+     bool OpenCacheDB(const fextl::string& CacheDBName, bool ReadOnly);
+     uint64_t MakeLookupKey(Core::InternalThreadState* Thread, const uint64_t ModuleOffset, bool Writable, bool MonoBackpatcher);
+     IndexEntry* LookupLocked(const uint64_t LookupKey, const XXH128_hash_t& GuestHash, const uint64_t GuestFootprint);
+ 
+     bool ReadingDiskCache {};
+-    bool WritingDiskCache {};
++    std::atomic<bool> WritingDiskCache {};
++    fextl::string RWDBBasePath;
++    // A forked child has the Writer object but not its thread, and shares the parent's flock()ed DB files.
++    std::atomic<bool> WriterLostToFork {};
++    std::mutex RestartLock;
+     FEXCore::Context::ContextImpl* CTX;
+     XXH128_hash_t BucketHash;
+     fextl::vector<fextl::unique_ptr<IndexedDB>> ROCacheDBs;
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/EmulatedFiles/EmulatedFiles.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/EmulatedFiles/EmulatedFiles.cpp
+@@ -12,6 +12,7 @@
+ #include "Common/FDUtils.h"
+ #include "LinuxSyscalls/Syscalls.h"
+ #include "LinuxSyscalls/EmulatedFiles/EmulatedFiles.h"
++#include "LinuxSyscalls/Utils/Threads.h"
+ 
+ #include <FEXCore/Config/Config.h>
+ #include <FEXCore/Core/Context.h>
+@@ -24,6 +25,7 @@
+ 
+ #include <git_version.h>
+ 
++#include <charconv>
+ #include <cstring>
+ #include <fcntl.h>
+ #include <filesystem>
+@@ -608,12 +610,88 @@
+   }
+ 
+   if (Creator == FDReadCreators.end()) {
+-    return -1;
++    return pathname ? ProcThreadCount(pathname, flags) : -1;
+   }
+ 
+   return Creator->second(CTX, AT_FDCWD, pathname, flags, mode);
+ }
+ 
++// This process' status and stat (also per thread, under task/<tid>/) count FEX's internal threads,
++// which the guest never created.
++// shortcut: the guest reads a snapshot from open time, not a fresh one per read; matters only to a guest re-reading one open fd.
++int32_t EmulatedFDManager::ProcThreadCount(const char* pathname, int flags) {
++  const uint32_t Internal = FEX::LinuxEmulation::Threads::InternalThreadCount();
++  if (Internal == 0) {
++    return -1;
++  }
++
++  std::string_view Path {pathname};
++  const auto Prefix = fextl::fmt::format("/proc/{}/", ::getpid());
++  if (!Path.starts_with(Prefix)) {
++    return -1;
++  }
++  Path.remove_prefix(Prefix.size());
++  if (Path.starts_with("task/")) {
++    Path.remove_prefix(strlen("task/"));
++    const auto Slash = Path.find('/');
++    if (Slash == 0 || Slash == std::string_view::npos || Path.substr(0, Slash).find_first_not_of("0123456789") != std::string_view::npos) {
++      return -1;
++    }
++    Path.remove_prefix(Slash + 1);
++  }
++  const bool Status = Path == "status";
++  if (!Status && Path != "stat") {
++    return -1;
++  }
++
++  char Buffer[4096];
++  const int Real = ::open(pathname, O_RDONLY | O_CLOEXEC);
++  if (Real == -1) {
++    return -1;
++  }
++  const ssize_t Size = ::read(Real, Buffer, sizeof(Buffer));
++  ::close(Real);
++  if (Size <= 0 || Size == sizeof(Buffer)) {
++    return -1;
++  }
++  const std::string_view Content {Buffer, static_cast<size_t>(Size)};
++
++  size_t Start {};
++  if (Status) {
++    constexpr std::string_view Key = "\nThreads:\t";
++    Start = Content.find(Key);
++    if (Start == std::string_view::npos) {
++      return -1;
++    }
++    Start += Key.size();
++  } else {
++    // Field 20 (num_threads); fields 3 onwards follow the last ')', since comm can hold spaces and parentheses.
++    Start = Content.rfind(')');
++    for (int Field = 3; Field <= 20 && Start != std::string_view::npos; ++Field) {
++      Start = Content.find(' ', Start + 1);
++    }
++    if (Start == std::string_view::npos) {
++      return -1;
++    }
++    ++Start;
++  }
++
++  uint32_t Threads {};
++  const auto [End, Error] = std::from_chars(Content.data() + Start, Content.data() + Content.size(), Threads);
++  if (Error != std::errc {}) {
++    return -1;
++  }
++  const auto Fixed = fextl::fmt::format("{}", Threads > Internal ? Threads - Internal : 1);
++
++  int FD = GenTmpFD(pathname, flags);
++  write(FD, Content.data(), Start);
++  write(FD, Fixed.data(), Fixed.size());
++  write(FD, End, Content.data() + Content.size() - End);
++  lseek(FD, 0, SEEK_SET);
++  SealTmpFD(FD);
++  return FD;
++}
++
+ int32_t EmulatedFDManager::ProcAuxv(FEXCore::Context::Context* ctx, int32_t fd, const char* pathname, int32_t flags, mode_t mode) {
+   const auto [auxvBase, auxvSize] = FEX::HLE::_SyscallHandler->GetCodeLoader()->GetAuxv();
+   if (auxvBase == 0) {
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/EmulatedFiles/EmulatedFiles.h
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/EmulatedFiles/EmulatedFiles.h
+@@ -34,6 +34,7 @@
+   fextl::unordered_map<fextl::string, FDReadStringFunc> FDReadCreators;
+ 
+   static int32_t ProcAuxv(FEXCore::Context::Context* ctx, int32_t fd, const char* pathname, int32_t flags, mode_t mode);
++  static int32_t ProcThreadCount(const char* pathname, int flags);
+   const uint32_t ThreadsConfig;
+ };
+ } // namespace FEX::EmulatedFile
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.cpp
+@@ -14,6 +14,7 @@
+ #include "LinuxSyscalls/FileManagement.h"
+ #include "LinuxSyscalls/EmulatedFiles/EmulatedFiles.h"
+ #include "LinuxSyscalls/Syscalls.h"
++#include "LinuxSyscalls/Utils/Threads.h"
+ #include "LinuxSyscalls/x64/Syscalls.h"
+ 
+ #include <FEXCore/Utils/LogManager.h>
+@@ -27,6 +28,7 @@
+ #include <FEXHeaderUtils/Syscalls.h>
+ 
+ #include <algorithm>
++#include <charconv>
+ #include <errno.h>
+ #include <cstring>
+ #include <linux/magic.h>
+@@ -37,6 +39,7 @@
+ #include <stdio.h>
+ #include <sys/stat.h>
+ #include <sys/statfs.h>
++#include <sys/sysmacros.h>
+ #include <sys/xattr.h>
+ #include <syscall.h>
+ #include <system_error>
+@@ -901,10 +904,10 @@
+   if (Path.FD != -1) {
+     uint64_t Result = ::fstatat(Path.FD, Path.Path, reinterpret_cast<struct stat*>(buf), 0);
+     if (Result != -1) {
+-      return Result;
++      return HideInternalThreads(Result, reinterpret_cast<struct stat*>(buf));
+     }
+   }
+-  return ::stat(SelfPath, reinterpret_cast<struct stat*>(buf));
++  return HideInternalThreads(::stat(SelfPath, reinterpret_cast<struct stat*>(buf)), reinterpret_cast<struct stat*>(buf));
+ }
+ 
+ uint64_t FileManager::Lstat(const char* pathname, void* buf) {
+@@ -917,11 +920,11 @@
+   if (Path.FD != -1) {
+     uint64_t Result = ::fstatat(Path.FD, Path.Path, reinterpret_cast<struct stat*>(buf), AT_SYMLINK_NOFOLLOW);
+     if (Result != -1) {
+-      return Result;
++      return HideInternalThreads(Result, reinterpret_cast<struct stat*>(buf));
+     }
+   }
+ 
+-  return ::lstat(pathname, reinterpret_cast<struct stat*>(buf));
++  return HideInternalThreads(::lstat(pathname, reinterpret_cast<struct stat*>(buf)), reinterpret_cast<struct stat*>(buf));
+ }
+ 
+ uint64_t FileManager::Access(const char* pathname, [[maybe_unused]] int mode) {
+@@ -1174,10 +1177,10 @@
+   if (Path.FD != -1) {
+     uint64_t Result = FHU::Syscalls::statx(Path.FD, Path.Path, flags, mask, statxbuf);
+     if (Result != -1) {
+-      return Result;
++      return HideInternalThreads(Result, statxbuf);
+     }
+   }
+-  return FHU::Syscalls::statx(dirfd, SelfPath, flags, mask, statxbuf);
++  return HideInternalThreads(FHU::Syscalls::statx(dirfd, SelfPath, flags, mask, statxbuf), statxbuf);
+ }
+ 
+ uint64_t FileManager::Mknod(const char* pathname, mode_t mode, dev_t dev) {
+@@ -1220,10 +1223,10 @@
+   if (Path.FD != -1) {
+     uint64_t Result = ::fstatat(Path.FD, Path.Path, buf, flag);
+     if (Result != -1) {
+-      return Result;
++      return HideInternalThreads(Result, buf);
+     }
+   }
+-  return ::fstatat(dirfd, SelfPath, buf, flag);
++  return HideInternalThreads(::fstatat(dirfd, SelfPath, buf, flag), buf);
+ }
+ 
+ uint64_t FileManager::NewFSStatAt64(int dirfd, const char* pathname, struct stat64* buf, int flag) {
+@@ -1240,10 +1243,10 @@
+   if (Path.FD != -1) {
+     uint64_t Result = ::fstatat64(Path.FD, Path.Path, buf, flag);
+     if (Result != -1) {
+-      return Result;
++      return HideInternalThreads(Result, buf);
+     }
+   }
+-  return ::fstatat64(dirfd, SelfPath, buf, flag);
++  return HideInternalThreads(::fstatat64(dirfd, SelfPath, buf, flag), buf);
+ }
+ 
+ uint64_t FileManager::Setxattr(const char* path, const char* name, const void* value, size_t size, int flags) {
+@@ -1474,7 +1477,7 @@
+   }
+ }
+ 
+-bool FileManager::IsProtectedFile(int ParentDirFD, uint64_t inode) const {
++bool FileManager::IsProtectedFile(int ParentDirFD, uint64_t inode, const char* Name) const {
+   // Check if we have to hide this entry
+   const char* Match = nullptr;
+   if (inode == RootFSFDInode) {
+@@ -1493,9 +1496,38 @@
+       }
+     }
+   }
++
++  // The <tid> entry of an internal thread in this process' task directory
++  std::string_view TIDName {Name};
++  pid_t TID {};
++  auto [End, Error] = std::from_chars(TIDName.data(), TIDName.data() + TIDName.size(), TID);
++  if (Error == std::errc {} && End == TIDName.data() + TIDName.size() && FEX::LinuxEmulation::Threads::IsInternalThread(TID)) {
++    struct stat Buffer;
++    return fstat(ParentDirFD, &Buffer) >= 0 && InternalThreadsInTaskDir(Buffer.st_dev, Buffer.st_ino, Buffer.st_mode) != 0;
++  }
+   return false;
+ }
+ 
++uint32_t FileManager::InternalThreadsInTaskDir(dev_t Dev, uint64_t Inode, mode_t Mode) const {
++  const uint32_t Count = FEX::LinuxEmulation::Threads::InternalThreadCount();
++  if (Count == 0 || !S_ISDIR(Mode) || Dev != ProcFSDev) {
++    return 0;
++  }
++  // Only this process' own task directory: other processes' internal threads aren't known here.
++  struct stat Buffer;
++  if (fstatat(ProcFD, "self/task", &Buffer, 0) != 0 || Buffer.st_ino != Inode) {
++    return 0;
++  }
++  return Count;
++}
++
++uint64_t FileManager::HideInternalThreads(uint64_t Result, struct statx* Buffer) const {
++  if (Result == 0 && (Buffer->stx_mask & (STATX_NLINK | STATX_INO | STATX_TYPE)) == (STATX_NLINK | STATX_INO | STATX_TYPE)) {
++    Buffer->stx_nlink -= InternalThreadsInTaskDir(makedev(Buffer->stx_dev_major, Buffer->stx_dev_minor), Buffer->stx_ino, Buffer->stx_mode);
++  }
++  return Result;
++}
++
+ void FileManager::SetProtectedCodeMapFD(int FD) {
+   if (FD == -1) {
+     CodeMapInode = 0;
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/FileManagement.h
+@@ -96,9 +96,20 @@
+   void UpdatePID(uint32_t PID);
+   // Helper to detect FEX-internal files from their inode and parent directory FD.
+   // This is useful to deal with Chromium/CEF, which closes any FDs reported in /proc/self/fd/.
+-  bool IsProtectedFile(int ParentDirFD, uint64_t inode) const;
++  // Also hides FEX's internal threads from /proc/<pid>/task, which Chromium's zygote counts before forking.
++  bool IsProtectedFile(int ParentDirFD, uint64_t inode, const char* Name) const;
+   void SetProtectedCodeMapFD(int FD);
+ 
++  // Drops FEX's internal threads from the link count of this process' /proc/<pid>/task (2 + threads).
++  template<typename T>
++  uint64_t HideInternalThreads(uint64_t Result, T* Buffer) const {
++    if (Result == 0) {
++      Buffer->st_nlink -= InternalThreadsInTaskDir(Buffer->st_dev, Buffer->st_ino, Buffer->st_mode);
++    }
++    return Result;
++  }
++  uint64_t HideInternalThreads(uint64_t Result, struct statx* Buffer) const;
++
+   fextl::string GetEmulatedPath(const char* pathname, bool FollowSymlink = false) const;
+   fextl::string GetHostPath(fextl::string& Path, bool AliasedOnly) const;
+ 
+@@ -183,6 +194,7 @@
+   fextl::map<fextl::string, fextl::string, std::less<>> ThunkOverlays;
+   fextl::map<fextl::string, fextl::string, std::less<>> ThunkLibraryNames;
+   const fextl::string* FindThunkOverlay(std::string_view Path) const;
++  uint32_t InternalThreadsInTaskDir(dev_t Dev, uint64_t Inode, mode_t Mode) const;
+ 
+   FEX_CONFIG_OPT(Filename, APP_FILENAME);
+   FEX_CONFIG_OPT(LDPath, ROOTFS);
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Syscalls.cpp
+@@ -123,7 +123,7 @@
+ 
+       TmpOffset += Tmp->d_reclen;
+ 
+-      if (FEX::HLE::_SyscallHandler->FM.IsProtectedFile(fd, Outgoing->d_ino)) {
++      if (FEX::HLE::_SyscallHandler->FM.IsProtectedFile(fd, Outgoing->d_ino, Outgoing->d_name)) {
+         continue;
+       }
+ 
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Utils/Threads.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Utils/Threads.cpp
+@@ -7,6 +7,8 @@
+ #include <FEXCore/Utils/LongJump.h>
+ #include <FEXCore/Utils/Threads.h>
+ #include <FEXHeaderUtils/Syscalls.h>
++#include <array>
++#include <atomic>
+ #include <sys/resource.h>
+ 
+ namespace FEX::LinuxEmulation::Threads {
+@@ -192,6 +194,49 @@
+                    : "memory");
+ }
+ #endif
++
++// TIDs of the live internal threads. A fixed table so lookups never allocate or lock.
++// shortcut: an internal thread past the table's size stays visible to the guest, grow it if FEX ever runs more.
++static std::array<std::atomic<pid_t>, 16> InternalThreads {};
++
++static void RegisterInternalThread(pid_t TID) {
++  for (auto& Slot : InternalThreads) {
++    pid_t Free = 0;
++    if (Slot.compare_exchange_strong(Free, TID)) {
++      return;
++    }
++  }
++}
++
++static void UnregisterInternalThread(pid_t TID) {
++  for (auto& Slot : InternalThreads) {
++    pid_t Expected = TID;
++    if (Slot.compare_exchange_strong(Expected, 0)) {
++      return;
++    }
++  }
++}
++
++uint32_t InternalThreadCount() {
++  uint32_t Count = 0;
++  for (auto& Slot : InternalThreads) {
++    Count += Slot.load(std::memory_order_relaxed) != 0;
++  }
++  return Count;
++}
++
++bool IsInternalThread(pid_t TID) {
++  if (TID <= 0) {
++    return false;
++  }
++  for (auto& Slot : InternalThreads) {
++    if (Slot.load(std::memory_order_relaxed) == TID) {
++      return true;
++    }
++  }
++  return false;
++}
++
+ namespace PThreads {
+   void* InitializeThread(void* Ptr);
+ 
+@@ -221,7 +266,7 @@
+       if (BlockingSignals) {
+         OldMask = HLE::ThreadManager::SetSignalMask(~0ULL);
+       }
+-      pthread_create(&Thread, &Attr, InitializeThread, this);
++      const bool Created = pthread_create(&Thread, &Attr, InitializeThread, this) == 0;
+       if (BlockingSignals) {
+         HLE::ThreadManager::SetSignalMask(OldMask);
+       }
+@@ -229,6 +274,15 @@
+       if (ThreadName) {
+         pthread_setname_np(Thread, ThreadName);
+       }
++      if (Created && Flags.Internal) {
++        // The guest must never catch the thread before it is hidden.
++        Registered.wait(false);
++      }
++    }
++
++    void MarkRegistered() {
++      Registered.store(true);
++      Registered.notify_one();
+     }
+ 
+     bool joinable() override {
+@@ -306,6 +360,7 @@
+     void* UserArg;
+     void* Stack {};
+     FEXCore::Threads::Flags Flags {};
++    std::atomic<bool> Registered {};
+ 
+     // Use FEXCore's UncheckedLongJump to avoid fortification checks.
+     // This avoids a false positive since glibc does not understand stack pivots.
+@@ -328,6 +383,12 @@
+       setpriority(PRIO_PROCESS, FHU::Syscalls::gettid(), 19);
+     }
+ 
++    const bool Internal = Thread->GetFlags().Internal;
++    if (Internal) {
++      RegisterInternalThread(FHU::Syscalls::gettid());
++      Thread->MarkRegistered();
++    }
++
+     if (FEXCore::UncheckedLongJump::SetJump(exit_resolver) == 0) {
+       Thread->SetupLongJump(&exit_resolver);
+       // Run the user function.
+@@ -338,6 +399,10 @@
+       LongJumpExit = true;
+     }
+ 
++    if (Internal) {
++      UnregisterInternalThread(FHU::Syscalls::gettid());
++    }
++
+     const auto Status = Thread->GetStatus();
+     auto ThreadObject = Thread->GetThreadObject();
+     // TLS/DTV teardown is something FEX can't control. Disable glibc checking when we leave a pthread.
+@@ -384,6 +449,10 @@
+ 
+   static void CleanupAfterFork_PThread() {
+     STracker->CleanupAfterFork_PThread();
++    // Only the forking thread survives a fork, and it is never internal.
++    for (auto& Slot : InternalThreads) {
++      Slot.store(0, std::memory_order_relaxed);
++    }
+   }
+ 
+ }; // namespace PThreads
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/Utils/Threads.h
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/Utils/Threads.h
+@@ -5,7 +5,9 @@
+ #include <FEXCore/fextl/memory.h>
+ 
+ #include <cstddef>
++#include <cstdint>
+ #include <mutex>
++#include <sys/types.h>
+ 
+ namespace FEXCore::Threads {
+ class Thread;
+@@ -78,6 +80,15 @@
+ void LongjumpDeallocateAndExit(FEX::HLE::ThreadStateObject* ThreadObject, int Status);
+ 
+ /**
++ * @name Host threads FEX runs for itself (`FEXCore::Threads::Flags::Internal`).
++ *
++ * The guest never created them, so its views of /proc must not show them.
++ * @{ */
++uint32_t InternalThreadCount();
++bool IsInternalThread(pid_t TID);
++/**  @} */
++
++/**
+  * @brief Registers thread creation handlers with FEXCore.
+  */
+ fextl::unique_ptr<StackTracker> SetupThreadHandlers();
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/x32/FD.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/x32/FD.cpp
+@@ -325,7 +325,7 @@
+ 
+   REGISTER_SYSCALL_IMPL_X32(oldfstat, [](FEXCore::Core::CpuStateFrame* Frame, int fd, oldstat32* buf) -> uint64_t {
+     struct stat host_stat;
+-    uint64_t Result = ::fstat(fd, &host_stat);
++    uint64_t Result = FEX::HLE::_SyscallHandler->FM.HideInternalThreads(::fstat(fd, &host_stat), &host_stat);
+     if (Result != -1) {
+       if (host_stat.st_ino > std::numeric_limits<decltype(buf->st_ino)>::max()) {
+         return -EOVERFLOW;
+@@ -372,7 +372,7 @@
+ 
+   REGISTER_SYSCALL_IMPL_X32(fstat, [](FEXCore::Core::CpuStateFrame* Frame, int fd, stat32* buf) -> uint64_t {
+     struct stat host_stat;
+-    uint64_t Result = ::fstat(fd, &host_stat);
++    uint64_t Result = FEX::HLE::_SyscallHandler->FM.HideInternalThreads(::fstat(fd, &host_stat), &host_stat);
+     if (Result != -1) {
+       SYSCALL_EFAULT_IF_NULL(buf);
+       FaultSafeUserMemAccess::VerifyIsWritable(buf, sizeof(*buf));
+@@ -417,7 +417,7 @@
+ 
+   REGISTER_SYSCALL_IMPL_X32(fstat64, [](FEXCore::Core::CpuStateFrame* Frame, int fd, stat64_32* buf) -> uint64_t {
+     struct stat64 host_stat;
+-    uint64_t Result = ::fstat64(fd, &host_stat);
++    uint64_t Result = FEX::HLE::_SyscallHandler->FM.HideInternalThreads(::fstat64(fd, &host_stat), &host_stat);
+     if (Result != -1) {
+       SYSCALL_EFAULT_IF_NULL(buf);
+       FaultSafeUserMemAccess::VerifyIsWritable(buf, sizeof(*buf));
+@@ -598,7 +598,7 @@
+       for (size_t i = 0, num = 0; i < Result; ++num) {
+         linux_dirent_64* Incoming = (linux_dirent_64*)(reinterpret_cast<uint64_t>(dirp) + i);
+         Incoming->d_off = num;
+-        if (FEX::HLE::_SyscallHandler->FM.IsProtectedFile(fd, Incoming->d_ino)) {
++        if (FEX::HLE::_SyscallHandler->FM.IsProtectedFile(fd, Incoming->d_ino, Incoming->d_name)) {
+           Result -= Incoming->d_reclen;
+           memmove(Incoming, (linux_dirent_64*)(reinterpret_cast<uint64_t>(Incoming) + Incoming->d_reclen), Result - i);
+           continue;
+--- a/Source/Tools/LinuxEmulation/LinuxSyscalls/x64/FD.cpp
++++ b/Source/Tools/LinuxEmulation/LinuxSyscalls/x64/FD.cpp
+@@ -77,7 +77,7 @@
+ 
+   REGISTER_SYSCALL_IMPL_X64(fstat, [](FEXCore::Core::CpuStateFrame* Frame, int fd, FEX::HLE::x64::guest_stat* buf) -> uint64_t {
+     struct stat host_stat;
+-    uint64_t Result = ::fstat(fd, &host_stat);
++    uint64_t Result = FEX::HLE::_SyscallHandler->FM.HideInternalThreads(::fstat(fd, &host_stat), &host_stat);
+     if (Result != -1) {
+       SYSCALL_EFAULT_IF_NULL(buf);
+       FaultSafeUserMemAccess::VerifyIsWritable(buf, sizeof(*buf));
+@@ -123,7 +123,7 @@
+       // Check for and hide the RootFS FD
+       for (size_t i = 0; i < Result;) {
+         linux_dirent_64* Incoming = (linux_dirent_64*)(reinterpret_cast<uint64_t>(dirp) + i);
+-        if (FEX::HLE::_SyscallHandler->FM.IsProtectedFile(fd, Incoming->d_ino)) {
++        if (FEX::HLE::_SyscallHandler->FM.IsProtectedFile(fd, Incoming->d_ino, Incoming->d_name)) {
+           Result -= Incoming->d_reclen;
+           memmove(Incoming, (linux_dirent_64*)(reinterpret_cast<uint64_t>(Incoming) + Incoming->d_reclen), Result - i);
+           continue;
