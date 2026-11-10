@@ -9,7 +9,7 @@
 # The x86 libraries come from Debian's own amd64/i386 multiarch packages in the
 # same rootfs, so FEX runs without a separate x86 RootFS.
 # Patches 0001, 0003 and 0004 come from DroidDeck (github.com/Droid-Deck/DroidDeck, tools/fex/patches);
-# 0005 is DroidNux's.
+# 0005 and 0006 are DroidNux's.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -57,6 +57,7 @@ DESTDIR="$WORK/stage" ninja -C "$SRC/build" install
 # The 32-bit Wayland thunk crashes i386 programs as they load it (GTK's gtk-query-immodules-3.0);
 # without its guest half FEX leaves them Debian's i386 libwayland-client, which only needs the socket.
 rm "$WORK/stage$PREFIX/share/fex-emu/GuestThunks_32/libwayland-client-guest.so"
+install -m 755 "$HERE/ldd" "$WORK/stage$PREFIX/bin/ldd"
 
 # The session's preload (guest/kwin-pacing, Qt's animation timer) for x86 programs: their ld.so
 # looks for it in its own $LIB, where the app links lib/<multiarch> of this component.
