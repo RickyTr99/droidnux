@@ -51,8 +51,10 @@ data class Component(
 
         /**
          * FEX, which runs x86 and x86-64 programs (Burrow hands them to it), with GL and Vulkan thunks to
-         * [MESA]: guest/fex. Its setup adds Debian's amd64 and i386 architectures and their base libraries;
-         * droidnux-x86-gl stands in for their Mesa (some 200 MB each with LLVM), unused behind the thunks.
+         * [MESA]: guest/fex. Its setup adds Debian's amd64 and i386 architectures and their base libraries.
+         * droidnux-x86 stands in for their Mesa (some 200 MB each with LLVM), unused behind the thunks, and
+         * for the arm64 tools x86 packages depend on that Debian doesn't mark Multi-Arch: foreign (Valve's
+         * steam_latest.deb wants apt, python3-apt, lsof and a terminal), so they install as on a PC.
          */
         val FEX = Component(
             id = "fex",
@@ -66,14 +68,19 @@ data class Component(
                 set -e
                 export DEBIAN_FRONTEND=noninteractive
                 dir=$(mktemp -d)
+                provides='libglx-mesa0, libegl-mesa0, libgl1-mesa-dri, mesa-vulkan-drivers, mesa-va-drivers, mesa-vdpau-drivers'
+                for p in apt python3 python3-apt lsof konsole xterm; do
+                    v=$(dpkg-query -W -f '${'$'}{db:Status-Abbrev}${'$'}{Version}' ${'$'}p 2>/dev/null) || continue
+                    case ${'$'}v in ii*) provides="${'$'}provides, ${'$'}p (= ${'$'}{v#ii })" ;; esac
+                done
                 for arch in amd64 i386; do
                     dpkg --add-architecture ${'$'}arch
                     mkdir -p ${'$'}dir/${'$'}arch/DEBIAN
-                    printf 'Package: droidnux-x86-gl\nVersion: 1\nArchitecture: %s\nMulti-Arch: same\nProvides: libglx-mesa0, libegl-mesa0\nMaintainer: DroidNux\nDescription: GL for x86 programs from the arm64 Mesa (FEX thunks)\n' ${'$'}arch > ${'$'}dir/${'$'}arch/DEBIAN/control
-                    dpkg-deb -b ${'$'}dir/${'$'}arch ${'$'}dir/droidnux-x86-gl_${'$'}arch.deb > /dev/null
+                    printf 'Package: droidnux-x86\nVersion: 1\nArchitecture: %s\nMulti-Arch: same\nProvides: %s\nMaintainer: DroidNux\nDescription: arm64 GL and tools for x86 programs (FEX)\n' ${'$'}arch "${'$'}provides" > ${'$'}dir/${'$'}arch/DEBIAN/control
+                    dpkg-deb -b ${'$'}dir/${'$'}arch ${'$'}dir/droidnux-x86_${'$'}arch.deb > /dev/null
                 done
                 apt-get update -q
-                apt-get install -y -q --no-install-recommends ${'$'}dir/droidnux-x86-gl_*.deb \
+                apt-get install -y -q --no-install-recommends ${'$'}dir/droidnux-x86_*.deb \
                     libc6:amd64 libgl1:amd64 libvulkan1:amd64 libc6:i386 libgl1:i386 libvulkan1:i386
                 rm -rf ${'$'}dir
             """.trimIndent(),

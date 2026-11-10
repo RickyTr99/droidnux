@@ -54,6 +54,9 @@ cmake -S "$SRC" -B "$SRC/build" -G Ninja \
 ninja -C "$SRC/build"
 rm -rf "$WORK/stage"
 DESTDIR="$WORK/stage" ninja -C "$SRC/build" install
+# The 32-bit Wayland thunk crashes i386 programs as they load it (GTK's gtk-query-immodules-3.0);
+# without its guest half FEX leaves them Debian's i386 libwayland-client, which only needs the socket.
+rm "$WORK/stage$PREFIX/share/fex-emu/GuestThunks_32/libwayland-client-guest.so"
 
 # The session's preload (guest/kwin-pacing, Qt's animation timer) for x86 programs: their ld.so
 # looks for it in its own $LIB, where the app links lib/<multiarch> of this component.
