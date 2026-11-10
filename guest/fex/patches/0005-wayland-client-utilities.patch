@@ -1,0 +1,141 @@
+DroidNux: the Wayland thunk lacked libwayland-client's utilities (wl_list_*, wl_array_*) and
+newer functions, so GTK and libdecor failed to load or bind against it.
+
+diff -ru a/ThunkLibs/libwayland-client/Guest.cpp b/ThunkLibs/libwayland-client/Guest.cpp
+--- a/ThunkLibs/libwayland-client/Guest.cpp	2026-11-09 23:54:20.067157603 +0000
++++ b/ThunkLibs/libwayland-client/Guest.cpp	2026-11-09 23:55:56.787157566 +0000
+@@ -42,6 +42,7 @@
+ #include <charconv>
+ #include <cstdio>
+ #include <cstdarg>
++#include <cstdlib>
+ #include <cstring>
+ #include <string>
+ 
+@@ -353,6 +354,106 @@
+   // Ignore
+ }
+ 
++// Dispatchers (language bindings) would need host-to-guest calls with a guest-only signature: not supported.
++extern "C" int wl_proxy_add_dispatcher(wl_proxy*, wl_dispatcher_func_t, const void*, void*) {
++  fprintf(stderr, "FEX: wl_proxy_add_dispatcher is not supported by the Wayland thunk\n");
++  return -1;
++}
++
++// Only called after a protocol error, for its message: the failing interface would be the host's.
++extern "C" uint32_t wl_display_get_protocol_error(wl_display*, const wl_interface** interface, uint32_t* id) {
++  if (interface) {
++    *interface = nullptr;
++  }
++  if (id) {
++    *id = 0;
++  }
++  return 0;
++}
++
++// libwayland's utilities (wayland-util.c, MIT): plain data structures that never reach the host.
++extern "C" void wl_list_init(wl_list* list) {
++  list->prev = list;
++  list->next = list;
++}
++
++extern "C" void wl_list_insert(wl_list* list, wl_list* elm) {
++  elm->prev = list;
++  elm->next = list->next;
++  list->next = elm;
++  elm->next->prev = elm;
++}
++
++extern "C" void wl_list_remove(wl_list* elm) {
++  elm->prev->next = elm->next;
++  elm->next->prev = elm->prev;
++  elm->next = nullptr;
++  elm->prev = nullptr;
++}
++
++extern "C" int wl_list_length(const wl_list* list) {
++  int count = 0;
++  for (wl_list* e = list->next; e != list; e = e->next) {
++    count++;
++  }
++  return count;
++}
++
++extern "C" int wl_list_empty(const wl_list* list) {
++  return list->next == list;
++}
++
++extern "C" void wl_list_insert_list(wl_list* list, wl_list* other) {
++  if (wl_list_empty(other)) {
++    return;
++  }
++  other->next->prev = list;
++  other->prev->next = list->next;
++  list->next->prev = other->prev;
++  list->next = other->next;
++}
++
++extern "C" void wl_array_init(wl_array* array) {
++  memset(array, 0, sizeof *array);
++}
++
++extern "C" void wl_array_release(wl_array* array) {
++  free(array->data);
++  array->data = reinterpret_cast<void*>(4); // WL_ARRAY_POISON_PTR
++}
++
++extern "C" void* wl_array_add(wl_array* array, size_t size) {
++  size_t alloc = array->alloc > 0 ? array->alloc : 16;
++  while (alloc < array->size + size) {
++    alloc *= 2;
++  }
++  if (array->alloc < alloc) {
++    void* data = array->alloc > 0 ? realloc(array->data, alloc) : malloc(alloc);
++    if (!data) {
++      return nullptr;
++    }
++    array->data = data;
++    array->alloc = alloc;
++  }
++  void* p = static_cast<char*>(array->data) + array->size;
++  array->size += size;
++  return p;
++}
++
++extern "C" int wl_array_copy(wl_array* array, wl_array* source) {
++  if (array->size < source->size) {
++    if (!wl_array_add(array, source->size - array->size)) {
++      return -1;
++    }
++  } else {
++    array->size = source->size;
++  }
++  if (source->size > 0) {
++    memcpy(array->data, source->data, source->size);
++  }
++  return 0;
++}
++
+ 
+ void OnInit() {
+   fex_wl_exchange_interface_pointer(const_cast<wl_interface*>(&wl_output_interface), "wl_output_interface");
+diff -ru a/ThunkLibs/libwayland-client/libwayland-client_interface.cpp b/ThunkLibs/libwayland-client/libwayland-client_interface.cpp
+--- a/ThunkLibs/libwayland-client/libwayland-client_interface.cpp	2026-11-09 23:54:20.071157603 +0000
++++ b/ThunkLibs/libwayland-client/libwayland-client_interface.cpp	2026-11-09 23:55:56.787157566 +0000
+@@ -83,6 +83,16 @@
+ 
+ template<>
+ struct fex_gen_config<wl_event_queue_destroy> {};
++template<>
++struct fex_gen_config<wl_display_create_queue_with_name> {};
++template<>
++struct fex_gen_config<wl_event_queue_get_name> {};
++template<>
++struct fex_gen_config<wl_display_set_max_buffer_size> {};
++template<>
++struct fex_gen_config<wl_proxy_get_display> {};
++template<>
++struct fex_gen_config<wl_proxy_get_queue> {};
+ 
+ template<>
+ struct fex_gen_config<wl_proxy_add_listener> : fexgen::custom_host_impl, fexgen::custom_guest_entrypoint {};

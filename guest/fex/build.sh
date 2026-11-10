@@ -8,7 +8,8 @@
 # Output: droidnux-fex-<version>-arm64.tar.xz, the contents of $PREFIX, and its .sha256.
 # The x86 libraries come from Debian's own amd64/i386 multiarch packages in the
 # same rootfs, so FEX runs without a separate x86 RootFS.
-# Patches 0001, 0003 and 0004 come from DroidDeck (github.com/Droid-Deck/DroidDeck, tools/fex/patches).
+# Patches 0001, 0003 and 0004 come from DroidDeck (github.com/Droid-Deck/DroidDeck, tools/fex/patches);
+# 0005 is DroidNux's.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -28,6 +29,7 @@ if [ "${DROIDNUX_FEX_DEPS:-}" = install ]; then
         ca-certificates git xz-utils patch clang lld llvm cmake ninja-build python3 pkg-config file \
         libclang-dev llvm-dev libssl-dev \
         libegl-dev libgl-dev libvulkan-dev libdrm-dev libwayland-dev libasound2-dev libx11-dev libxcb1-dev \
+        libxrandr-dev libxext-dev libxrender-dev libxshmfence-dev \
         libc6-dev:amd64 libstdc++-14-dev:amd64 libgcc-14-dev:amd64 \
         libc6-dev:i386 libstdc++-14-dev:i386 libgcc-14-dev:i386
 fi
@@ -65,12 +67,12 @@ done
 
 # FEX's global configuration. RootFS "/": the x86 libraries are the rootfs's own multiarch ones, and
 # with no RootFS FEX looks for /usr/lib/x86_64-linux-gnu from the working directory, missing the
-# thunks' overlays. The thunks hand GLX and Vulkan to the arm64 Mesa (Zink and Turnip). Not yet
-# WaylandClient (its guest library lacks wl_list_*: libdecor and GTK fail) nor EGL (a stub upstream).
+# thunks' overlays. The thunks hand GLX and Vulkan to the arm64 Mesa (Zink and Turnip), and
+# Wayland to its libwayland-client (Vulkan's Wayland surfaces need it). Not yet EGL (a stub upstream).
 cat > "$WORK/stage$PREFIX/share/fex-emu/Config.json" << 'EOF'
 {
   "Config": {"RootFS": "/"},
-  "ThunksDB": {"GL": 1, "Vulkan": 1}
+  "ThunksDB": {"GL": 1, "Vulkan": 1, "WaylandClient": 1}
 }
 EOF
 
