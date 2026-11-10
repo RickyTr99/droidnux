@@ -138,10 +138,13 @@ if [ "$1" != --in-dbus ]; then
     # an Adreno (KGSL), otherwise the distro's software rendering: on other
     # GPUs Turnip finds no device, Zink fails and KWin gets no EGL.
     MESA=@MESA_PREFIX@
+    # The App x86 component has the same Mesa built for x86-64 programs (FEX).
+    FEX=@FEX_PREFIX@
     if [ -f "$MESA/droidnux-mesa.version" ] && [ -e /dev/kgsl-3d0 ]; then
         echo "GPU: DroidNux Mesa $(head -n 1 "$MESA/droidnux-mesa.version") on KGSL"
         MESA_GPU=1
-        export LD_LIBRARY_PATH=$MESA/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+        # ld.so expands $LIB to its multiarch directory: each program looks only where its own build is.
+        export LD_LIBRARY_PATH="$MESA/\$LIB:$FEX/\$LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         export VK_DRIVER_FILES=$MESA/share/vulkan/icd.d/freedreno_icd.aarch64.json
         export __GLX_VENDOR_LIBRARY_NAME=droidnux
         export __EGL_VENDOR_LIBRARY_FILENAMES=$MESA/share/glvnd/egl_vendor.d/50_droidnux.json
@@ -156,7 +159,7 @@ if [ "$1" != --in-dbus ]; then
         # Video decoding by the app's MediaCodec (guest/va), for players
         # like mpv and ffmpeg; Firefox keeps software decoding (droidnux.js).
         if [ -f "$MESA/lib/aarch64-linux-gnu/dri/droidnux_drv_video.so" ]; then
-            export LIBVA_DRIVERS_PATH=$MESA/lib/aarch64-linux-gnu/dri
+            export LIBVA_DRIVERS_PATH=$MESA/lib/aarch64-linux-gnu/dri:$FEX/lib/x86_64-linux-gnu/dri
             export LIBVA_DRIVER_NAME=droidnux
         fi
     else
@@ -169,7 +172,8 @@ if [ "$1" != --in-dbus ]; then
     fi
     if [ -n "$MESA_GPU" ]; then
         # KWin renders into GBM buffers from the app (Mesa patch 0004).
-        export GBM_BACKENDS_PATH=$MESA/lib/aarch64-linux-gnu/gbm
+        # Each program loads the one of its architecture, skipping the other.
+        export GBM_BACKENDS_PATH=$MESA/lib/aarch64-linux-gnu/gbm:$FEX/lib/x86_64-linux-gnu/gbm
         # Flatpak's apps: our Mesa's extension where installed (droidnux-flatpak-gl), the runtime's for software.
         export FLATPAK_GL_DRIVERS=droidnux:default
     fi

@@ -8,7 +8,7 @@ name: FEX component
 on:
   push:
     branches: [main, phase*]
-    paths: [guest/fex/**, guest/kwin-pacing/droidnux-qt-animations.c, .github/workflows/fex.yml]
+    paths: [guest/fex/**, guest/mesa/**, guest/va/**, guest/kwin-pacing/droidnux-qt-animations.c, .github/workflows/fex.yml]
     tags: [fex-*]
   workflow_dispatch:
 
@@ -26,6 +26,7 @@ jobs:
       - name: Build
         env:
           DROIDNUX_FEX_DEPS: install
+          DROIDNUX_MESA_DEPS: install
         run: sh guest/fex/build.sh "$RUNNER_TEMP/fex" out
 
       - uses: actions/upload-artifact@v4

@@ -527,6 +527,7 @@ object DesktopEnvironment {
         "DESKTOP_USER" to DESKTOP_USER,
         "DISPLAY" to "$DISPLAY",
         // The extension's builds, one "<branch> <url> <sha256>" line each.
+        "FEX_PREFIX" to FEX_PREFIX,
         "FLATPAK_GL_EXTENSIONS" to Component.FLATPAK_GL.joinToString("\n") { "${it.branch} ${it.url} ${it.sha256}" },
         "FLATPAK_GL_SCRIPT" to FLATPAK_GL_SCRIPT,
         "GUEST_LIB_DIR" to GUEST_LIB_DIR,

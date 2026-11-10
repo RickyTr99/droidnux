@@ -9,7 +9,7 @@
 # The x86 libraries come from Debian's own amd64/i386 multiarch packages in the
 # same rootfs, so FEX runs without a separate x86 RootFS.
 # Patches 0001, 0003 and 0004 come from DroidDeck (github.com/Droid-Deck/DroidDeck, tools/fex/patches);
-# 0005 and 0006 are DroidNux's.
+# 0005 to 0008 are DroidNux's.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -58,6 +58,10 @@ DESTDIR="$WORK/stage" ninja -C "$SRC/build" install
 # without its guest half FEX leaves them Debian's i386 libwayland-client, which only needs the socket.
 rm "$WORK/stage$PREFIX/share/fex-emu/GuestThunks_32/libwayland-client-guest.so"
 install -m 755 "$HERE/ldd" "$WORK/stage$PREFIX/bin/ldd"
+# x86-64 programs' EGL and GBM (Chromium's GPU process needs both): DroidNux's Mesa built for them
+# (guest/mesa/build.sh amd64), found through the session's LD_LIBRARY_PATH and GBM_BACKENDS_PATH.
+sh "$HERE/../mesa/build.sh" "$WORK/mesa" "$WORK/mesa-out" amd64
+tar -C "$WORK/stage$PREFIX" -xJf "$WORK"/mesa-out/droidnux-mesa-*-amd64.tar.xz ./lib/x86_64-linux-gnu
 
 # The session's preload (guest/kwin-pacing, Qt's animation timer) for x86 programs: their ld.so
 # looks for it in its own $LIB, where the app links lib/<multiarch> of this component.
@@ -72,7 +76,8 @@ done
 # FEX's global configuration. RootFS "/": the x86 libraries are the rootfs's own multiarch ones, and
 # with no RootFS FEX looks for /usr/lib/x86_64-linux-gnu from the working directory, missing the
 # thunks' overlays. The thunks hand GLX and Vulkan to the arm64 Mesa (Zink and Turnip), and
-# Wayland to its libwayland-client (Vulkan's Wayland surfaces need it). Not yet EGL (a stub upstream).
+# Wayland to its libwayland-client (Vulkan's Wayland surfaces need it). Not EGL (a stub upstream): x86
+# programs get the x86 Mesa above.
 cat > "$WORK/stage$PREFIX/share/fex-emu/Config.json" << 'EOF'
 {
   "Config": {"RootFS": "/"},
