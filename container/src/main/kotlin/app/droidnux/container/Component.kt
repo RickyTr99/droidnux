@@ -60,10 +60,10 @@ data class Component(
          */
         val FEX = Component(
             id = "fex",
-            version = "2611-dn5",
-            url = "$RELEASES/fex-2611-dn5/droidnux-fex-2611-dn5-arm64.tar.xz",
-            sha256 = "6c5c1006825def5747bd9f3f5b8937a00e0ba5b01923c074e55b2be50a99984e",
-            sizeBytes = 7_905_200,
+            version = "2611-dn6",
+            url = "$RELEASES/fex-2611-dn6/droidnux-fex-2611-dn6-arm64.tar.xz",
+            sha256 = "39cb25e168f1a0fad2628a0deb7c80ebdba4088ca7e4355d87484c39ee871b1f",
+            sizeBytes = 7_904_296,
             guestPath = DesktopEnvironment.FEX_PREFIX,
             optional = true,
             setup = """
