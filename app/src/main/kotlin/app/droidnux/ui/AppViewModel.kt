@@ -16,6 +16,7 @@ import app.droidnux.container.Component
 import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
 import app.droidnux.container.Distro
+import app.droidnux.container.InstallException
 import app.droidnux.container.InstallProgress
 import app.droidnux.desktop.DesktopSessionService
 import app.droidnux.desktop.SessionPause
@@ -480,7 +481,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _state.update { it.copy(setup = SetupState(SetupStep.COMPONENTS, apps = apps)) }
                 for (component in Component.ALL) {
-                    if (component.sha256.isEmpty() || _state.value.components[component.id] == InstallState.Installed) continue
+                    if (component.sha256.isEmpty() || component.optional || _state.value.components[component.id] == InstallState.Installed) continue
                     installComponentNow(component)
                 }
                 _state.update { it.copy(setup = SetupState(SetupStep.APPS, apps = apps)) }
@@ -635,6 +636,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             container.components.install(rootfs, component) { progress ->
                 setComponent(component, InstallState.Installing(progress))
             }
+            component.setup?.let { script ->
+                setComponent(component, InstallState.Installing(null))
+                val result = container.shell(_state.value.distro, script)
+                if (result.exitCode != 0) {
+                    container.components.uninstall(rootfs, component)
+                    throw InstallException(result.output.lines().lastOrNull { it.isNotBlank() } ?: "exit status ${result.exitCode}")
+                }
+            }
             refreshComponent(component)
         } catch (e: CancellationException) {
             refreshComponent(component)
@@ -647,6 +656,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelComponent(component: Component) {
         componentJobs[component.id]?.cancel()
+    }
+
+    /** Removes an optional [Component]; what its setup installed in the distro stays. */
+    fun uninstallComponent(component: Component) {
+        if (componentJobs[component.id]?.isActive == true) return
+        componentJobs[component.id] = viewModelScope.launch {
+            container.components.uninstall(rootfs, component)
+            refreshComponent(component)
+        }
     }
 
     fun runUname() {

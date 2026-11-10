@@ -21,6 +21,10 @@ data class Component(
     val sizeBytes: Long,
     /** Absolute guest path the archive's contents go to. */
     val guestPath: String,
+    /** Installed only when the user asks for it, not by the first run. */
+    val optional: Boolean = false,
+    /** Guest shell script run as root after unpacking; the install fails if it does. */
+    val setup: String? = null,
 ) {
     companion object {
         private const val RELEASES = "https://github.com/RickyTr99/droidnux/releases/download"
@@ -45,7 +49,37 @@ data class Component(
             guestPath = DesktopEnvironment.PLASMA_PREFIX,
         )
 
-        val ALL = listOf(MESA, PLASMA)
+        /**
+         * FEX, which runs x86 and x86-64 programs (Burrow hands them to it), with GL and Vulkan thunks to
+         * [MESA]: guest/fex. Its setup adds Debian's amd64 and i386 architectures and their base libraries;
+         * droidnux-x86-gl stands in for their Mesa (some 200 MB each with LLVM), unused behind the thunks.
+         */
+        val FEX = Component(
+            id = "fex",
+            version = "2611-dn2",
+            url = "$RELEASES/fex-2611-dn2/droidnux-fex-2611-dn2-arm64.tar.xz",
+            sha256 = "a51aa14f956335c75879054086c9803cbbafa32f22ed2dfaee811a48e2395f6f",
+            sizeBytes = 3_437_436,
+            guestPath = DesktopEnvironment.FEX_PREFIX,
+            optional = true,
+            setup = """
+                set -e
+                export DEBIAN_FRONTEND=noninteractive
+                dir=$(mktemp -d)
+                for arch in amd64 i386; do
+                    dpkg --add-architecture ${'$'}arch
+                    mkdir -p ${'$'}dir/${'$'}arch/DEBIAN
+                    printf 'Package: droidnux-x86-gl\nVersion: 1\nArchitecture: %s\nMulti-Arch: same\nProvides: libglx-mesa0, libegl-mesa0\nMaintainer: DroidNux\nDescription: GL for x86 programs from the arm64 Mesa (FEX thunks)\n' ${'$'}arch > ${'$'}dir/${'$'}arch/DEBIAN/control
+                    dpkg-deb -b ${'$'}dir/${'$'}arch ${'$'}dir/droidnux-x86-gl_${'$'}arch.deb > /dev/null
+                done
+                apt-get update -q
+                apt-get install -y -q --no-install-recommends ${'$'}dir/droidnux-x86-gl_*.deb \
+                    libc6:amd64 libgl1:amd64 libvulkan1:amd64 libc6:i386 libgl1:i386 libvulkan1:i386
+                rm -rf ${'$'}dir
+            """.trimIndent(),
+        )
+
+        val ALL = listOf(MESA, PLASMA, FEX)
 
         /** [MESA] as Flatpak's GL extension, one per Freedesktop runtime branch (guest/mesa/flatpak.sh): the session installs it. */
         val FLATPAK_GL = listOf(

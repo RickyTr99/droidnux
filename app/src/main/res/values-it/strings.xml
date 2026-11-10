@@ -158,6 +158,7 @@
     <string name="install_gpu">Grafica accelerata</string>
     <string name="install_gpu_text">Turnip e Zink per Adreno</string>
     <string name="plasma_component">Ottimizzazioni di Plasma</string>
+    <string name="fex_component">App x86</string>
     <string name="install_plasma_text">Icone e temi più veloci, monitor di sistema per Android</string>
     <string name="install_show_log">Mostra il registro</string>
     <string name="install_hide_log">Nascondi il registro</string>
