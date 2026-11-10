@@ -226,6 +226,17 @@ def main():
     os.makedirs(root, mode=0o755)
     os.unshare(os.CLONE_NEWUSER | os.CLONE_NEWNS)
     build(root, options)
+    if any(name == "--new-session" for name, _ in options):
+        try:
+            os.setsid()
+        except PermissionError:
+            # A process group leader (pressure-vessel's exec of us): bwrap calls it in the child that runs
+            # the command, and waits for it.
+            pid = os.fork()
+            if pid:
+                code = os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1])
+                os._exit(code if code >= 0 else 128 - code)
+            os.setsid()
 
     env = dict(os.environ)
     directory = None
@@ -260,8 +271,6 @@ def main():
                 pass
         elif name == "--die-with-parent":
             libc.prctl(1, 9)  # PR_SET_PDEATHSIG, SIGKILL
-        elif name == "--new-session":
-            os.setsid()
     for fd in keep:
         os.set_inheritable(fd, True)
     try:
