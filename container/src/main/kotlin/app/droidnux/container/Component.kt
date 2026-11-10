@@ -51,7 +51,7 @@ data class Component(
 
         /**
          * FEX, which runs x86 and x86-64 programs (Burrow hands them to it), with GL and Vulkan thunks to
-         * [MESA]: guest/fex. Its setup adds Debian's amd64 and i386 architectures and their base libraries.
+         * [MESA], and [MESA] built for x86-64 programs' EGL and GBM (FEX has no EGL thunk): guest/fex. Its setup adds Debian's amd64 and i386 architectures and their base libraries.
          * droidnux-x86 stands in for their Mesa (some 200 MB each with LLVM), unused behind the thunks, and
          * for the arm64 tools x86 packages depend on that Debian doesn't mark Multi-Arch: foreign (Valve's
          * steam_latest.deb wants apt, python3-apt, lsof and a terminal), so they install as on a PC; with
@@ -60,10 +60,10 @@ data class Component(
          */
         val FEX = Component(
             id = "fex",
-            version = "2611-dn4",
-            url = "$RELEASES/fex-2611-dn4/droidnux-fex-2611-dn4-arm64.tar.xz",
-            sha256 = "b355617c354c5968dfc0c5592782c49a042011c040a71ddfbffaefbf8a86b5ff",
-            sizeBytes = 3_424_988,
+            version = "2611-dn5",
+            url = "$RELEASES/fex-2611-dn5/droidnux-fex-2611-dn5-arm64.tar.xz",
+            sha256 = "6c5c1006825def5747bd9f3f5b8937a00e0ba5b01923c074e55b2be50a99984e",
+            sizeBytes = 7_905_200,
             guestPath = DesktopEnvironment.FEX_PREFIX,
             optional = true,
             setup = """
