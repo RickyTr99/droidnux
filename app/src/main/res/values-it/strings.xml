@@ -17,6 +17,8 @@
     <string name="desktop_installing">Installazione…</string>
     <string name="session_channel">Sessione desktop</string>
     <string name="session_running">Desktop Linux in esecuzione</string>
+    <string name="install_channel">Installazioni</string>
+    <string name="install_running">Installazione in corso…</string>
     <string name="session_stop">Ferma</string>
     <string name="menu_keyboard">Tastiera</string>
     <string name="menu_mode_touch">Tocco diretto</string>
@@ -252,6 +254,7 @@
     <string name="store_removing">Rimozione…</string>
     <string name="store_remove_title">Rimuovere %1$s?</string>
     <string name="store_remove_text">I file che hai creato con l’app restano.</string>
+    <string name="store_no_space">Spazio libero insufficiente</string>
     <string name="store_keep">%1$s fa parte del desktop e non può essere rimosso.</string>
     <string name="store_searching">Ricerca…</string>
     <string name="store_results">Risultati</string>

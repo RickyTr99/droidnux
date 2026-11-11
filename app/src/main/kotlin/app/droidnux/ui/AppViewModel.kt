@@ -7,6 +7,7 @@ import android.graphics.BitmapFactory
 import android.os.SystemClock
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import app.droidnux.InstallService
 import app.droidnux.R
 import app.droidnux.container.AppCatalog
 import app.droidnux.container.FlathubCatalog
@@ -28,6 +29,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.dropWhile
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -135,6 +139,11 @@ data class AppState(
     val storeItems: List<StoreItem> = StoreItem.curated(emptyMap()),
     val storeCatalog: CatalogState = CatalogState.LOADING,
 ) {
+    /** Something is being installed or removed (InstallService keeps the process alive meanwhile). */
+    val installing: Boolean
+        get() = rootfs is InstallState.Installing || desktopInstalling || (setup != null && !setup.done && setup.error == null) ||
+            components.values.any { it is InstallState.Installing } || storeJobs.values.any { it !is StoreJob.Failed }
+
     /** Everything the desktop needs is there: the home screen instead of the first-run wizard. */
     val ready: Boolean get() = rootfs == InstallState.Installed && desktopInstalled && setup == null
 }
@@ -183,6 +192,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val wallpaperFile: File get() = DesktopEnvironment.wallpaperFile(rootfs)
 
     init {
+        viewModelScope.launch {
+            state.map { it.installing }.distinctUntilChanged().dropWhile { !it }.collect { InstallService.set(application, it) }
+        }
         viewModelScope.launch {
             val cached = withContext(Dispatchers.IO) {
                 runCatching { DesktopEnvironment.parseApps(appsCache.readText()) }.getOrNull()
@@ -262,6 +274,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun startStoreJob(key: String, packages: List<String>, remove: Boolean) {
         if (storeJobs[key]?.isActive == true) return
+        // apt checks the room for its downloads only; Android itself needs some left.
+        val app = getApplication<Application>()
+        val needed = MIN_FREE_BYTES + (StoreCatalog.get(key)?.sizeMb ?: 0) * 1_000_000L
+        if (!remove && android.os.StatFs(app.filesDir.path).availableBytes < needed) {
+            _state.update { it.copy(storeJobs = it.storeJobs + (key to StoreJob.Failed(app.getString(R.string.store_no_space)))) }
+            return
+        }
         storeJobs[key] = viewModelScope.launch { runStoreJob(key, packages, remove) }
     }
 
@@ -701,6 +720,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return (value * unit).toLong()
         }
         const val SEARCH_DELAY_MS = 350L
+        const val MIN_FREE_BYTES = 500_000_000L
         const val STORE_BITMAPS_BYTES = 48 * 1024 * 1024
 
         /** The quick launch until the user changes it (apps that are not installed are not shown). */

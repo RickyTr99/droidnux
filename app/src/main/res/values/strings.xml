@@ -19,6 +19,8 @@
     <string name="desktop_installing">Installing…</string>
     <string name="session_channel">Desktop session</string>
     <string name="session_running">Linux desktop running</string>
+    <string name="install_channel">Installations</string>
+    <string name="install_running">Installing…</string>
     <string name="session_stop">Stop</string>
     <string name="menu_keyboard">Keyboard</string>
     <string name="menu_mode_touch">Direct touch</string>
@@ -255,6 +257,7 @@
     <string name="store_removing">Removing…</string>
     <string name="store_remove_title">Remove %1$s?</string>
     <string name="store_remove_text">The files you made with it stay.</string>
+    <string name="store_no_space">Not enough free space</string>
     <string name="store_keep">%1$s is part of the desktop and cannot be removed.</string>
     <string name="store_searching">Searching…</string>
     <string name="store_results">Results</string>

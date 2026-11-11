@@ -47,10 +47,25 @@ object SessionPause {
         }
     }
 
-    /** The guest's processes now. */
+    /**
+     * The session's processes now: the guest's that come from this process (the desktop's). The
+     * store's apt and the Home's queries run under the app's other process and are left alone.
+     */
     fun guestPids(context: Context): List<Int> {
         val burrow = File(context.applicationInfo.nativeLibraryDir, "libburrow.so").path
-        return File("/proc").list().orEmpty().mapNotNull { it.toIntOrNull() }
-            .filter { runCatching { Os.readlink("/proc/$it/exe") }.getOrNull() == burrow }
+        val guest = File("/proc").list().orEmpty().mapNotNull { it.toIntOrNull() }
+            .filter { runCatching { Os.readlink("/proc/$it/exe") }.getOrNull() == burrow }.toHashSet()
+        val self = android.os.Process.myPid()
+        return guest.filter { pid ->
+            // Up through the guest's own processes to the first one outside: ours, or init for an orphan.
+            var ancestor: Int? = pid
+            while (ancestor != null && ancestor in guest) ancestor = parent(ancestor)
+            ancestor == null || ancestor == self || ancestor == 1
+        }
     }
+
+    // After the name (which may hold spaces): the state, then the parent.
+    private fun parent(pid: Int): Int? = runCatching {
+        File("/proc/$pid/stat").readText().substringAfterLast(')').trim().split(' ')[1].toInt()
+    }.getOrNull()
 }

@@ -49,7 +49,14 @@ object DnsProxy {
         val buffer = ByteArray(65535)
         while (true) {
             val packet = DatagramPacket(buffer, buffer.size)
-            socket.receive(packet)
+            // A failed receive must not end the thread: the guest would have no DNS until the app restarts.
+            try {
+                socket.receive(packet)
+            } catch (e: java.io.IOException) {
+                Log.w(TAG, "receive: $e")
+                Thread.sleep(100)
+                continue
+            }
             val query = packet.data.copyOf(packet.length)
             val client = packet.socketAddress
             resolve(query) { answer ->

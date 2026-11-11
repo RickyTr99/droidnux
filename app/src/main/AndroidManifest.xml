@@ -4,6 +4,7 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- The microphone as the desktop's audio input, also while it is in the background. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
@@ -57,6 +58,12 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs a Linux desktop session (display server and container) chosen by the user" />
         </service>
+
+        <!-- Keeps the app's process running while it installs (the distro, the desktop, the store's apps). -->
+        <service
+            android:name=".InstallService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- The log a tester shares from Diagnostics (SessionLog). -->
         <provider
