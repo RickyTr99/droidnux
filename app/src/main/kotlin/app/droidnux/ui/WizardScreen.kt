@@ -114,7 +114,6 @@ fun WizardScreen(state: AppState, viewModel: AppViewModel) {
             when (page) {
                 0 -> WizardPage(
                     title = stringResource(R.string.wizard_welcome_title),
-                    text = stringResource(R.string.wizard_welcome_text),
                     aside = { SpaceSummary() },
                     footer = {
                         StepDots(0, pages)
@@ -123,7 +122,6 @@ fun WizardScreen(state: AppState, viewModel: AppViewModel) {
                 ) { ChoicePage() }
                 pages - 2 -> WizardPage(
                     title = stringResource(R.string.wizard_checks_title),
-                    text = stringResource(R.string.wizard_checks_text),
                     footer = {
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
                             FilledTonalButton(onClick = { step = pages - 3 }, modifier = Modifier.height(48.dp)) {
@@ -167,7 +165,6 @@ fun AccountPage(back: (() -> Unit)?, dot: Int, pages: Int, onDone: () -> Unit) {
 
     WizardPage(
         title = stringResource(R.string.wizard_account_title),
-        text = stringResource(R.string.wizard_account_text),
         footer = {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (back != null) {
@@ -251,7 +248,6 @@ private fun AppsPage(
     val megabytes = chosen.mapNotNull(StoreCatalog::get).sumOf { it.sizeMb }
     WizardPage(
         title = stringResource(R.string.wizard_apps_title),
-        text = stringResource(R.string.wizard_apps_text),
         aside = {
             Column(Modifier.padding(top = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SummaryLine(stringResource(R.string.wizard_apps_selected), chosen.size.toString())
@@ -322,7 +318,7 @@ private fun AppChoice(app: StoreApp, selected: Boolean, state: AppState, viewMod
 @Composable
 private fun WizardPage(
     title: String,
-    text: String,
+    text: String? = null,
     aside: @Composable () -> Unit = {},
     footer: @Composable () -> Unit,
     content: @Composable () -> Unit,
@@ -340,12 +336,14 @@ private fun WizardPage(
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.onSurface,
                     )
-                    Text(
-                        text,
-                        fontSize = if (compact) 15.sp else 17.sp,
-                        lineHeight = if (compact) 22.sp else 25.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (text != null) {
+                        Text(
+                            text,
+                            fontSize = if (compact) 15.sp else 17.sp,
+                            lineHeight = if (compact) 22.sp else 25.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     aside()
                 }
             }
@@ -419,41 +417,10 @@ private fun ChoicePage() {
     val context = LocalContext.current
     var layout by remember { mutableStateOf(DesktopSettings.load(context).layout) }
     var choosingLayout by remember { mutableStateOf(false) }
-    // Side by side, or one above the other on a phone (the names would not fit).
-    val pair = @Composable { first: @Composable (Modifier) -> Unit, second: @Composable (Modifier) -> Unit ->
-        if (isCompact()) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                first(Modifier.fillMaxWidth())
-                second(Modifier.fillMaxWidth())
-            }
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                first(Modifier.weight(1f))
-                second(Modifier.weight(1f))
-            }
-        }
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(28.dp)) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SectionHeader(stringResource(R.string.wizard_distro))
-            pair(
-                { ChoiceCard(stringResource(R.string.distro_debian), stringResource(R.string.distro_debian_text), Icons.Debian, it) },
-                { ChoiceCard(stringResource(R.string.distro_ubuntu), stringResource(R.string.coming_soon), null, it) },
-            )
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SectionHeader(stringResource(R.string.wizard_desktop))
-            pair(
-                { ChoiceCard(stringResource(R.string.desktop_name), stringResource(R.string.desktop_text), Icons.Desktop, it) },
-                { ChoiceCard(stringResource(R.string.desktop_gnome), stringResource(R.string.coming_soon), null, it) },
-            )
-        }
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SectionHeader(stringResource(R.string.settings_keyboard))
-            InfoRow(stringResource(R.string.settings_layout), onClick = { choosingLayout = true }) {
-                Text(layoutName(layout), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
-            }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SectionHeader(stringResource(R.string.settings_keyboard))
+        InfoRow(stringResource(R.string.settings_layout), onClick = { choosingLayout = true }) {
+            Text(layoutName(layout), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 15.sp)
         }
     }
     if (choosingLayout) {
@@ -462,32 +429,6 @@ private fun ChoicePage() {
             DesktopSettings.update(context) { it.copy(layout = chosen) }
             choosingLayout = false
         }
-    }
-}
-
-/** A distro or desktop: the available one is chosen, the others are coming ([icon] null). */
-@Composable
-private fun ChoiceCard(title: String, text: String, icon: androidx.compose.ui.graphics.vector.ImageVector?, modifier: Modifier) {
-    val available = icon != null
-    Row(
-        modifier
-            .clip(CardShape)
-            .background(if (available) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainerLow)
-            .padding(20.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            Modifier.size(44.dp).clip(RoundedCornerShape(14.dp))
-                .background(if (available) MaterialTheme.colorScheme.surfaceContainerHighest else MaterialTheme.colorScheme.surfaceContainerHigh),
-            contentAlignment = Alignment.Center,
-        ) { if (icon != null) Icon(icon, null, tint = MaterialTheme.colorScheme.onSurface) }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            val color = if (available) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline
-            Text(title, fontSize = 18.sp, fontWeight = FontWeight.Medium, color = color)
-            Text(text, fontSize = 14.sp, color = if (available) MaterialTheme.colorScheme.onSurfaceVariant else color)
-        }
-        if (available) Icon(Icons.Selected, stringResource(R.string.chosen), tint = MaterialTheme.colorScheme.primary)
     }
 }
 
@@ -592,7 +533,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
 
     WizardPage(
         title = stringResource(if (setup?.done == true) R.string.wizard_done_title else R.string.wizard_install_title),
-        text = stringResource(if (setup?.done == true) R.string.wizard_done_text else R.string.wizard_install_text),
+        text = if (setup?.done == true) null else stringResource(R.string.wizard_install_text),
         aside = {
             Column(Modifier.padding(top = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 SummaryLine(stringResource(R.string.wizard_total), "${(total * 100).toInt()}%")
@@ -620,7 +561,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             StepRow(
                 stringResource(R.string.distro_debian),
-                stepText(state.rootfs, stringResource(R.string.install_rootfs_text)),
+                stepText(state.rootfs),
                 stepStatus(state.rootfs),
                 (state.rootfs as? InstallState.Installing)?.progress?.fraction(),
                 stepDetail(state.rootfs),
@@ -629,7 +570,7 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
             StepRow(
                 stringResource(R.string.desktop_name),
                 when {
-                    !state.desktopInstalling -> stringResource(R.string.install_desktop_text)
+                    !state.desktopInstalling -> ""
                     apt.packages == 0 -> stringResource(R.string.status_package_list)
                     apt.downloading -> stringResource(R.string.status_download)
                     else -> stringResource(R.string.status_installing)
@@ -653,14 +594,14 @@ private fun InstallPage(state: AppState, viewModel: AppViewModel, pages: Int) {
             )
             StepRow(
                 stringResource(R.string.install_gpu),
-                stepText(mesa, stringResource(R.string.install_gpu_text)),
+                stepText(mesa),
                 stepStatus(mesa),
                 (mesa as? InstallState.Installing)?.progress?.fraction(),
                 stepDetail(mesa),
             )
             StepRow(
                 stringResource(R.string.plasma_component),
-                stepText(plasma, stringResource(R.string.install_plasma_text)),
+                stepText(plasma),
                 stepStatus(plasma),
                 (plasma as? InstallState.Installing)?.progress?.fraction(),
                 stepDetail(plasma),
@@ -728,10 +669,10 @@ private fun stepStatus(state: InstallState?) = when (state) {
 }
 
 @Composable
-private fun stepText(state: InstallState?, idle: String): String = when ((state as? InstallState.Installing)?.progress) {
+private fun stepText(state: InstallState?): String = when ((state as? InstallState.Installing)?.progress) {
     is InstallProgress.Downloading -> stringResource(R.string.status_download)
     is InstallProgress.Extracting -> stringResource(R.string.status_extract)
-    else -> (state as? InstallState.Failed)?.message ?: idle
+    else -> (state as? InstallState.Failed)?.message.orEmpty()
 }
 
 /** The amount downloaded, under the bar. */
@@ -798,7 +739,7 @@ private fun StepRow(title: String, text: String, status: StepStatus, fraction: F
             Icon(icon, null, tint = tint, modifier = Modifier.size(26.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, fontSize = 16.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface)
-                Text(text, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                if (text.isNotEmpty()) Text(text, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
             }
         }
         if (running) {

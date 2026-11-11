@@ -1901,7 +1901,7 @@ private fun ComponentsPage(state: AppState, viewModel: AppViewModel) {
     InfoRow(
         stringResource(R.string.distro_debian),
         // Not under a running desktop (AppViewModel.install).
-        text = stringResource(if (state.sessionRunning) R.string.rootfs_reinstall_running else R.string.install_rootfs_text),
+        text = if (state.sessionRunning) stringResource(R.string.rootfs_reinstall_running) else null,
         icon = Icons.Check,
         iconTint = MaterialTheme.colorScheme.primary,
     ) {
