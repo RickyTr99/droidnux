@@ -9,7 +9,7 @@
 # The x86 libraries come from Debian's own amd64/i386 multiarch packages in the
 # same rootfs, so FEX runs without a separate x86 RootFS.
 # Patches 0001, 0003 and 0004 come from DroidDeck (github.com/Droid-Deck/DroidDeck, tools/fex/patches);
-# 0005 to 0009 are DroidNux's.
+# 0005 to 0008 are DroidNux's.
 set -eu
 
 HERE=$(cd "$(dirname "$0")" && pwd)
