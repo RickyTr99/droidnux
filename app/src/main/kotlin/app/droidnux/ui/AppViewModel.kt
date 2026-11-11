@@ -155,7 +155,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _state = MutableStateFlow(AppState())
     val state: StateFlow<AppState> = _state.asStateFlow()
 
-    private var installJob: Job? = null
     private var setupJob: Job? = null
     private val componentJobs = mutableMapOf<String, Job>()
     private var appsJob: Job? = null
@@ -485,14 +484,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return file.takeIf { it.isFile }?.let { BitmapFactory.decodeFile(it.path) }?.also { storeBitmaps.put("store:$name", it) }
     }
 
-    /** First run: installs whatever is missing, in order, and stops at the first failure. */
-    fun runSetup(apps: List<String> = _state.value.setup?.apps.orEmpty()) {
+    /**
+     * First run: installs whatever is missing, in order, and stops at the first failure.
+     * [reinstall] replaces the distro first (keeping /home if [keepHome]), then goes on the same way.
+     */
+    fun runSetup(apps: List<String> = _state.value.setup?.apps.orEmpty(), reinstall: Boolean = false, keepHome: Boolean = false) {
         if (setupJob?.isActive == true) return
         setupJob = viewModelScope.launch {
             _state.update { it.copy(setup = SetupState(apps = apps)) }
             try {
-                if (!withContext(Dispatchers.IO) { container.installer.isInstalled(_state.value.distro) }) {
-                    installRootfs()
+                if (reinstall || !withContext(Dispatchers.IO) { container.installer.isInstalled(_state.value.distro) }) {
+                    installRootfs(keepHome)
                 }
                 _state.update { it.copy(setup = SetupState(SetupStep.DESKTOP, apps = apps)) }
                 if (!_state.value.desktopInstalled || !_state.value.desktopUpToDate) {
@@ -580,19 +582,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return installed && upToDate
     }
 
-    /** Reinstalls the distro, with the users' files (/home) if [keepHome]; never under a running desktop. */
+    /**
+     * Reinstalls the distro, with the users' files (/home) if [keepHome]; never under a running desktop.
+     * The whole setup, so the desktop and components come back (the wizard shows its progress).
+     */
     fun install(keepHome: Boolean = false) {
         refresh()
-        if (installJob?.isActive == true || _state.value.sessionRunning) return
-        installJob = viewModelScope.launch {
-            try {
-                installRootfs(keepHome)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                // The state shows it.
-            }
-        }
+        if (_state.value.sessionRunning) return
+        runSetup(emptyList(), reinstall = true, keepHome = keepHome)
     }
 
     private suspend fun installRootfs(keepHome: Boolean = false) {
@@ -615,10 +612,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(rootfs = InstallState.Failed(e.message ?: e.toString())) }
             throw e
         }
-    }
-
-    fun cancelInstall() {
-        installJob?.cancel()
     }
 
     private suspend fun refreshComponent(component: Component) {

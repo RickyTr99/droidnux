@@ -195,6 +195,8 @@ object DesktopEnvironment {
         set -e
         export DEBIAN_FRONTEND=noninteractive
         $NO_SYSTEM_BUS
+        # An install cut short (the app closed halfway) leaves packages unpacked but not set up.
+        dpkg --configure -a
         apt-get update
         # The slim image keeps no man pages, nor their directories: some packages'
         # scripts copy theirs there (Gaia Sky's .deb into man6) and fail without them.
