@@ -122,7 +122,8 @@ class ComponentInstaller(private val downloadDir: File) {
     fun isInstalled(rootfs: File, component: Component): Boolean =
         File(dir(rootfs, component), MARKER).readTextOrNull()?.lines()?.getOrNull(1) == component.sha256
 
-    suspend fun install(rootfs: File, component: Component, onProgress: (InstallProgress) -> Unit) =
+    /** [setup] runs with the new version in place; if it throws, the version that was there comes back. */
+    suspend fun install(rootfs: File, component: Component, onProgress: (InstallProgress) -> Unit, setup: suspend () -> Unit = {}) =
         withContext(Dispatchers.IO) {
             val archive = File(downloadDir, "${component.sha256}.tar.xz")
             Archive.download(component.url, component.sha256, component.sizeBytes, archive, onProgress)
@@ -132,12 +133,28 @@ class ComponentInstaller(private val downloadDir: File) {
             staging.mkdirs()
             Archive.extract(archive, Archive.Compression.XZ, staging, onProgress)
             File(staging, MARKER).writeText("${component.version}\n${component.sha256}\n")
-
-            // Running guest processes keep the files they have open or mapped.
-            target.deleteRecursivelyForce()
-            if (!staging.renameTo(target)) throw InstallException("Cannot move ${component.id} into $target")
+            replace(target, staging, setup)
             archive.delete()
         }
+
+    /** Puts [staging] in [target]'s place, keeping the old [target] aside until [setup] is done. */
+    internal suspend fun replace(target: File, staging: File, setup: suspend () -> Unit) {
+        val old = File(target.parentFile, ".${target.name}.old")
+        // Left by an install the app died in: the old version if its move back never happened.
+        if (old.exists() && !target.exists()) old.renameTo(target)
+        old.deleteRecursivelyForce()
+        // Running guest processes keep the files they have open or mapped.
+        if (target.exists() && !target.renameTo(old)) throw InstallException("Cannot move $target away")
+        try {
+            if (!staging.renameTo(target)) throw InstallException("Cannot move $staging into $target")
+            setup()
+        } catch (e: Throwable) {
+            target.deleteRecursivelyForce()
+            old.renameTo(target)
+            throw e
+        }
+        old.deleteRecursivelyForce()
+    }
 
     suspend fun uninstall(rootfs: File, component: Component) = withContext(Dispatchers.IO) {
         dir(rootfs, component).deleteRecursivelyForce()

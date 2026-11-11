@@ -39,8 +39,8 @@ class Burrow(context: Context) {
             if (dnsPort > 0) { add("-d"); add(dnsPort.toString()) }
             // Per-syscall counts of Burrow's handler while the file exists (tools/burrow-stats.py).
             if (statsFile.exists()) { add("-s"); add(statsFile.absolutePath) }
-            // x86 programs run through FEX, once its component is in the rootfs.
-            if (File(rootfs, FEX.removePrefix("/")).exists()) { add("-x"); add(FEX) }
+            // x86 programs run through FEX, from when its component is in the rootfs: also in a session started before.
+            add("-x"); add(FEX)
             for (bind in DEFAULT_BINDS) {
                 add("-b"); add(bind)
             }

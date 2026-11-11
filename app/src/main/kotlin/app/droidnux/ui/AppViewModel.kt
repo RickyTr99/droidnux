@@ -633,15 +633,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private suspend fun installComponentNow(component: Component) {
         setComponent(component, InstallState.Installing(null))
         try {
-            container.components.install(rootfs, component) { progress ->
+            container.components.install(rootfs, component, { progress ->
                 setComponent(component, InstallState.Installing(progress))
-            }
-            component.setup?.let { script ->
-                setComponent(component, InstallState.Installing(null))
-                val result = container.shell(_state.value.distro, script)
-                if (result.exitCode != 0) {
-                    container.components.uninstall(rootfs, component)
-                    throw InstallException(result.output.lines().lastOrNull { it.isNotBlank() } ?: "exit status ${result.exitCode}")
+            }) {
+                component.setup?.let { script ->
+                    setComponent(component, InstallState.Installing(null))
+                    val result = container.shell(_state.value.distro, script)
+                    if (result.exitCode != 0) {
+                        throw InstallException(result.output.lines().lastOrNull { it.isNotBlank() } ?: "exit status ${result.exitCode}")
+                    }
                 }
             }
             refreshComponent(component)
