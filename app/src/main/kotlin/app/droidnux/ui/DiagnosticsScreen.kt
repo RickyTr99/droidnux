@@ -1,6 +1,5 @@
 package app.droidnux.ui
 
-import android.content.Intent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -27,7 +26,6 @@ import androidx.compose.ui.unit.sp
 import app.droidnux.R
 import app.droidnux.desktop.DesktopSettings
 import app.droidnux.desktop.SessionLog
-import app.droidnux.spike.BufferSpikeActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -82,13 +80,6 @@ fun DiagnosticsPage(
 
     SectionHeader(stringResource(R.string.section_display), Modifier.padding(top = 20.dp, bottom = 4.dp))
     Mono(state.display ?: stringResource(R.string.status_checking))
-    if (installed) {
-        InfoRow(stringResource(R.string.action_buffer_spike)) {
-            FilledTonalButton(onClick = { context.startActivity(Intent(context, BufferSpikeActivity::class.java)) }) {
-                Text(stringResource(R.string.store_open))
-            }
-        }
-    }
 
     if (state.desktopLog.isNotEmpty()) {
         SectionHeader(stringResource(R.string.diagnostics_desktop_log), Modifier.padding(top = 20.dp, bottom = 4.dp))

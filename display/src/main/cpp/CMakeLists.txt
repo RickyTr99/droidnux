@@ -11,10 +11,9 @@ add_library(droidnux-display SHARED
     core/audio_output.cpp
     core/presenter.cpp
     core/video_decoder.cpp
-    buffer_spike.cpp
     jni.cpp
     probe.cpp)
-target_include_directories(droidnux-display PRIVATE ${GUEST_DIR}/buffer-spike core)
+target_include_directories(droidnux-display PRIVATE core)
 target_compile_options(droidnux-display PRIVATE
     "$<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Werror>" -fvisibility=hidden)
 # Newer-than-minSdk APIs are guarded with __builtin_available.

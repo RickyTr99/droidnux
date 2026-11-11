@@ -12,7 +12,6 @@
     <string name="status_checking">Checking…</string>
     <string name="container_hint">Install the root filesystem first.</string>
     <string name="exit_code">Exit code %1$d</string>
-    <string name="action_buffer_spike">Buffer spike</string>
     <string name="action_update_desktop">Update</string>
     <string name="action_open_desktop">Open desktop</string>
     <string name="desktop_installing">Installing…</string>
