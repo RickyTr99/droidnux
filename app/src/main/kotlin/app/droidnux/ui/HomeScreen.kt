@@ -105,12 +105,14 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -1895,13 +1897,17 @@ private fun SliderRow(
 @Composable
 private fun ComponentsPage(state: AppState, viewModel: AppViewModel) {
     var confirmReinstall by remember { mutableStateOf(false) }
+    var keepHome by remember { mutableStateOf(true) }
     InfoRow(
         stringResource(R.string.distro_debian),
-        text = stringResource(R.string.install_rootfs_text),
+        // Not under a running desktop (AppViewModel.install).
+        text = stringResource(if (state.sessionRunning) R.string.rootfs_reinstall_running else R.string.install_rootfs_text),
         icon = Icons.Check,
         iconTint = MaterialTheme.colorScheme.primary,
     ) {
-        TextButton(onClick = { confirmReinstall = true }) { Text(stringResource(R.string.action_reinstall)) }
+        TextButton(onClick = { keepHome = true; confirmReinstall = true }, enabled = !state.sessionRunning) {
+            Text(stringResource(R.string.action_reinstall))
+        }
     }
     InfoRow(
         stringResource(R.string.desktop_name),
@@ -1933,11 +1939,24 @@ private fun ComponentsPage(state: AppState, viewModel: AppViewModel) {
         AlertDialog(
             onDismissRequest = { confirmReinstall = false },
             title = { Text(stringResource(R.string.rootfs_reinstall_title, stringResource(R.string.distro_debian))) },
-            text = { Text(stringResource(R.string.rootfs_reinstall_text)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.rootfs_reinstall_text))
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RowShape)
+                            .toggleable(keepHome, role = Role.Checkbox, onValueChange = { keepHome = it }),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = keepHome, onCheckedChange = null)
+                        Text(stringResource(R.string.rootfs_reinstall_keep_home), color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmReinstall = false
-                    viewModel.install()
+                    viewModel.install(keepHome)
                 }) { Text(stringResource(R.string.action_reinstall), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmReinstall = false }) { Text(stringResource(R.string.action_cancel)) } },

@@ -7,7 +7,9 @@
     <string name="action_reinstall">Reinstall</string>
     <string name="action_cancel">Cancel</string>
     <string name="rootfs_reinstall_title">Reinstall %1$s?</string>
-    <string name="rootfs_reinstall_text">Everything in the distro is deleted: installed packages, the desktop, the GPU drivers and the files in /root.</string>
+    <string name="rootfs_reinstall_text">Packages and system settings are deleted.</string>
+    <string name="rootfs_reinstall_keep_home">Keep personal files</string>
+    <string name="rootfs_reinstall_running">Close the desktop first</string>
     <string name="action_run">Run uname -a</string>
     <string name="status_checking">Checking…</string>
     <string name="container_hint">Install the root filesystem first.</string>

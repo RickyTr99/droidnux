@@ -5,7 +5,9 @@
     <string name="action_reinstall">Reinstalla</string>
     <string name="action_cancel">Annulla</string>
     <string name="rootfs_reinstall_title">Reinstallare %1$s?</string>
-    <string name="rootfs_reinstall_text">Tutto quello che c\'è nella distro viene cancellato: pacchetti installati, desktop, driver della GPU e file in /root.</string>
+    <string name="rootfs_reinstall_text">Pacchetti e impostazioni di sistema vengono cancellati.</string>
+    <string name="rootfs_reinstall_keep_home">Tieni i file personali</string>
+    <string name="rootfs_reinstall_running">Chiudi prima il desktop</string>
     <string name="action_run">Esegui uname -a</string>
     <string name="status_checking">Controllo…</string>
     <string name="container_hint">Prima installa il file system della distro.</string>
