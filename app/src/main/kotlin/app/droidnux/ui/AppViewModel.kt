@@ -502,7 +502,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 _state.update { it.copy(setup = SetupState(SetupStep.COMPONENTS, apps = apps)) }
                 for (component in Component.ALL) {
-                    if (component.sha256.isEmpty() || component.optional || _state.value.components[component.id] == InstallState.Installed) continue
+                    if (component.sha256.isEmpty() || _state.value.components[component.id] == InstallState.Installed) continue
                     installComponentNow(component)
                 }
                 _state.update { it.copy(setup = SetupState(SetupStep.APPS, apps = apps)) }
@@ -666,15 +666,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun cancelComponent(component: Component) {
         componentJobs[component.id]?.cancel()
-    }
-
-    /** Removes an optional [Component]; what its setup installed in the distro stays. */
-    fun uninstallComponent(component: Component) {
-        if (componentJobs[component.id]?.isActive == true) return
-        componentJobs[component.id] = viewModelScope.launch {
-            container.components.uninstall(rootfs, component)
-            refreshComponent(component)
-        }
     }
 
     fun runUname() {

@@ -33,12 +33,8 @@ object DesktopEnvironment {
     /** KWin's render time prediction and Qt's animation timer (guest/kwin-pacing), preloaded into Plasma. */
     private const val KWIN_LIBRARY = "libdroidnux-guest-kwin.so"
 
-    /** Its directory for ld.so's $LIB (Debian's multiarch directory, e.g. lib/aarch64-linux-gnu). */
-    private fun kwinLibraryPath(multiarch: String) = "/usr/local/lib/$multiarch/droidnux/$KWIN_LIBRARY"
+    private const val KWIN_LIBRARY_PATH = "/usr/local/lib/aarch64-linux-gnu/droidnux/$KWIN_LIBRARY"
 
-    /** The FEX component (guest/fex), which runs x86 programs; its lib/<multiarch> has their KWin library. */
-    const val FEX_PREFIX = "/opt/droidnux/fex"
-    private val X86_MULTIARCH = listOf("x86_64-linux-gnu", "i386-linux-gnu")
     private const val GUEST_LIB_DIR = "/usr/local/lib/droidnux"
 
     /** Sound: DroidNux's PipeWire sink (guest/pipewire), in PipeWire's module directory. */
@@ -242,11 +238,8 @@ object DesktopEnvironment {
             writeFile(rootfs, path, text.toByteArray(), mode = if (text.startsWith("#!")) 0x1ED /* 0755 */ else 0x1A4)
         }
         val nativeLibraryDir = File(context.applicationInfo.nativeLibraryDir)
-        writeFile(rootfs, kwinLibraryPath("aarch64-linux-gnu"), File(nativeLibraryDir, KWIN_LIBRARY).readBytes())
-        for (multiarch in X86_MULTIARCH) {
-            writeLink(rootfs, kwinLibraryPath(multiarch), "$FEX_PREFIX/lib/$multiarch/$KWIN_LIBRARY")
-        }
-        removeFile(rootfs, "$GUEST_LIB_DIR/$KWIN_LIBRARY") // its place before x86 programs
+        writeFile(rootfs, KWIN_LIBRARY_PATH, File(nativeLibraryDir, KWIN_LIBRARY).readBytes())
+        removeFile(rootfs, "$GUEST_LIB_DIR/$KWIN_LIBRARY") // its place before
         writeFile(rootfs, "$PIPEWIRE_MODULE_DIR/$PIPEWIRE_MODULE", File(nativeLibraryDir, PIPEWIRE_MODULE).readBytes())
         writeFile(rootfs, IM_PROGRAM, File(nativeLibraryDir, IM_LIBRARY).readBytes(), mode = 0x1ED)
         // KIO counts Android's storage (FUSE) as remote, where previews are off by default: allow files up to 50 MiB.
@@ -529,7 +522,6 @@ object DesktopEnvironment {
         "DESKTOP_USER" to DESKTOP_USER,
         "DISPLAY" to "$DISPLAY",
         // The extension's builds, one "<branch> <url> <sha256>" line each.
-        "FEX_PREFIX" to FEX_PREFIX,
         "FLATPAK_GL_EXTENSIONS" to Component.FLATPAK_GL.joinToString("\n") { "${it.branch} ${it.url} ${it.sha256}" },
         "FLATPAK_GL_SCRIPT" to FLATPAK_GL_SCRIPT,
         "GUEST_LIB_DIR" to GUEST_LIB_DIR,
@@ -598,18 +590,6 @@ object DesktopEnvironment {
             temp.delete()
             throw IOException("cannot replace $path")
         }
-    }
-
-    /** Makes the guest [path] inside [rootfs] a symlink to [target] (a guest path), with writeFile's checks. */
-    private fun writeLink(rootfs: File, path: String, target: String) {
-        val file = File(rootfs, path.removePrefix("/"))
-        val root = rootfs.canonicalPath
-        val parent = file.parentFile!!
-        parent.mkdirs()
-        if (!parent.canonicalPath.let { it == root || it.startsWith("$root/") }) {
-            throw IOException("$path resolves outside the rootfs")
-        }
-        link(file, target)
     }
 
     /** Deletes [path] in the guest, never through a guest symlink to the host (File.delete unlinks a link). */

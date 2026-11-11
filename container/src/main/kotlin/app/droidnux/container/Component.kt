@@ -21,8 +21,6 @@ data class Component(
     val sizeBytes: Long,
     /** Absolute guest path the archive's contents go to. */
     val guestPath: String,
-    /** Installed only when the user asks for it, not by the first run. */
-    val optional: Boolean = false,
     /** Guest shell script run as root after unpacking; the install fails if it does. */
     val setup: String? = null,
 ) {
@@ -49,52 +47,7 @@ data class Component(
             guestPath = DesktopEnvironment.PLASMA_PREFIX,
         )
 
-        /**
-         * FEX, which runs x86 and x86-64 programs (Burrow hands them to it), with GL and Vulkan thunks to
-         * [MESA], and [MESA] built for x86-64 programs' EGL and GBM (FEX has no EGL thunk): guest/fex. Its setup adds Debian's amd64 and i386 architectures and their base libraries.
-         * droidnux-x86 stands in for their Mesa (some 200 MB each with LLVM), unused behind the thunks, and
-         * for the arm64 tools x86 packages depend on that Debian doesn't mark Multi-Arch: foreign (Valve's
-         * steam_latest.deb wants apt, python3-apt, lsof and a terminal), so they install as on a PC; with
-         * these missing, apt would take the x86 python3-apt in place of the arm64 one. FEX's ldd lists x86
-         * programs' libraries too.
-         */
-        val FEX = Component(
-            id = "fex",
-            version = "2611-dn7",
-            url = "$RELEASES/fex-2611-dn7/droidnux-fex-2611-dn7-arm64.tar.xz",
-            sha256 = "e0f0c68541cf49f4e789ba50fad0ba8adfad2abd7f5f89e1db281d219b10a23a",
-            sizeBytes = 7_896_112,
-            guestPath = DesktopEnvironment.FEX_PREFIX,
-            optional = true,
-            setup = """
-                set -e
-                export DEBIAN_FRONTEND=noninteractive
-                dpkg --add-architecture amd64
-                dpkg --add-architecture i386
-                apt-get update -q
-                apt-get install -y -q --no-install-recommends python3-apt lsof
-                dir=$(mktemp -d)
-                provides='libglx-mesa0, libegl-mesa0, libgl1-mesa-dri, mesa-vulkan-drivers, mesa-va-drivers, mesa-vdpau-drivers'
-                for p in apt python3 python3-apt lsof konsole; do
-                    v=$(dpkg-query -W -f '${'$'}{db:Status-Abbrev}${'$'}{Version}' ${'$'}p 2>/dev/null) || continue
-                    case ${'$'}v in ii*) provides="${'$'}provides, ${'$'}p (= ${'$'}{v#ii })" ;; esac
-                done
-                for arch in amd64 i386; do
-                    mkdir -p ${'$'}dir/${'$'}arch/DEBIAN
-                    printf 'Package: droidnux-x86\nVersion: 1\nArchitecture: %s\nMulti-Arch: same\nProvides: %s\nMaintainer: DroidNux\nDescription: arm64 GL and tools for x86 programs (FEX)\n' ${'$'}arch "${'$'}provides" > ${'$'}dir/${'$'}arch/DEBIAN/control
-                    dpkg-deb -b ${'$'}dir/${'$'}arch ${'$'}dir/droidnux-x86_${'$'}arch.deb > /dev/null
-                done
-                # dpkg, not apt: it replaces an installed droidnux-x86 of the same or a newer version, whose
-                # Provides may name versions of the tools that are gone.
-                dpkg -i ${'$'}dir/droidnux-x86_*.deb
-                apt-get install -y -q --no-install-recommends \
-                    libc6:amd64 libgl1:amd64 libvulkan1:amd64 libc6:i386 libgl1:i386 libvulkan1:i386
-                rm -rf ${'$'}dir
-                ln -sf ${DesktopEnvironment.FEX_PREFIX}/bin/ldd /usr/local/bin/ldd
-            """.trimIndent(),
-        )
-
-        val ALL = listOf(MESA, PLASMA, FEX)
+        val ALL = listOf(MESA, PLASMA)
 
         /** [MESA] as Flatpak's GL extension, one per Freedesktop runtime branch (guest/mesa/flatpak.sh): the session installs it. */
         val FLATPAK_GL = listOf(
@@ -154,10 +107,6 @@ class ComponentInstaller(private val downloadDir: File) {
             throw e
         }
         old.deleteRecursivelyForce()
-    }
-
-    suspend fun uninstall(rootfs: File, component: Component) = withContext(Dispatchers.IO) {
-        dir(rootfs, component).deleteRecursivelyForce()
     }
 
     /** The component's directory, refusing guest symlinks on the way (they point at host paths). */

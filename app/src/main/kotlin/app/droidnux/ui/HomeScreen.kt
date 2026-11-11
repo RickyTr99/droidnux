@@ -267,8 +267,7 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
 
     BackHandler(enabled = tab != Tab.HOME) { select(Tab.HOME) }
     val updates = !state.desktopUpToDate || Component.ALL.any {
-        // An optional component counts once it is installed in an older version.
-        it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled && (!it.optional || it.id in state.componentVersions)
+        it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled
     }
     // Every return to the app (from the desktop too) brings the Home's sections in one after another.
     // Hidden from the first frame and again once out of sight, so no frame shows the sections before they come in.
@@ -1920,7 +1919,6 @@ private fun ComponentsPage(state: AppState, viewModel: AppViewModel) {
     }
     ComponentRow(Component.MESA, stringResource(R.string.install_gpu), state, viewModel)
     ComponentRow(Component.PLASMA, stringResource(R.string.plasma_component), state, viewModel)
-    ComponentRow(Component.FEX, stringResource(R.string.fex_component), state, viewModel)
     if (confirmReinstall) {
         AlertDialog(
             onDismissRequest = { confirmReinstall = false },
@@ -1954,7 +1952,6 @@ private fun ComponentsPage(state: AppState, viewModel: AppViewModel) {
 private fun ComponentRow(component: Component, name: String, state: AppState, viewModel: AppViewModel) {
     val install = state.components[component.id] ?: InstallState.Checking
     val installed = install == InstallState.Installed
-    var confirmRemove by remember { mutableStateOf(false) }
     InfoRow(
         name,
         text = when (install) {
@@ -1974,25 +1971,9 @@ private fun ComponentRow(component: Component, name: String, state: AppState, vi
             !installed -> {
                 { FilledTonalButton(onClick = { viewModel.installComponent(component) }) { Text(stringResource(R.string.action_install)) } }
             }
-            component.optional -> {
-                { TextButton(onClick = { confirmRemove = true }) { Text(stringResource(R.string.store_remove)) } }
-            }
             else -> null
         },
     )
-    if (confirmRemove) {
-        AlertDialog(
-            onDismissRequest = { confirmRemove = false },
-            title = { Text(stringResource(R.string.store_remove_title, name)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmRemove = false
-                    viewModel.uninstallComponent(component)
-                }) { Text(stringResource(R.string.store_remove), color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { confirmRemove = false }) { Text(stringResource(R.string.action_cancel)) } },
-        )
-    }
 }
 
 /** An app's icon, decoded off the main thread; an empty tile until then. */

@@ -11,10 +11,10 @@ import java.nio.file.Files
 class ComponentReplaceTest {
 
     private val base = Files.createTempDirectory("droidnux-component").toFile()
-    private val target = File(base, "fex")
+    private val target = File(base, "plasma")
     private val installer = ComponentInstaller(File(base, "downloads"))
 
-    private fun staging(version: String) = File(base, ".fex.partial").apply {
+    private fun staging(version: String) = File(base, ".plasma.partial").apply {
         mkdirs()
         File(this, "version").writeText(version)
     }
@@ -33,7 +33,7 @@ class ComponentReplaceTest {
             }
         }
         assertEquals("1", version())
-        assertFalse(File(base, ".fex.old").exists())
+        assertFalse(File(base, ".plasma.old").exists())
     }
 
     @Test
@@ -46,7 +46,7 @@ class ComponentReplaceTest {
 
     @Test
     fun oldVersionLeftAsideComesBack() {
-        File(base, ".fex.old").apply { mkdirs(); File(this, "version").writeText("1") }
+        File(base, ".plasma.old").apply { mkdirs(); File(this, "version").writeText("1") }
         assertThrows(InstallException::class.java) {
             runBlocking { installer.replace(target, staging("2")) { throw InstallException("setup") } }
         }

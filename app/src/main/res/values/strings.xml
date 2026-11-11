@@ -142,7 +142,6 @@
     <string name="install_packages">Packages %1$d of %2$d</string>
     <string name="install_gpu">Accelerated graphics</string>
     <string name="plasma_component">Plasma speed-ups</string>
-    <string name="fex_component">x86 apps</string>
     <string name="install_show_log">Show the log</string>
     <string name="install_hide_log">Hide the log</string>
     <string name="install_share_log">Send the log</string>
