@@ -90,12 +90,14 @@ fun DiagnosticsPage(
 /** Command output and system strings: monospaced, scrolling sideways instead of wrapping. */
 @Composable
 private fun Mono(text: String) {
+    val scroll = rememberScrollState()
     Text(
         text,
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceContainerLow, RowShape)
-            .horizontalScroll(rememberScrollState())
+            .fadingEdges(scroll, vertical = false)
+            .horizontalScroll(scroll)
             .padding(horizontal = 20.dp, vertical = 14.dp),
         fontFamily = FontFamily.Monospace,
         fontSize = 12.sp,

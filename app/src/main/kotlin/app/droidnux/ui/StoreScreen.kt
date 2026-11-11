@@ -1,5 +1,7 @@
 package app.droidnux.ui
 
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SegmentedButton
@@ -227,12 +229,14 @@ private fun StoreHome(state: AppState, viewModel: AppViewModel, padding: Padding
             val counts = remember(state.storeItems) { state.storeItems.groupingBy { it.category }.eachCount() }
             val installed = installedItems(state).size
             val featured = remember(state.storeItems) { StoreCatalog.FEATURED.mapNotNull { app -> state.storeItems.firstOrNull { it.key == app.id } } }
+            val list = rememberLazyGridState()
             LazyVerticalGrid(
+                state = list,
                 columns = GridCells.Fixed(columns),
                 contentPadding = padding.below(20.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxSize().fadingEdges(list),
             ) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "banner") { Banner(featured, state, viewModel, compact, nav) }
                 if (state.storeCatalog == CatalogState.FAILED) {
@@ -265,12 +269,14 @@ private fun StoreHome(state: AppState, viewModel: AppViewModel, padding: Padding
 @Composable
 private fun SearchResults(search: StoreSearch, state: AppState, viewModel: AppViewModel, padding: PaddingValues, nav: StoreNav) {
     val more = search.more
+    val list = rememberLazyGridState()
     LazyVerticalGrid(
+        state = list,
         columns = GridCells.Adaptive(300.dp),
         contentPadding = padding.below(20.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().fadingEdges(list),
     ) {
         if (search.results.isEmpty() && more.isNullOrEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -424,16 +430,19 @@ private fun ListPage(
     BackHandler(enabled = query.isNotEmpty()) { query = "" }
     Column(Modifier.fillMaxSize()) {
         PageHeader(title, padding, nav) { SearchField(query, stringResource(R.string.store_search_in, title)) { query = it } }
+        val list = rememberLazyGridState()
         LazyVerticalGrid(
+            state = list,
             columns = GridCells.Adaptive(300.dp),
             contentPadding = padding.below(16.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.fillMaxSize().fadingEdges(list),
         ) {
             if (counts.isNotEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }, key = "filters") {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val row = rememberLazyListState()
+                    LazyRow(state = row, modifier = Modifier.fadingEdges(row, vertical = false), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         item { FilterChip("${stringResource(R.string.store_all)} · ${items.size}", filter == null) { filter = null } }
                         items(counts, key = { it.first }) { (name, count) ->
                             val label = StoreCategory.FILTER_LABELS[name]?.let { stringResource(it) } ?: name
@@ -559,10 +568,12 @@ private fun AppPage(page: StoreItem, state: AppState, viewModel: AppViewModel, p
             if (job != null) JobStatus(job)
         }
     }
+    val list = rememberLazyListState()
     LazyColumn(
+        state = list,
         contentPadding = padding,
         verticalArrangement = Arrangement.spacedBy(24.dp),
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize().fadingEdges(list),
     ) {
         item(key = "back") {
             IconButton(onClick = nav.back, modifier = Modifier.size(48.dp).clip(CircleShape).background(colors.surfaceContainerLow)) {
@@ -589,7 +600,8 @@ private fun AppPage(page: StoreItem, state: AppState, viewModel: AppViewModel, p
         val shots = catalog?.screenshots.orEmpty()
         if (shots.isNotEmpty()) {
             item(key = "shots") {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                val row = rememberLazyListState()
+                LazyRow(state = row, modifier = Modifier.fadingEdges(row, vertical = false), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(shots) { url ->
                         Shot(url, item, state, viewModel, Modifier.height(if (compact) 200.dp else 280.dp).aspectRatio(16f / 9).clip(RoundedCornerShape(16.dp)))
                     }

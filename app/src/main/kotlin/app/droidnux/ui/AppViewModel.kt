@@ -525,10 +525,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun cancelSetup() {
-        setupJob?.cancel()
-    }
-
     /** Leaves the finished first run for the home screen. */
     fun finishSetup() {
         _state.update { it.copy(setup = null) }
