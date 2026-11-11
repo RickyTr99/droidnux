@@ -561,11 +561,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return installed && upToDate
     }
 
-    fun install() {
-        if (installJob?.isActive == true) return
+    /** Reinstalls the distro, with the users' files (/home) if [keepHome]; never under a running desktop. */
+    fun install(keepHome: Boolean = false) {
+        refresh()
+        if (installJob?.isActive == true || _state.value.sessionRunning) return
         installJob = viewModelScope.launch {
             try {
-                installRootfs()
+                installRootfs(keepHome)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -574,11 +576,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun installRootfs() {
+    private suspend fun installRootfs(keepHome: Boolean = false) {
         val distro = _state.value.distro
         _state.update { it.copy(rootfs = InstallState.Installing(null), guest = null) }
         try {
-            container.installer.install(distro) { progress ->
+            container.installer.install(distro, keepHome) { progress ->
                 _state.update { it.copy(rootfs = InstallState.Installing(progress)) }
             }
             _state.update { it.copy(rootfs = InstallState.Installed) }
