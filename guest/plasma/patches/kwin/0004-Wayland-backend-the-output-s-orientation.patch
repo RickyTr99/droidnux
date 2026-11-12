@@ -1,12 +1,30 @@
 Subject: [PATCH] Wayland backend: the output's orientation
 
-Plasma's display settings could turn the nested output, but the host's
-window kept its shape and showed the turned output stretched. A turned
-output now renders as for a turned panel and tells the host with
-wl_surface.set_buffer_transform; its mode is the window's size turned, so
-the output keeps the window's shape. The orientation goes to the file
-DROIDNUX_ORIENTATION names: DroidNux turns the device's screen to match.
+Plasma's display settings could turn the nested output, but the backend
+rendered it unturned and the host showed it stretched. A turned output now
+renders turned, as the DRM backend does for a turned panel, and tells the
+host with wl_surface.set_buffer_transform; its mode is the window's size
+turned, so the output keeps the window's shape. The orientation goes to
+the file DROIDNUX_ORIENTATION names: DroidNux turns the device's screen to
+match.
 ---
+diff --git a/src/backends/wayland/wayland_egl_backend.cpp b/src/backends/wayland/wayland_egl_backend.cpp
+index 9576b62..a36a811 100644
+--- a/src/backends/wayland/wayland_egl_backend.cpp
++++ b/src/backends/wayland/wayland_egl_backend.cpp
+@@ -86,6 +86,12 @@ std::optional<OutputLayerBeginFrameInfo> WaylandEglPrimaryLayer::doBeginFrame()
+     if (!m_buffer) {
+         return std::nullopt;
+     }
++    // Rendered turned, as the DRM backend does for a turned panel; the output tells the host.
++    const OutputTransform contentTransform = m_output->transform().combine(OutputTransform::FlipY);
++    if (m_buffer->framebuffer()->colorAttachment()->contentTransform() != contentTransform) {
++        m_damageJournal.clear();
++    }
++    m_buffer->framebuffer()->colorAttachment()->setContentTransform(contentTransform);
+ 
+     const QRegion repair = bufferAgeEnabled ? m_damageJournal.accumulate(m_buffer->age(), infiniteRegion()) : infiniteRegion();
+     m_query = std::make_unique<GLRenderTimeQuery>(m_backend->openglContextRef());
 diff --git a/src/backends/wayland/wayland_output.cpp b/src/backends/wayland/wayland_output.cpp
 index 4e6a311..d228ca0 100644
 --- a/src/backends/wayland/wayland_output.cpp
