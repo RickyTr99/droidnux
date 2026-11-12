@@ -1,0 +1,265 @@
+Subject: [PATCH] Wayland backend: the pointer's settings
+
+The nested backend has no libinput devices, so Plasma's mouse settings
+found none ("Querying input devices failed"). The pointer now has the
+libinput backend's D-Bus objects: the wheel's direction and speed apply
+here, left-handed buttons and the pointer's speed in DroidNux, which turns
+Android's events into the pointer's and reads them from the file
+DROIDNUX_POINTER_SETTINGS names.
+---
+diff --git a/src/backends/wayland/wayland_backend.cpp b/src/backends/wayland/wayland_backend.cpp
+index f0bf15f..7a7700b 100644
+--- a/src/backends/wayland/wayland_backend.cpp
++++ b/src/backends/wayland/wayland_backend.cpp
+@@ -24,7 +24,12 @@
+ #include <KWayland/Client/surface.h>
+ #include <KWayland/Client/touch.h>
+ 
++#include <KConfigGroup>
++#include <KSharedConfig>
++
+ #include <QAbstractEventDispatcher>
++#include <QDBusConnection>
++#include <QSaveFile>
+ 
+ #include <drm_fourcc.h>
+ #include <fcntl.h>
+@@ -47,6 +52,87 @@ inline static QPointF sizeToPoint(const QSizeF &size)
+     return QPointF(size.width(), size.height());
+ }
+ 
++// Where the libinput backend keeps a device's settings, under a name of ours.
++static KConfigGroup pointerSettingsGroup()
++{
++    return KSharedConfig::openConfig(QStringLiteral("kcminputrc"))->group(QStringLiteral("Libinput")).group(QStringLiteral("DroidNux")).group(QStringLiteral("Mouse"));
++}
++
++WaylandPointerSettings::WaylandPointerSettings(QObject *parent)
++    : QObject(parent)
++{
++    const KConfigGroup group = pointerSettingsGroup();
++    m_leftHanded = group.readEntry("LeftHanded", m_leftHanded);
++    m_naturalScroll = group.readEntry("NaturalScroll", m_naturalScroll);
++    m_pointerAcceleration = group.readEntry("PointerAcceleration", m_pointerAcceleration);
++    m_scrollFactor = group.readEntry("ScrollFactor", m_scrollFactor);
++    writeFile();
++    connect(this, &WaylandPointerSettings::changed, this, &WaylandPointerSettings::save);
++
++    QDBusConnection::sessionBus().registerObject(QStringLiteral("/org/kde/KWin/InputDevice"),
++                                                 QStringLiteral("org.kde.KWin.InputDeviceManager"),
++                                                 new WaylandPointerSettingsList(this),
++                                                 QDBusConnection::ExportAllProperties | QDBusConnection::ExportAllSignals);
++    QDBusConnection::sessionBus().registerObject(QStringLiteral("/org/kde/KWin/InputDevice/") + sysName(),
++                                                 QStringLiteral("org.kde.KWin.InputDevice"),
++                                                 this,
++                                                 QDBusConnection::ExportAllProperties);
++}
++
++QString WaylandPointerSettings::name() const
++{
++    return QStringLiteral("Mouse");
++}
++
++QString WaylandPointerSettings::sysName() const
++{
++    // An object path's element, as libinput's names are.
++    return QStringLiteral("event0");
++}
++
++int WaylandPointerSettings::supportedButtons() const
++{
++    return (Qt::LeftButton | Qt::MiddleButton | Qt::RightButton | Qt::BackButton | Qt::ForwardButton).toInt();
++}
++
++void WaylandPointerSettings::save()
++{
++    KConfigGroup group = pointerSettingsGroup();
++    group.writeEntry("LeftHanded", m_leftHanded);
++    group.writeEntry("NaturalScroll", m_naturalScroll);
++    group.writeEntry("PointerAcceleration", m_pointerAcceleration);
++    group.writeEntry("ScrollFactor", m_scrollFactor);
++    group.sync();
++    writeFile();
++}
++
++void WaylandPointerSettings::writeFile() const
++{
++    const QString path = qEnvironmentVariable("DROIDNUX_POINTER_SETTINGS");
++    if (path.isEmpty()) {
++        return;
++    }
++    // Renamed into place: DroidNux reads it whole.
++    QSaveFile file(path);
++    if (file.open(QIODevice::WriteOnly)) {
++        QByteArray settings("leftHanded=");
++        settings.append(m_leftHanded ? "true" : "false").append("\npointerAcceleration=").append(QByteArray::number(m_pointerAcceleration)).append('\n');
++        file.write(settings);
++        file.commit();
++    }
++}
++
++WaylandPointerSettingsList::WaylandPointerSettingsList(WaylandPointerSettings *settings)
++    : QObject(settings)
++    , m_settings(settings)
++{
++}
++
++QStringList WaylandPointerSettingsList::devicesSysNames() const
++{
++    return {m_settings->sysName()};
++}
++
+ WaylandInputDevice::WaylandInputDevice(KWayland::Client::Keyboard *keyboard, WaylandSeat *seat)
+     : m_seat(seat)
+     , m_keyboard(keyboard)
+@@ -81,6 +167,7 @@ WaylandInputDevice::WaylandInputDevice(KWayland::Client::Keyboard *keyboard, Way
+ WaylandInputDevice::WaylandInputDevice(KWayland::Client::Pointer *pointer, WaylandSeat *seat)
+     : m_seat(seat)
+     , m_pointer(pointer)
++    , m_settings(std::make_unique<WaylandPointerSettings>())
+ {
+     connect(pointer, &Pointer::entered, this, [this](quint32 serial, const QPointF &relativeToSurface) {
+         WaylandOutput *output = m_seat->backend()->findOutput(m_pointer->enteredSurface());
+@@ -152,7 +239,10 @@ WaylandInputDevice::WaylandInputDevice(KWayland::Client::Pointer *pointer, Wayla
+             Q_UNREACHABLE();
+         }
+         qint32 &discrete = m_axisDiscrete[axis == PointerAxis::Vertical ? 1 : 0];
+-        Q_EMIT pointerAxisChanged(axis, delta, discrete * 120, m_axisSource, false, std::chrono::milliseconds(time), this);
++        // The wheel's settings; a touchpad scrolls as DroidNux's compositor has it.
++        const bool inverted = m_axisSource == PointerAxisSource::Wheel && m_settings->naturalScroll();
++        const qreal factor = m_axisSource == PointerAxisSource::Wheel ? m_settings->scrollFactor() * (inverted ? -1 : 1) : 1;
++        Q_EMIT pointerAxisChanged(axis, delta * factor, qRound(discrete * 120 * factor), m_axisSource, inverted, std::chrono::milliseconds(time), this);
+         discrete = 0;
+     });
+ 
+diff --git a/src/backends/wayland/wayland_backend.h b/src/backends/wayland/wayland_backend.h
+index 8156994..d5f295e 100644
+--- a/src/backends/wayland/wayland_backend.h
++++ b/src/backends/wayland/wayland_backend.h
+@@ -23,6 +23,7 @@
+ #include <QObject>
+ #include <QPoint>
+ #include <QSize>
++#include <QStringList>
+ 
+ struct wl_buffer;
+ struct wl_display;
+@@ -56,6 +57,110 @@ class WaylandOutput;
+ class WaylandEglBackend;
+ class WaylandDisplay;
+ 
++/**
++ * The pointer's settings on D-Bus, under the interface the libinput backend gives its devices:
++ * Plasma's mouse settings find a mouse to set. Nested in DroidNux's compositor the pointer is
++ * that compositor's: the wheel's settings apply here, the buttons' and the speed in DroidNux,
++ * which reads them from the file DROIDNUX_POINTER_SETTINGS names.
++ */
++class WaylandPointerSettings : public QObject
++{
++    Q_OBJECT
++    Q_PROPERTY(QString name READ name CONSTANT)
++    Q_PROPERTY(QString sysName READ sysName CONSTANT)
++    Q_PROPERTY(bool pointer READ yes CONSTANT)
++    Q_PROPERTY(bool touchpad READ no CONSTANT)
++    Q_PROPERTY(bool supportsDisableEvents READ no CONSTANT)
++    Q_PROPERTY(bool enabled READ yes WRITE ignore)
++    Q_PROPERTY(int supportedButtons READ supportedButtons CONSTANT)
++    Q_PROPERTY(bool supportsLeftHanded READ yes CONSTANT)
++    Q_PROPERTY(bool leftHandedEnabledByDefault READ no CONSTANT)
++    Q_PROPERTY(bool leftHanded MEMBER m_leftHanded NOTIFY changed)
++    Q_PROPERTY(bool supportsMiddleEmulation READ no CONSTANT)
++    Q_PROPERTY(bool middleEmulationEnabledByDefault READ no CONSTANT)
++    Q_PROPERTY(bool middleEmulation READ no WRITE ignore)
++    Q_PROPERTY(bool supportsPointerAcceleration READ yes CONSTANT)
++    Q_PROPERTY(qreal defaultPointerAcceleration READ zero CONSTANT)
++    Q_PROPERTY(qreal pointerAcceleration MEMBER m_pointerAcceleration NOTIFY changed)
++    // The speed alone: DroidNux has no acceleration curve.
++    Q_PROPERTY(bool supportsPointerAccelerationProfileFlat READ yes CONSTANT)
++    Q_PROPERTY(bool defaultPointerAccelerationProfileFlat READ yes CONSTANT)
++    Q_PROPERTY(bool pointerAccelerationProfileFlat READ yes WRITE ignore)
++    Q_PROPERTY(bool supportsPointerAccelerationProfileAdaptive READ no CONSTANT)
++    Q_PROPERTY(bool defaultPointerAccelerationProfileAdaptive READ no CONSTANT)
++    Q_PROPERTY(bool pointerAccelerationProfileAdaptive READ no WRITE ignore)
++    Q_PROPERTY(bool supportsNaturalScroll READ yes CONSTANT)
++    Q_PROPERTY(bool naturalScrollEnabledByDefault READ no CONSTANT)
++    Q_PROPERTY(bool naturalScroll MEMBER m_naturalScroll NOTIFY changed)
++    Q_PROPERTY(qreal scrollFactor MEMBER m_scrollFactor NOTIFY changed)
++    Q_PROPERTY(bool supportsScrollOnButtonDown READ no CONSTANT)
++    Q_PROPERTY(bool scrollOnButtonDownEnabledByDefault READ no CONSTANT)
++    Q_PROPERTY(bool scrollOnButtonDown READ no WRITE ignore)
++
++public:
++    explicit WaylandPointerSettings(QObject *parent = nullptr);
++
++    QString name() const;
++    QString sysName() const;
++    int supportedButtons() const;
++    bool naturalScroll() const
++    {
++        return m_naturalScroll;
++    }
++    qreal scrollFactor() const
++    {
++        return m_scrollFactor;
++    }
++
++Q_SIGNALS:
++    void changed();
++
++private:
++    bool yes() const
++    {
++        return true;
++    }
++    bool no() const
++    {
++        return false;
++    }
++    qreal zero() const
++    {
++        return 0;
++    }
++    void ignore(bool)
++    {
++    }
++    void save();
++    void writeFile() const;
++
++    bool m_leftHanded = false;
++    bool m_naturalScroll = false;
++    qreal m_pointerAcceleration = 0;
++    qreal m_scrollFactor = 1;
++};
++
++/**
++ * The list of devices Plasma's settings ask the libinput backend for: the one pointer.
++ */
++class WaylandPointerSettingsList : public QObject
++{
++    Q_OBJECT
++    Q_PROPERTY(QStringList devicesSysNames READ devicesSysNames CONSTANT)
++
++public:
++    explicit WaylandPointerSettingsList(WaylandPointerSettings *settings);
++
++    QStringList devicesSysNames() const;
++
++Q_SIGNALS:
++    void deviceAdded(QString sysName);
++    void deviceRemoved(QString sysName);
++
++private:
++    WaylandPointerSettings *const m_settings;
++};
++
+ class WaylandInputDevice : public InputDevice
+ {
+     Q_OBJECT
+@@ -92,6 +197,7 @@ private:
+     std::unique_ptr<KWayland::Client::Pointer> m_pointer;
+     std::unique_ptr<KWayland::Client::PointerPinchGesture> m_pinchGesture;
+     std::unique_ptr<KWayland::Client::PointerSwipeGesture> m_swipeGesture;
++    std::unique_ptr<WaylandPointerSettings> m_settings;
+ 
+     QSet<quint32> m_pressedKeys;
+     PointerAxisSource m_axisSource = PointerAxisSource::Unknown;
