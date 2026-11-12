@@ -1,8 +1,5 @@
 package app.droidnux.container
 
-import android.content.Context
-import android.os.Build
-import android.provider.Settings
 import android.system.Os
 import java.io.File
 import java.nio.file.Files
@@ -19,21 +16,13 @@ object GuestSystem {
     /** The names the rootfs image comes with: replaced; one the user chose stays. */
     private val IMAGE_HOSTNAMES = setOf("", "debuerreotype", "localhost")
 
-    fun write(context: Context, rootfs: File) {
+    private const val HOSTNAME = "droidnux"
+
+    fun write(rootfs: File) {
         val etc = File(rootfs, "etc").apply { mkdirs() }
-        writeHostname(etc, hostnameOf(context))
+        writeHostname(etc, HOSTNAME)
         writeTimeZone(rootfs, etc)
     }
-
-    /** Android's device name ("Tab S9+ di Riccardo" → tab-s9-di-riccardo), else the model. */
-    internal fun hostnameOf(context: Context): String {
-        val name = Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
-        return sanitize(name.orEmpty()).ifEmpty { sanitize(Build.MODEL) }.ifEmpty { "droidnux" }
-    }
-
-    /** RFC 1123: letters, digits and inner hyphens, at most 63. */
-    internal fun sanitize(name: String): String =
-        name.lowercase().replace(Regex("[^a-z0-9]+"), "-").take(63).trim('-')
 
     private fun writeHostname(etc: File, name: String) {
         val hostname = File(etc, "hostname")

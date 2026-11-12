@@ -17,6 +17,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import app.droidnux.BuildConfig
+import app.droidnux.MainActivity
 import app.droidnux.R
 import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
@@ -41,6 +42,8 @@ class DesktopSessionService : Service() {
     private var battery: BroadcastReceiver? = null
     private var network: NetworkReporter? = null
     private var drives: RemovableDrives? = null
+    /** Plasma's Restart: the desktop opens again once this process is gone. */
+    @Volatile private var restart = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -109,8 +112,9 @@ class DesktopSessionService : Service() {
                     if (verbose) Log.i(TAG_GUEST, it)
                     log.line(it)
                     // The desktop logged out; its services (PipeWire, D-Bus) would keep the runtime alive.
-                    if (it == DesktopEnvironment.SESSION_END_MARKER) {
+                    if (it == DesktopEnvironment.SESSION_END_MARKER || it == DesktopEnvironment.SESSION_RESTART_MARKER) {
                         loggedOut = true
+                        restart = it == DesktopEnvironment.SESSION_RESTART_MARKER
                         process.destroy()
                     }
                     if (it == DesktopEnvironment.WALLET_MOVED_MARKER) Account.walletMoved(this@DesktopSessionService, password)
@@ -139,6 +143,11 @@ class DesktopSessionService : Service() {
      */
     private fun endDesktop() {
         stopSession()
+        // While the desktop is still on screen: Android lets a visible app start an activity.
+        if (restart) {
+            startActivity(Intent(this, MainActivity::class.java)
+                .setAction(MainActivity.ACTION_RESTART_DESKTOP).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
         DesktopActivity.finishCurrent()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()

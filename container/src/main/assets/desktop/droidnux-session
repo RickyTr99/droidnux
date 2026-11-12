@@ -279,6 +279,11 @@ if [ -f "$XDG_RUNTIME_DIR/.droidnux-wallet" ]; then
     fi) &
     unset key before
 fi
+# logind for Plasma and systemd's tools (leaving, inhibitors, Lock), up before Plasma asks for it.
+if [ -n "$DBUS_SYSTEM_BUS_ADDRESS" ]; then
+    @LOGIND_SCRIPT@ &
+    gdbus wait --system --timeout 5 org.freedesktop.login1
+fi
 # Session services without systemd start here, on the session bus.
 if command -v pipewire > /dev/null; then
     # Its clients give up if its socket is not there yet: wait for it,
@@ -338,9 +343,15 @@ n=0
 while [ $n -lt 20 ]; do
     tail --pid="$p" -f /dev/null
     # At logout ksmserver goes too: the session is over. Leaving (shutdown, restart)
-    # then waits on logind, which is not here, and startplasma-wayland stays.
+    # then asks logind (droidnux-logind), which tells the app, and startplasma-wayland stays.
     sleep 2
-    pgrep -x ksmserver > /dev/null || { echo @SESSION_END_MARKER@; exit; }
+    if ! pgrep -x ksmserver > /dev/null; then
+        # Restart's marker comes from logind first, when plasma-shutdown asks.
+        i=0
+        while pgrep -x plasma-shutdown > /dev/null && [ $i -lt 25 ]; do sleep 0.2; i=$((i + 1)); done
+        echo @SESSION_END_MARKER@
+        exit
+    fi
     p=$(pgrep -x plasmashell | head -1)
     if [ -z "$p" ]; then
         echo "plasmashell exited, restarting it"

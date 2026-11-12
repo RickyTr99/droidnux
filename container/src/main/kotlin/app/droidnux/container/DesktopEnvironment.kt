@@ -101,6 +101,10 @@ object DesktopEnvironment {
     /** The orientation chosen in Plasma's display settings, written by KWin (guest/plasma, KWin patch 0004). */
     private const val ORIENTATION_FILE = "/tmp/.droidnux-orientation"
 
+    /** logind, timedated and hostnamed for the session (droidnux-logind), which writes AWAKE_FILE. */
+    private const val LOGIND_SCRIPT = "$GUEST_LIB_DIR/droidnux-logind"
+    private const val AWAKE_FILE = "/tmp/.droidnux-awake"
+
     /** bubblewrap for Flatpak, on what Burrow emulates (droidnux-bwrap). */
     private const val BWRAP_SCRIPT = "$GUEST_LIB_DIR/droidnux-bwrap"
 
@@ -267,8 +271,11 @@ object DesktopEnvironment {
         removeFile(rootfs, "/etc/ssh/ssh_config.d/20-systemd-ssh-proxy.conf")
     }
 
-    /** Printed by the session script when the desktop logs out. */
+    /** Printed by the session script when the desktop logs out, and by LOGIND_SCRIPT when it shuts down. */
     const val SESSION_END_MARKER = "DROIDNUX_SESSION_END"
+
+    /** Printed by LOGIND_SCRIPT when the desktop restarts: the app starts the session again. */
+    const val SESSION_RESTART_MARKER = "DROIDNUX_SESSION_RESTART"
 
     /** Printed by Plasma's session once KDE's wallet opens with the new password (see [sessionCommand]). */
     const val WALLET_MOVED_MARKER = "DROIDNUX_WALLET_MOVED"
@@ -420,6 +427,12 @@ object DesktopEnvironment {
     fun orientationFile(rootfs: File): File = File(rootfs, ORIENTATION_FILE.removePrefix("/"))
 
     /**
+     * "1" while an app inhibits idling (a video, a presentation) and the screen should stay on, else "0".
+     * The session renames it into place at its start and at every change.
+     */
+    fun awakeFile(rootfs: File): File = File(rootfs, AWAKE_FILE.removePrefix("/"))
+
+    /**
      * No power profiles in the battery applet: Android manages the CPU and an app
      * cannot change it, so the applet would only say they are not available. The
      * applet has no setting for it: its QML is changed in place, again after
@@ -507,6 +520,7 @@ object DesktopEnvironment {
         "kwalletrc" to "$PLASMA_DEFAULTS/kwalletrc",
         "droidnux-wallet" to WALLET_SCRIPT,
         "droidnux-upower" to UPOWER_SCRIPT,
+        "droidnux-logind" to LOGIND_SCRIPT,
         "droidnux-places" to PLACES_SCRIPT,
         "droidnux-app-groups" to APP_GROUPS_SCRIPT,
         "droidnux-bwrap" to BWRAP_SCRIPT,
@@ -544,6 +558,7 @@ object DesktopEnvironment {
     /** What @NAME@ stands for in the files of assets/desktop. */
     private val PLACEHOLDERS = mapOf(
         "APP_GROUPS_SCRIPT" to APP_GROUPS_SCRIPT,
+        "AWAKE_FILE" to AWAKE_FILE,
         "BACKLIGHT_HELPER" to BACKLIGHT_HELPER,
         "BATTERY_FILE" to BATTERY_FILE,
         "BWRAP_SCRIPT" to BWRAP_SCRIPT,
@@ -559,6 +574,7 @@ object DesktopEnvironment {
         "IM_PROGRAM" to IM_PROGRAM,
         "KWIN_LIBRARY" to KWIN_LIBRARY,
         "LAUNCH_FIFO" to LAUNCH_FIFO,
+        "LOGIND_SCRIPT" to LOGIND_SCRIPT,
         "MESA_PREFIX" to MESA_PREFIX,
         "NETWORK_STATE" to NETWORK_STATE,
         "PASSWORD_STAMP" to PASSWORD_STAMP,
@@ -569,6 +585,7 @@ object DesktopEnvironment {
         "ORIENTATION_FILE" to ORIENTATION_FILE,
         "POINTER_FILE" to POINTER_FILE,
         "SESSION_END_MARKER" to SESSION_END_MARKER,
+        "SESSION_RESTART_MARKER" to SESSION_RESTART_MARKER,
         "SYSTEM_BUS_CONF" to SYSTEM_BUS_CONF,
         "SYSTEM_BUS_SOCKET" to SYSTEM_BUS_SOCKET,
         "SYSTEM_SERVICES_DIR" to SYSTEM_SERVICES_DIR,

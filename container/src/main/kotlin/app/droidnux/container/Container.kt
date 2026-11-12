@@ -45,7 +45,7 @@ class Container(context: Context) {
     private fun guestCommand(distro: Distro, command: List<String>): List<String> {
         val rootfs = installer.rootfsDir(distro)
         NetworkConfig.writeResolvConf(context, rootfs, proxied = burrow.dnsPort > 0)
-        GuestSystem.write(context, rootfs)
+        GuestSystem.write(rootfs)
         return burrow.guestCommand(rootfs, command)
     }
 

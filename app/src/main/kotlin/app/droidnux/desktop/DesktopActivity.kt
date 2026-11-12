@@ -229,11 +229,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         val settings = DesktopSettings.load(this)
         prefs = settings
         menu.atBottom = settings.menuBottom
-        if (settings.keepScreenOn) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
+        applyKeepScreenOn()
         trackpadMode = settings.trackpad
         overlay?.apply(settings, animate = true)
         overlay?.visibility = if (settings.stats) View.VISIBLE else View.GONE
@@ -306,24 +302,40 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     }
     @Volatile private var leftHanded = false
     @Volatile private var pointerSpeed = 1f
-    private val pointerSettingsWatch by lazy {
-        object : FileObserver(pointerSettings.parentFile!!, MOVED_TO) {
-            override fun onEvent(event: Int, path: String?) {
-                if (path == pointerSettings.name) readPointerSettings()
-            }
-        }
-    }
 
     // The orientation chosen in Plasma's display settings: Android turns the screen to it, the normal one
     // follows Android's rotation (DesktopEnvironment.orientationFile).
     private val orientationSetting by lazy {
         DesktopEnvironment.orientationFile(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE))
     }
-    private val orientationWatch by lazy {
-        object : FileObserver(orientationSetting.parentFile!!, MOVED_TO) {
+
+    // An app keeping the screen on (a video, a presentation): DesktopEnvironment.awakeFile.
+    private val awakeFile by lazy { DesktopEnvironment.awakeFile(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)) }
+    private var awake = false
+
+    // The session's files above, all renamed into place in the guest's /tmp.
+    private val tmpWatch by lazy {
+        object : FileObserver(pointerSettings.parentFile!!, MOVED_TO) {
             override fun onEvent(event: Int, path: String?) {
-                if (path == orientationSetting.name) runOnUiThread { readOrientation() }
+                when (path) {
+                    pointerSettings.name -> readPointerSettings()
+                    orientationSetting.name -> runOnUiThread { readOrientation() }
+                    awakeFile.name -> runOnUiThread { readAwake() }
+                }
             }
+        }
+    }
+
+    private fun readAwake() {
+        awake = DisplayServer.running && runCatching { awakeFile.readText().trim() == "1" }.getOrDefault(false)
+        applyKeepScreenOn()
+    }
+
+    private fun applyKeepScreenOn() {
+        if (prefs.keepScreenOn || awake) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
@@ -372,9 +384,9 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         writeBacklight(menuListener.brightness())
         backlightWatch.startWatching()
         readPointerSettings()
-        pointerSettingsWatch.startWatching()
         readOrientation()
-        orientationWatch.startWatching()
+        readAwake()
+        tmpWatch.startWatching()
         contentResolver.registerContentObserver(Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS), false, brightnessObserver)
         // Back to a paused desktop: it continues.
         SessionPause.resume(this)
@@ -387,8 +399,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onPause() {
         backlightWatch.stopWatching()
-        pointerSettingsWatch.stopWatching()
-        orientationWatch.stopWatching()
+        tmpWatch.stopWatching()
         contentResolver.unregisterContentObserver(brightnessObserver)
         // The Home shows Plasma's wallpaper, and this picture only of a paused desktop (taken before the
         // pause) or until a session copied the wallpaper: a full-size snapshot at every exit otherwise goes unseen.
