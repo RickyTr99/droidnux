@@ -26,7 +26,7 @@ index 9576b62..a36a811 100644
      const QRegion repair = bufferAgeEnabled ? m_damageJournal.accumulate(m_buffer->age(), infiniteRegion()) : infiniteRegion();
      m_query = std::make_unique<GLRenderTimeQuery>(m_backend->openglContextRef());
 diff --git a/src/backends/wayland/wayland_output.cpp b/src/backends/wayland/wayland_output.cpp
-index 4e6a311..d228ca0 100644
+index 4e6a311..634c650 100644
 --- a/src/backends/wayland/wayland_output.cpp
 +++ b/src/backends/wayland/wayland_output.cpp
 @@ -23,10 +23,12 @@
@@ -60,17 +60,31 @@ index 4e6a311..d228ca0 100644
          State next = m_state;
          next.modes = {mode};
          next.currentMode = mode;
-@@ -295,7 +299,8 @@ void WaylandOutput::init(const QSize &pixelSize, qreal scale)
+@@ -295,14 +299,20 @@ void WaylandOutput::init(const QSize &pixelSize, qreal scale)
  
  void WaylandOutput::resize(const QSize &pixelSize)
  {
 -    auto mode = std::make_shared<OutputMode>(pixelSize, m_refreshRate);
++    setWindowSize(pixelSize);
++
++    Q_EMIT m_backend->outputsQueried();
++}
++
++void WaylandOutput::setWindowSize(const QSize &pixelSize)
++{
 +    // The window's size is the turned output's: the mode is the panel's.
 +    auto mode = std::make_shared<OutputMode>(orientateSize(pixelSize), m_refreshRate);
  
      State next = m_state;
      next.modes = {mode};
-@@ -352,8 +357,14 @@ void WaylandOutput::setBrightnessDevice(BrightnessDevice *device)
+     next.currentMode = mode;
+     setState(next);
+-
+-    Q_EMIT m_backend->outputsQueried();
+ }
+ 
+ void WaylandOutput::setDpmsMode(DpmsMode mode)
+@@ -352,8 +362,16 @@ void WaylandOutput::setBrightnessDevice(BrightnessDevice *device)
  
  void WaylandOutput::applyChanges(const OutputConfiguration &config)
  {
@@ -79,13 +93,15 @@ index 4e6a311..d228ca0 100644
      Output::applyChanges(config);
      const auto props = config.constChangeSet(this);
 +    if (transform() != oldTransform) {
-+        resize(windowSize);
++        // Not resize(): outputs queried again would take back the stored configuration, which
++        // kscreen only saves once the user keeps this one.
++        setWindowSize(windowSize);
 +        saveOrientation();
 +    }
      if (!props || !props->brightness) {
          return;
      }
-@@ -366,6 +377,21 @@ void WaylandOutput::applyChanges(const OutputConfiguration &config)
+@@ -366,6 +384,21 @@ void WaylandOutput::applyChanges(const OutputConfiguration &config)
      }
  }
  
@@ -108,10 +124,16 @@ index 4e6a311..d228ca0 100644
  {
      if (!m_ready) {
 diff --git a/src/backends/wayland/wayland_output.h b/src/backends/wayland/wayland_output.h
-index dc7b3e0..260758d 100644
+index dc7b3e0..4039a9a 100644
 --- a/src/backends/wayland/wayland_output.h
 +++ b/src/backends/wayland/wayland_output.h
-@@ -84,6 +84,7 @@ public:
+@@ -79,11 +79,13 @@ public:
+ 
+     void lockPointer(KWayland::Client::Pointer *pointer, bool lock);
+     void resize(const QSize &pixelSize);
++    void setWindowSize(const QSize &pixelSize);
+     void setDpmsMode(DpmsMode mode) override;
+     void updateDpmsMode(DpmsMode dpmsMode);
      void updateEnabled(bool enabled);
      void setBrightnessDevice(BrightnessDevice *device) override;
      void applyChanges(const OutputConfiguration &config) override;
