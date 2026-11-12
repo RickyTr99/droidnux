@@ -2,6 +2,7 @@ package app.droidnux.ui
 
 import android.app.ActivityManager
 import android.app.Application
+import android.app.NotificationManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.os.SystemClock
@@ -21,6 +22,7 @@ import app.droidnux.container.Distro
 import app.droidnux.container.InstallException
 import app.droidnux.container.InstallProgress
 import app.droidnux.desktop.DesktopSessionService
+import app.droidnux.desktop.SessionKill
 import app.droidnux.desktop.SessionPause
 import app.droidnux.display.DisplayCore
 import kotlinx.coroutines.CancellationException
@@ -130,6 +132,8 @@ data class AppState(
     val sessionRunning: Boolean = false,
     /** The running session is paused: its processes are stopped (SessionPause). */
     val sessionPaused: Boolean = false,
+    /** Android killed the last session and the user has not been told yet (SessionKill). */
+    val sessionKilled: Boolean = false,
     /** The Home's quick launch: desktop ids, in the user's order. */
     val homeApps: List<String> = emptyList(),
     /** Packages installed in the rootfs, as dpkg says. */
@@ -242,11 +246,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         val services = getApplication<Application>().getSystemService(ActivityManager::class.java).getRunningServices(Int.MAX_VALUE)
         val running = services.orEmpty().any { it.started && it.service.className == DesktopSessionService::class.java.name }
         val paused = running && SessionPause.isPaused(getApplication())
-        _state.update { state -> state.copy(sessionRunning = running, sessionPaused = paused) }
+        val killed = SessionKill.pending(getApplication())
+        _state.update { state -> state.copy(sessionRunning = running, sessionPaused = paused, sessionKilled = killed) }
         if (_state.value.ready && SystemClock.elapsedRealtime() - appsLoadedAt > APPS_REFRESH_MS) {
             loadApps()
             viewModelScope.launch { refreshPackages() } // apt in the desktop's terminal
         }
+    }
+
+    /** The user has read that Android killed the session. */
+    fun dismissSessionKilled() {
+        SessionKill.dismiss(getApplication())
+        getApplication<Application>().getSystemService(NotificationManager::class.java)
+            .cancel(DesktopSessionService.KILLED_NOTIFICATION_ID)
+        _state.update { it.copy(sessionKilled = false) }
     }
 
     /** Sets the Home's quick launch (desktop ids, in order). */

@@ -84,20 +84,31 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
         CheckRow(R.string.check_notifications, notificationsOk) { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }
     }
 
-    if (phantomHelp) {
-        AlertDialog(
-            onDismissRequest = { phantomHelp = false },
-            title = { Text(stringResource(R.string.check_phantom)) },
-            text = { Text(stringResource(R.string.check_phantom_steps)) },
-            confirmButton = {
+    if (phantomHelp) PhantomDialog(R.string.check_phantom) { phantomHelp = false }
+}
+
+/** Under [title], how to turn off Android's limit on child processes; the title alone when it is off already. */
+@Composable
+fun PhantomDialog(title: Int, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val limited = remember { !phantomProcessesUnlimited(context) }
+    val close = @Composable { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) } }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(title)) },
+        text = if (limited) ({ Text(stringResource(R.string.check_phantom_steps)) }) else null,
+        confirmButton = {
+            if (limited) {
                 TextButton(onClick = {
-                    phantomHelp = false
+                    onDismiss()
                     runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
                 }) { Text(stringResource(R.string.check_open_developer)) }
-            },
-            dismissButton = { TextButton(onClick = { phantomHelp = false }) { Text(stringResource(R.string.action_close)) } },
-        )
-    }
+            } else {
+                close()
+            }
+        },
+        dismissButton = if (limited) close else null,
+    )
 }
 
 /**

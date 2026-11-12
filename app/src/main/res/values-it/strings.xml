@@ -17,6 +17,7 @@
     <string name="desktop_installing">Installazione…</string>
     <string name="session_channel">Sessione desktop</string>
     <string name="session_running">Desktop Linux in esecuzione</string>
+    <string name="session_killed">Android ha chiuso il desktop</string>
     <string name="install_channel">Installazioni</string>
     <string name="install_running">Installazione in corso…</string>
     <string name="session_stop">Ferma</string>

@@ -320,6 +320,7 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
             ) { if (it != tab) select(it) }
         }
     }
+    if (state.sessionKilled) PhantomDialog(R.string.session_killed, viewModel::dismissSessionKilled)
 }
 
 /** The selected tab's pill in the theme's accent [color]: lit from above, like a raised key. */

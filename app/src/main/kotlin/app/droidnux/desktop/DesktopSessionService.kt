@@ -103,12 +103,16 @@ class DesktopSessionService : Service() {
         }
         scope.launch {
             val log = SessionLog.Writer(this@DesktopSessionService)
+            var loggedOut = false
             try {
                 process.inputStream.bufferedReader().forEachLine {
                     if (verbose) Log.i(TAG_GUEST, it)
                     log.line(it)
                     // The desktop logged out; its services (PipeWire, D-Bus) would keep the runtime alive.
-                    if (it == DesktopEnvironment.SESSION_END_MARKER) process.destroy()
+                    if (it == DesktopEnvironment.SESSION_END_MARKER) {
+                        loggedOut = true
+                        process.destroy()
+                    }
                     if (it == DesktopEnvironment.WALLET_MOVED_MARKER) Account.walletMoved(this@DesktopSessionService, password)
                 }
             } catch (e: java.io.IOException) {
@@ -119,6 +123,12 @@ class DesktopSessionService : Service() {
             }
             val code = process.waitFor()
             Log.i(TAG, "session ended with $code")
+            // Not the logout's or stopSession's destroy(), which ends it with SIGTERM.
+            if (session === process && !loggedOut && code == SessionKill.EXIT_STATUS) {
+                Log.w(TAG, "session killed by Android")
+                runCatching { SessionKill.record(this@DesktopSessionService) }
+                getSystemService(NotificationManager::class.java).notify(KILLED_NOTIFICATION_ID, killedNotification())
+            }
             if (session === process) handler.post { endDesktop() }
         }
     }
@@ -180,7 +190,22 @@ class DesktopSessionService : Service() {
             .build()
     }
 
+    /** Stays after this process: the Home, which it opens, says what to do. */
+    private fun killedNotification(): Notification {
+        val home = PendingIntent.getActivity(
+            this, 2, packageManager.getLaunchIntentForPackage(packageName), PendingIntent.FLAG_IMMUTABLE,
+        )
+        return Notification.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(getString(R.string.session_killed))
+            .setContentIntent(home)
+            .setAutoCancel(true)
+            .build()
+    }
+
     companion object {
+        /** The notification of a session Android killed; the Home removes it with its own notice. */
+        const val KILLED_NOTIFICATION_ID = 2
         private const val TAG = "DroidNux.Session"
         private const val TAG_GUEST = "DroidNux.Guest"
         private const val CHANNEL = "session"
