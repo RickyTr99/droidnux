@@ -365,10 +365,10 @@ object DesktopEnvironment {
     fun networkDir(rootfs: File): File = File(rootfs, NETWORK_DIR.removePrefix("/")).apply { mkdirs() }
 
     /**
-     * Android's default network for the network plugin: [fields] as interface,
-     * name, signal (percent), ipv4/ipv6 (address/prefix), ipv4gateway,
-     * ipv6gateway, ipv4dns, ipv6dns, received, sent (bytes) and time (ms of
-     * the counters); no interface when offline.
+     * Android's default network for the network plugin and the tray's applets: [fields] as
+     * interface, name, type (wifi, cellular, ethernet, vpn), signal (percent), ipv4/ipv6
+     * (address/prefix), ipv4gateway, ipv6gateway, ipv4dns, ipv6dns, received, sent (bytes),
+     * time (ms of the counters) and bluetooth (1 when on); only bluetooth when offline.
      */
     fun writeNetwork(rootfs: File, fields: Map<String, Any>) {
         writeFile(rootfs, NETWORK_STATE, fields.entries.joinToString("") { "${it.key}=${it.value}\n" }.toByteArray())
@@ -478,6 +478,7 @@ object DesktopEnvironment {
     }
 
     /** Run once by plasmashell, on new and existing desktops alike. */
+    private const val PLASMOIDS = "/usr/share/plasma/plasmoids"
     private const val PLASMA_BATTERY_UPDATE = "/usr/share/plasma/shells/org.kde.plasma.desktop/contents/updates/droidnux-battery.js"
 
     /** Read by Debian's chromium launcher. */
@@ -531,6 +532,11 @@ object DesktopEnvironment {
         // Chromium's sandbox needs user namespaces or its set-user-ID helper, neither of which
         // Android allows (Electron apps: ELECTRON_DISABLE_SANDBOX in the session).
         "chromium-flags" to CHROMIUM_FLAGS_PATH,
+        // Android's network and Bluetooth in the system tray, as status only: Android does not let apps switch them.
+        "network-metadata.json" to "$PLASMOIDS/org.droidnux.network/metadata.json",
+        "network-main.qml" to "$PLASMOIDS/org.droidnux.network/contents/ui/main.qml",
+        "bluetooth-metadata.json" to "$PLASMOIDS/org.droidnux.bluetooth/metadata.json",
+        "bluetooth-main.qml" to "$PLASMOIDS/org.droidnux.bluetooth/contents/ui/main.qml",
     )
 
     /** What @NAME@ stands for in the files of assets/desktop. */
@@ -552,6 +558,7 @@ object DesktopEnvironment {
         "KWIN_LIBRARY" to KWIN_LIBRARY,
         "LAUNCH_FIFO" to LAUNCH_FIFO,
         "MESA_PREFIX" to MESA_PREFIX,
+        "NETWORK_STATE" to NETWORK_STATE,
         "PASSWORD_STAMP" to PASSWORD_STAMP,
         "PLACES_SCRIPT" to PLACES_SCRIPT,
         "PLASMA_DEFAULTS" to PLASMA_DEFAULTS,

@@ -136,6 +136,8 @@ if [ "$1" != --in-dbus ]; then
     export XDG_CURRENT_DESKTOP=KDE
     # Their menu entries, as Flatpak's profile.d script would add after a login.
     export XDG_DATA_DIRS=$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
+    # The tray's network and Bluetooth applets read the app's state file with an XMLHttpRequest.
+    export QML_XHR_ALLOW_FILE_READ=1
     # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed on
     # an Adreno (KGSL), otherwise the distro's software rendering: on other
     # GPUs Turnip finds no device, Zink fails and KWin gets no EGL.

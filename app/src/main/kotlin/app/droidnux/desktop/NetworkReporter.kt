@@ -1,6 +1,7 @@
 package app.droidnux.desktop
 
 import android.content.Context
+import android.database.ContentObserver
 import android.net.ConnectivityManager
 import android.net.LinkProperties
 import android.net.Network
@@ -10,6 +11,9 @@ import android.net.wifi.WifiInfo
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.FileObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.os.SystemClock
 import android.telephony.TelephonyManager
 import android.util.Log
@@ -21,10 +25,10 @@ import java.io.File
 import java.net.Inet4Address
 
 /**
- * Android's default network in the desktop's System Monitor
- * ([DesktopEnvironment.writeNetwork]): written when it changes, and with fresh
- * byte counters whenever ksystemstats' network plugin asks, which it does only
- * while something shows them.
+ * Android's default network in the desktop's System Monitor and tray
+ * ([DesktopEnvironment.writeNetwork]), with whether Bluetooth is on: written when
+ * either changes, and with fresh byte counters whenever ksystemstats' network
+ * plugin asks, which it does only while something shows them.
  */
 class NetworkReporter(private val context: Context, private val rootfs: File, private val scope: CoroutineScope) {
 
@@ -64,13 +68,20 @@ class NetworkReporter(private val context: Context, private val rootfs: File, pr
         }
     }
 
+    // Bluetooth turned on or off: the setting is readable without the Bluetooth permissions its broadcast needs.
+    private val bluetooth = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) = write()
+    }
+
     fun start() {
         write()
         connectivity.registerDefaultNetworkCallback(callback)
         requests.startWatching()
+        context.contentResolver.registerContentObserver(Settings.Global.getUriFor(Settings.Global.BLUETOOTH_ON), false, bluetooth)
     }
 
     fun stop() {
+        context.contentResolver.unregisterContentObserver(bluetooth)
         requests.stopWatching()
         connectivity.unregisterNetworkCallback(callback)
     }
@@ -82,8 +93,10 @@ class NetworkReporter(private val context: Context, private val rootfs: File, pr
     }
 
     private fun fields(): Map<String, Any> {
-        val properties = link ?: return emptyMap()
-        val name = properties.interfaceName ?: return emptyMap()
+        // The setting, not the adapter: when the setting changes the adapter is still turning on.
+        val bluetooth = "bluetooth" to if (Settings.Global.getInt(context.contentResolver, Settings.Global.BLUETOOTH_ON, 0) != 0) 1 else 0
+        val properties = link ?: return mapOf(bluetooth)
+        val name = properties.interfaceName ?: return mapOf(bluetooth)
         val caps = capabilities
         fun address(v4: Boolean) =
             properties.linkAddresses.firstOrNull { (it.address is Inet4Address) == v4 && !it.address.isLinkLocalAddress }
@@ -98,6 +111,7 @@ class NetworkReporter(private val context: Context, private val rootfs: File, pr
         return linkedMapOf(
             "interface" to name,
             "name" to networkName(caps, name),
+            "type" to networkType(caps),
             // As NetworkManager shows it: -100 dBm is 0%, -50 dBm and above 100%.
             "signal" to if (wifi && rssi != NetworkCapabilities.SIGNAL_STRENGTH_UNSPECIFIED) ((rssi + 100) * 2).coerceIn(0, 100) else 0,
             "ipv4" to address(true),
@@ -109,7 +123,18 @@ class NetworkReporter(private val context: Context, private val rootfs: File, pr
             "received" to (if (Build.VERSION.SDK_INT >= 33) TrafficStats.getRxBytes(name) else TrafficStats.getTotalRxBytes()).coerceAtLeast(0),
             "sent" to (if (Build.VERSION.SDK_INT >= 33) TrafficStats.getTxBytes(name) else TrafficStats.getTotalTxBytes()).coerceAtLeast(0),
             "time" to SystemClock.elapsedRealtime(),
+            bluetooth,
         )
+    }
+
+    // The tray's icon (DesktopEnvironment's droidnux-network applet).
+    private fun networkType(caps: NetworkCapabilities?): String = when {
+        caps == null -> ""
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "vpn"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> "ethernet"
+        else -> ""
     }
 
     // The Wi-Fi's name needs the location permission: without it Android gives UNKNOWN_SSID.
