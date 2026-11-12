@@ -24,6 +24,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -55,6 +56,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -74,6 +78,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
@@ -92,6 +97,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.droidnux.R
+import app.droidnux.container.AppStore
+import app.droidnux.container.BackportsCatalog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -101,6 +108,7 @@ private sealed interface StorePage {
     data class Shelf(val source: StoreSource) : StorePage
     data class Category(val category: StoreCategory) : StorePage
     data object Installed : StorePage
+    data object Updates : StorePage
     data class App(val key: String) : StorePage
 }
 
@@ -108,6 +116,7 @@ private fun StorePage.route(): String = when (this) {
     is StorePage.Shelf -> "src:${source.name}"
     is StorePage.Category -> "cat:${category.name}"
     StorePage.Installed -> "installed"
+    StorePage.Updates -> "updates"
     is StorePage.App -> "app:$key"
 }
 
@@ -115,6 +124,7 @@ private fun storePage(route: String): StorePage? = when {
     route.startsWith("src:") -> StoreSource.entries.firstOrNull { it.name == route.substring(4) }?.let(StorePage::Shelf)
     route.startsWith("cat:") -> StoreCategory.entries.firstOrNull { it.name == route.substring(4) }?.let(StorePage::Category)
     route == "installed" -> StorePage.Installed
+    route == "updates" -> StorePage.Updates
     route.startsWith("app:") -> StorePage.App(route.substring(4))
     else -> null
 }
@@ -141,6 +151,7 @@ fun StoreTab(state: AppState, viewModel: AppViewModel, padding: PaddingValues) {
     LaunchedEffect(Unit) {
         viewModel.loadStoreIcons()
         viewModel.loadStoreCatalog()
+        viewModel.checkStoreUpdates(ifOlderThan = UPDATES_CHECK_MS)
     }
 
     AnimatedContent(
@@ -164,6 +175,7 @@ fun StoreTab(state: AppState, viewModel: AppViewModel, padding: PaddingValues) {
                 ListPage(stringResource(page.category.label), items, page.category.filters, state, viewModel, padding, nav)
             }
             StorePage.Installed -> ListPage(stringResource(R.string.store_installed), installedItems(state), emptyList(), state, viewModel, padding, nav)
+            StorePage.Updates -> UpdatesPage(state, viewModel, padding, nav)
             is StorePage.App -> {
                 val item = findItem(state, page.key)
                 if (item != null) AppPage(item, state, viewModel, padding, nav) else LaunchedEffect(Unit) { nav.back() }
@@ -227,6 +239,16 @@ private fun StoreHome(state: AppState, viewModel: AppViewModel, padding: Padding
                 modifier = Modifier.size(52.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh),
             ) {
                 Icon(Icons.Check, stringResource(R.string.store_installed), modifier = Modifier.size(22.dp))
+            }
+            val updates = remember(state.storeUpdates, state.packages, state.storeItems) { updatesByApp(state) }
+            val count = updates.first.size + if (updates.second.isEmpty()) 0 else 1
+            BadgedBox(badge = { if (count > 0) Badge { Text(count.toString()) } }) {
+                IconButton(
+                    onClick = { nav.open(StorePage.Updates) },
+                    modifier = Modifier.size(52.dp).clip(CircleShape).background(MaterialTheme.colorScheme.surfaceContainerHigh),
+                ) {
+                    Icon(Icons.Update, stringResource(R.string.store_updates), modifier = Modifier.size(22.dp))
+                }
             }
         }
         // The field stays where it is: typing swaps what is under it, the keyboard keeps its focus.
@@ -610,6 +632,201 @@ private fun StoreRow(item: StoreItem, state: AppState, viewModel: AppViewModel, 
             }
         }
         if (job != null) JobStatus(job)
+    }
+}
+
+// -- Updates -----------------------------------------------------------------------------------
+
+/** An installed app ([item], the source it is installed from) with its packages' updates. */
+private class AppUpdate(val page: StoreItem, val item: StoreItem, val updates: List<AppStore.Update>) {
+    val bytes = updates.sumOf { it.bytes }
+}
+
+/** The updates of the installed apps, then the rest: the system's packages. */
+private fun updatesByApp(state: AppState): Pair<List<AppUpdate>, List<AppStore.Update>> {
+    val byPackage = state.storeUpdates.updates.groupBy { it.pkg }
+    val apps = installedItems(state).mapNotNull { page ->
+        val item = page.sources.firstOrNull { it.isInstalled(state.packages) } ?: page
+        val updates = item.packages.flatMap { byPackage[it.removePrefix(AppStore.BACKPORTS)].orEmpty() }
+        if (updates.isEmpty()) null else AppUpdate(page, item, updates)
+    }
+    val taken = apps.flatMapTo(HashSet()) { it.updates }
+    return apps to state.storeUpdates.updates.filter { it !in taken }
+}
+
+/** A version as people know it: Debian's without epoch and revision. */
+private fun shortVersion(update: AppStore.Update, version: String) =
+    if (update.pkg.startsWith(AppStore.FLATPAK)) version else BackportsCatalog.shortVersion(version)
+
+/** The updates: the apps one by one, the system's packages together, all of them at once. */
+@Composable
+private fun UpdatesPage(state: AppState, viewModel: AppViewModel, padding: PaddingValues, nav: StoreNav) {
+    val context = LocalContext.current
+    val compact = isCompact()
+    val updates = state.storeUpdates
+    val (apps, system) = remember(updates, state.packages, state.storeItems) { updatesByApp(state) }
+    val total = updates.updates.sumOf { it.bytes }
+    val allJob = state.storeJobs[UPDATE_ALL]
+    val busy = allJob == StoreJob.Queued || allJob is StoreJob.Running
+    val now = System.currentTimeMillis()
+    val checked = if (updates.checkedAt > 0 && now - updates.checkedAt < 60_000) {
+        stringResource(R.string.store_updates_checked, stringResource(R.string.store_updates_now))
+    } else if (updates.checkedAt > 0) {
+        stringResource(
+            R.string.store_updates_checked,
+            android.text.format.DateUtils.getRelativeTimeSpanString(updates.checkedAt, now, android.text.format.DateUtils.MINUTE_IN_MILLIS),
+        )
+    } else ""
+    val size = android.text.format.Formatter.formatShortFileSize(context, total)
+    val note = when {
+        updates.failed -> stringResource(R.string.store_updates_failed)
+        updates.checkedAt == 0L -> if (updates.checking) stringResource(R.string.store_updates_checking) else null
+        updates.updates.isEmpty() -> stringResource(R.string.store_updates_none)
+        else -> null
+    }
+    val appsTitle = "${stringResource(R.string.store_updates_apps)} · ${apps.size}"
+    val systemTitle = stringResource(R.string.store_updates_system)
+    Column(Modifier.fillMaxSize()) {
+        PageHeader(stringResource(R.string.store_updates), padding, nav) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (compact && updates.updates.isNotEmpty()) "$size · $checked" else checked,
+                    fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = if (compact) Modifier.weight(1f) else Modifier,
+                )
+                Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
+                    if (updates.checking) {
+                        CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.4.dp)
+                    } else {
+                        IconButton(onClick = { viewModel.checkStoreUpdates() }, enabled = !busy) {
+                            Icon(Icons.Refresh, stringResource(R.string.store_updates_check), modifier = Modifier.size(22.dp))
+                        }
+                    }
+                }
+                when {
+                    busy -> TextButton(onClick = { viewModel.storeCancel(UPDATE_ALL) }) { Text(stringResource(R.string.action_cancel)) }
+                    updates.updates.isNotEmpty() -> Button(
+                        onClick = { viewModel.storeUpgrade(UPDATE_ALL, emptyList(), total) },
+                        contentPadding = PaddingValues(horizontal = 18.dp),
+                    ) {
+                        Text(if (compact) stringResource(R.string.store_update_all) else "${stringResource(R.string.store_update_all)} · $size")
+                    }
+                }
+            }
+        }
+        val list = rememberLazyGridState()
+        LazyVerticalGrid(
+            state = list,
+            columns = GridCells.Adaptive(360.dp),
+            contentPadding = padding.below(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxSize().fadingEdges(list),
+        ) {
+            if (allJob != null) item(span = { GridItemSpan(maxLineSpan) }, key = "all") { JobStatus(allJob) }
+            if (note != null) {
+                item(span = { GridItemSpan(maxLineSpan) }, key = "note") {
+                    Text(note, fontSize = 15.sp, color = if (updates.failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (apps.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }, key = "apps") { SectionHeader(appsTitle) }
+                items(apps, key = { it.item.key }) { update -> UpdateRow(update, busy, state, viewModel, nav) }
+            }
+            if (system.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }, key = "system") {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(top = 12.dp)) {
+                        SectionHeader(systemTitle)
+                        SystemUpdates(system)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateRow(update: AppUpdate, busy: Boolean, state: AppState, viewModel: AppViewModel, nav: StoreNav) {
+    val context = LocalContext.current
+    val item = update.item
+    val job = state.storeJobs[item.key]
+    val launcher = launcherOf(item, true, viewModel)
+    // The app's own package first: its versions are the app's.
+    val main = update.updates.firstOrNull { it.pkg == item.packages.first().removePrefix(AppStore.BACKPORTS) } ?: update.updates.first()
+    val versions = listOf(shortVersion(main, main.from), shortVersion(main, main.to)).filter { it.isNotEmpty() }.joinToString(" → ")
+    Column(
+        Modifier.fillMaxWidth().heightIn(min = 72.dp).clip(RowShape).background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .clickable { nav.open(StorePage.App(update.page.key)) }
+            .padding(start = 16.dp, end = 12.dp, top = 12.dp, bottom = 12.dp).animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            StoreIcon(item, launcher, state, viewModel, 40.dp)
+            Column(Modifier.weight(1f)) {
+                Text(item.name, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    // Only Flathub's: its versions are not Debian's.
+                    if (item.source == StoreSource.FLATHUB) Tag(sourceName(item))
+                    Text(
+                        "$versions · ${android.text.format.Formatter.formatShortFileSize(context, update.bytes)}",
+                        fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            when {
+                job == StoreJob.Queued || job is StoreJob.Running ->
+                    TextButton(onClick = { viewModel.storeCancel(item.key) }) { Text(stringResource(R.string.action_cancel)) }
+                !busy -> FilledTonalButton(
+                    onClick = { viewModel.storeUpgrade(item.key, update.updates.map { it.pkg }, update.bytes) },
+                    contentPadding = PaddingValues(horizontal = 18.dp),
+                ) { Text(stringResource(R.string.store_update)) }
+            }
+        }
+        if (job != null) JobStatus(job)
+    }
+}
+
+/** The system's packages, one row that opens to list them. */
+@Composable
+private fun SystemUpdates(updates: List<AppStore.Update>) {
+    val context = LocalContext.current
+    val colors = MaterialTheme.colorScheme
+    var open by rememberSaveable { mutableStateOf(false) }
+    val turn by androidx.compose.animation.core.animateFloatAsState(if (open) -90f else 90f, tween(220), label = "chevron")
+    Column(Modifier.fillMaxWidth().clip(RowShape).background(colors.surfaceContainerLow).animateContentSize()) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 72.dp).clickable { open = !open }.padding(start = 16.dp, end = 20.dp, top = 12.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(Modifier.size(40.dp).clip(RoundedCornerShape(11.dp)).background(colors.surfaceContainerHighest), contentAlignment = Alignment.Center) {
+                Icon(Icons.Package, null, tint = colors.primary, modifier = Modifier.size(22.dp))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(stringResource(R.string.store_updates_packages), fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    "${pluralStringResource(R.plurals.store_package_count, updates.size, updates.size)} · " +
+                        android.text.format.Formatter.formatShortFileSize(context, updates.sumOf { it.bytes }),
+                    fontSize = 13.sp, color = colors.onSurfaceVariant,
+                )
+            }
+            Icon(Icons.Chevron, null, tint = colors.onSurfaceVariant, modifier = Modifier.size(22.dp).rotate(turn))
+        }
+        if (open) {
+            FlowRow(
+                Modifier.padding(start = 70.dp, end = 20.dp, bottom = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                for (update in updates) {
+                    Text(
+                        "${update.pkg.removePrefix(AppStore.FLATPAK)} ${shortVersion(update, update.to)}",
+                        fontSize = 13.sp, color = colors.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.width(240.dp),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -999,6 +1216,9 @@ private fun PaddingValues.below(top: Dp): PaddingValues {
 }
 
 private const val BANNER_TURN_MS = 6_000L
+
+/** How old the last look for updates may be when the store opens. */
+private const val UPDATES_CHECK_MS = 6 * 60 * 60 * 1000L
 
 /** The search's first results, before "Show all", and its category filters at most. */
 private const val SEARCH_FIRST_RESULTS = 8

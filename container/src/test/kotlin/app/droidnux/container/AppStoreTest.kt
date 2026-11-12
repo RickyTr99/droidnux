@@ -89,4 +89,38 @@ class AppStoreTest {
         assertEquals("26.8.2.2", BackportsCatalog.shortVersion(versions.getValue("libreoffice-core")))
         assertEquals("9.0.8", BackportsCatalog.shortVersion("9.0.8+dfsg-1~bpo13+1"))
     }
+    @Test
+    fun updatesFromAptAndFlathub() {
+        val output = listOf(
+            "DROIDNUX_UPDATES apt",
+            "Inst liblzma5 [5.8.1-1+deb13u1] (5.8.1-1+deb13u2 Debian-Security:13/stable-security [arm64])",
+            "Inst libnew1 (2.0-1 Debian:13.2/stable [arm64])",
+            "DROIDNUX_UPDATES uris",
+            "'http://deb.debian.org/debian-security/pool/updates/main/x/xz-utils/liblzma5_5.8.1-1%2bdeb13u2_arm64.deb' liblzma5_5.8.1-1+deb13u2_arm64.deb 302984 SHA256:00",
+            "DROIDNUX_UPDATES flatpak",
+            "org.kde.krita\tstable\t5.2.9",
+            "DROIDNUX_UPDATES flatpak-updates",
+            "org.kde.krita\tstable\t5.2.11\t141.2 MB",
+            "DROIDNUX_STORE_OK",
+        ).joinToString("\n")
+        assertEquals(
+            listOf(
+                AppStore.Update("liblzma5", "5.8.1-1+deb13u1", "5.8.1-1+deb13u2", 302984),
+                AppStore.Update("libnew1", "", "2.0-1", 0),
+                AppStore.Update("flatpak:org.kde.krita", "5.2.9", "5.2.11", 141_200_000),
+            ),
+            AppStore.parseUpdates(output),
+        )
+    }
+
+    @Test
+    fun upgradeOnlyWhatIsAsked() {
+        val one = AppStore.upgradeScript(listOf("backports:darktable"))
+        assertTrue(one.contains("install -y --only-upgrade -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold darktable"))
+        assertFalse(one.contains("flatpak update"))
+        assertTrue(AppStore.upgradeScript(listOf("flatpak:org.kde.krita")).contains("flatpak update --system -y org.kde.krita"))
+        val all = AppStore.upgradeScript(emptyList())
+        assertTrue(all.contains("upgrade -y --with-new-pkgs"))
+        assertTrue(all.contains("apt-mark hold"))
+    }
 }

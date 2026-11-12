@@ -179,6 +179,115 @@ object AppStore {
         """.trimIndent()
     }
 
+    /**
+     * A newer version of an installed package: a Debian one, or a Flathub app or runtime as [FLATPAK]<id>
+     * ([from] empty when apt brings it in new); [bytes] to download.
+     */
+    data class Update(val pkg: String, val from: String, val to: String, val bytes: Long)
+
+    /**
+     * Holds the packages the Plasma component replaces libraries of while they are the versions it was
+     * built from: a newer KWin from Debian would turn its patches off (the session checks the versions).
+     */
+    private val HOLD_PLASMA = """
+        v=${DesktopEnvironment.PLASMA_PREFIX}/droidnux-plasma.version
+        if [ -f "${'$'}v" ]; then
+            sed 1d "${'$'}v" | while read -r p ver; do
+                if [ "${'$'}(dpkg-query -W -f '${'$'}{Version}' "${'$'}p" 2> /dev/null)" = "${'$'}ver" ]; then apt-mark hold "${'$'}p"; else apt-mark unhold "${'$'}p"; fi
+            done > /dev/null
+        fi
+    """.trimIndent()
+
+    // apt upgrades without new packages' prompts and keeps the user's changed config files.
+    private const val KEEP_CONFIG = "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+    private const val UPGRADE = "$APT upgrade -y --with-new-pkgs $KEEP_CONFIG"
+    private const val UPGRADE_ONLY = "$APT install -y --only-upgrade $KEEP_CONFIG"
+
+    private const val SECTION = "DROIDNUX_UPDATES"
+
+    /**
+     * Guest script listing the updates (after fetching apt's lists when [refresh]): apt's upgrade as
+     * it would run, with the size of each download, and Flathub's. Ends with [DONE_MARKER]; read by [parseUpdates].
+     */
+    fun updatesScript(refresh: Boolean) = """
+        set -e
+        $HOLD_PLASMA
+        ${if (refresh) "$APT update -q > /dev/null" else ""}
+        echo "$SECTION apt"
+        $APT -s upgrade --with-new-pkgs | grep '^Inst ' || true
+        echo "$SECTION uris"
+        $APT -qq --print-uris upgrade --with-new-pkgs
+        if command -v flatpak > /dev/null; then
+            echo "$SECTION flatpak"
+            flatpak list --system --columns=application,branch,version
+            echo "$SECTION flatpak-updates"
+            flatpak remote-ls --updates --system --columns=application,branch,version,download-size
+        fi
+        echo $DONE_MARKER
+    """.trimIndent()
+
+    /** The updates in [updatesScript]'s output. */
+    fun parseUpdates(output: String): List<Update> {
+        var section = ""
+        val apt = ArrayList<Triple<String, String, String>>()
+        val sizes = HashMap<String, Long>()
+        val flatpaks = HashMap<String, String>()
+        val updates = ArrayList<Update>()
+        for (line in output.lineSequence()) {
+            if (line.startsWith("$SECTION ")) {
+                section = line.substringAfter(' ')
+                continue
+            }
+            val fields = line.split('\t')
+            when (section) {
+                // "Inst libfoo [1.2-1] (1.2-2 Debian-Security:13/stable-security [arm64])", no "[…]" when new.
+                "apt" -> APT_INST.find(line)?.let { apt += Triple(it.groupValues[1], it.groupValues[2], it.groupValues[3]) }
+                // "'http://…/libfoo_1.2-2_arm64.deb' libfoo_1.2-2_arm64.deb 302984 SHA256:…"
+                "uris" -> line.split(' ').takeIf { it.size >= 3 }?.let { sizes[it[1].substringBefore('_')] = it[2].toLongOrNull() ?: 0 }
+                "flatpak" -> if (fields.size >= 3) flatpaks[fields[0] + "//" + fields[1]] = fields[2]
+                "flatpak-updates" -> if (fields.size >= 4 && isFlatpakId(fields[0])) {
+                    updates += Update(FLATPAK + fields[0], flatpaks[fields[0] + "//" + fields[1]].orEmpty(), fields[2], flatpakBytes(fields[3]))
+                }
+            }
+        }
+        return apt.map { (pkg, from, to) -> Update(pkg, from, to, sizes[pkg] ?: 0) } + updates
+    }
+
+    private val APT_INST = Regex("""^Inst (\S+) (?:\[(\S+)] )?\((\S+) """)
+
+    // GLib's sizes: "310.3 MB" with a no-break space, decimal units.
+    private val FLATPAK_SIZE = Regex("""([\d.]+)[\s ]*([kMG]?)B""")
+
+    private fun flatpakBytes(size: String): Long {
+        val match = FLATPAK_SIZE.find(size) ?: return 0
+        val unit = when (match.groupValues[2]) { "k" -> 1e3; "M" -> 1e6; "G" -> 1e9; else -> 1.0 }
+        return Math.round((match.groupValues[1].toDoubleOrNull() ?: 0.0) * unit)
+    }
+
+    /**
+     * Guest script installing updates: [packages] only (Debian names or Flatpak ones, with what they
+     * need), or everything when empty. Ends with [DONE_MARKER].
+     */
+    fun upgradeScript(packages: List<String>): String {
+        val debs = packages.map { it.removePrefix(BACKPORTS) }.filter(::isPackageName)
+        val flatpaks = flatpakIds(packages)
+        val all = packages.isEmpty()
+        val apt = if (all) UPGRADE else if (debs.isNotEmpty()) "$UPGRADE_ONLY ${debs.joinToString(" ")}" else ""
+        // Not --noninteractive: that drops the "Updating 1/3… 45%" lines the store's progress reads.
+        val flatpak = if (all || flatpaks.isNotEmpty()) {
+            "if command -v flatpak > /dev/null; then flatpak update --system -y ${flatpaks.joinToString(" ")} < /dev/null; " +
+                "${DesktopEnvironment.FLATPAK_GL_SCRIPT} || true; fi"
+        } else ""
+        return """
+        $HEADER
+        $HOLD_PLASMA
+        $apt
+        $flatpak
+        $APT clean
+        echo $DONE_MARKER
+        """.trimIndent()
+    }
+
     /** A package found by [searchCommand]. */
     data class Found(val name: String, val summary: String)
 

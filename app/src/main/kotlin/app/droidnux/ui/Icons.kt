@@ -51,6 +51,8 @@ object Icons {
     val Stop = solid("M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z")
     val Back = stroke("M15 5l-7 7 7 7")
     val Chevron = stroke("M9 5l7 7-7 7")
+    val Update = stroke("M12 19V5M6 11l6-6 6 6")
+    val Refresh = stroke("M20 11a8 8 0 1 0-2.3 5.7", "M20 4v7h-7")
     val Open = stroke("M14 4h6v6M20 4l-9 9", "M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4")
     val Selected = stroke("M5 12.5l4.5 4.5L19 7.5", width = 2.2f)
     val Debian = stroke("M14 4.5a7.5 7.5 0 1 0 5 9.5", "M14.5 9a3 3 0 1 0 0 6")

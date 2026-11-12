@@ -79,6 +79,9 @@ data class AptProgress(
     }
 }
 
+/** The store job updating everything (AppViewModel.storeUpgrade). */
+const val UPDATE_ALL = "updates:all"
+
 /** An apt job of the store, waiting for the one before it, running, or failed. */
 sealed interface StoreJob {
     data object Queued : StoreJob
@@ -100,6 +103,17 @@ data class StoreSearch(
     val results: List<StoreItem> = emptyList(),
     val more: List<AppStore.Found>? = null,
     val searchingMore: Boolean = false,
+)
+
+/**
+ * The store's last look for updates: what it found, when ([checkedAt], 0 never); one may be under way
+ * ([checking]) or the last one have failed.
+ */
+data class StoreUpdates(
+    val updates: List<AppStore.Update> = emptyList(),
+    val checkedAt: Long = 0,
+    val checking: Boolean = false,
+    val failed: Boolean = false,
 )
 
 /** Debian's AppStream catalog in the store: being read, there, or not loaded (the store's own apps only). */
@@ -148,6 +162,7 @@ data class AppState(
     /** Everything the store shows: its own apps first, then Debian's catalog once loaded. */
     val storeItems: List<StoreItem> = StoreItem.curated(emptyMap()),
     val storeCatalog: CatalogState = CatalogState.LOADING,
+    val storeUpdates: StoreUpdates = StoreUpdates(),
 ) {
     /** Something is being installed or removed (InstallService keeps the process alive meanwhile). */
     val installing: Boolean
@@ -177,6 +192,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** The Home's quick launch and the store's search installs: one name per line. */
     private val homeFile = File(application.filesDir, "home-apps.txt")
     private val storeFile = File(application.filesDir, "store-packages.txt")
+    /** The last updates found: when, then one "<package>\t<from>\t<to>\t<bytes>" per line. */
+    private val updatesFile = File(application.filesDir, "store-updates.tsv")
+    private var updatesJob: Job? = null
 
     /** One apt job at a time, in the order they came (Mutex is fair). */
     private val apt = Mutex()
@@ -214,7 +232,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val (home, store) = withContext(Dispatchers.IO) {
                 (if (homeFile.isFile) readLines(homeFile) else HOME_DEFAULT) to readLines(storeFile)
             }
-            _state.update { it.copy(homeApps = home, storePackages = store) }
+            val updates = withContext(Dispatchers.IO) { readUpdates() }
+            _state.update { it.copy(homeApps = home, storePackages = store, storeUpdates = updates) }
             refreshPackages()
         }
         viewModelScope.launch {
@@ -286,6 +305,46 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     /** Installs [packages] for the store entry [key], after the apt jobs before it. */
     fun storeInstall(key: String, packages: List<String>) = startStoreJob(key, packages, remove = false)
 
+    /** Updates [packages] for the store entry [key] (everything for [UPDATE_ALL]), [bytes] to download. */
+    fun storeUpgrade(key: String, packages: List<String>, bytes: Long) =
+        startStoreJob(key, if (key == UPDATE_ALL) emptyList() else packages, remove = false, upgrade = true, bytes = bytes)
+
+    /**
+     * Looks for updates: apt's lists fetched again when [refresh] (network), else only what apt
+     * already knows (after a job). With [ifOlderThan], only when the last look is older than that.
+     */
+    fun checkStoreUpdates(refresh: Boolean = true, ifOlderThan: Long = 0) {
+        if (updatesJob?.isActive == true || !_state.value.ready) return
+        if (ifOlderThan > 0 && System.currentTimeMillis() - _state.value.storeUpdates.checkedAt < ifOlderThan) return
+        _state.update { it.copy(storeUpdates = it.storeUpdates.copy(checking = true, failed = false)) }
+        updatesJob = viewModelScope.launch {
+            val output = try {
+                apt.withLock { container.shell(_state.value.distro, AppStore.updatesScript(refresh)).output }
+            } catch (e: CancellationException) {
+                _state.update { it.copy(storeUpdates = it.storeUpdates.copy(checking = false)) }
+                throw e
+            } catch (_: Exception) {
+                ""
+            }
+            val found = if (AppStore.DONE_MARKER in output) StoreUpdates(AppStore.parseUpdates(output), System.currentTimeMillis()) else null
+            _state.update { it.copy(storeUpdates = found ?: it.storeUpdates.copy(checking = false, failed = true)) }
+            if (found != null) withContext(Dispatchers.IO) { writeUpdates(found) }
+        }
+    }
+
+    private fun readUpdates(): StoreUpdates {
+        val lines = readLines(updatesFile)
+        val at = lines.firstOrNull()?.toLongOrNull() ?: return StoreUpdates()
+        val updates = lines.drop(1).mapNotNull { line ->
+            val f = line.split('\t')
+            if (f.size == 4) AppStore.Update(f[0], f[1], f[2], f[3].toLongOrNull() ?: 0) else null
+        }
+        return StoreUpdates(updates, at)
+    }
+
+    private fun writeUpdates(updates: StoreUpdates) =
+        writeLines(updatesFile, listOf(updates.checkedAt.toString()) + updates.updates.map { "${it.pkg}\t${it.from}\t${it.to}\t${it.bytes}" })
+
     /** Removes [packages] (and what only they needed) for the store entry [key]. */
     fun storeRemove(key: String, packages: List<String>) = startStoreJob(key, packages, remove = true)
 
@@ -295,26 +354,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         storeProcesses[key]?.destroy()
     }
 
-    private fun startStoreJob(key: String, packages: List<String>, remove: Boolean) {
+    private fun startStoreJob(key: String, packages: List<String>, remove: Boolean, upgrade: Boolean = false, bytes: Long = 0) {
         if (storeJobs[key]?.isActive == true) return
         // apt checks the room for its downloads only; Android itself needs some left.
         val app = getApplication<Application>()
-        val needed = MIN_FREE_BYTES + (StoreCatalog.get(key)?.sizeMb ?: 0) * 1_000_000L
+        val needed = MIN_FREE_BYTES + (StoreCatalog.get(key)?.sizeMb ?: 0) * 1_000_000L + bytes
         if (!remove && android.os.StatFs(app.filesDir.path).availableBytes < needed) {
             _state.update { it.copy(storeJobs = it.storeJobs + (key to StoreJob.Failed(app.getString(R.string.store_no_space)))) }
             return
         }
-        storeJobs[key] = viewModelScope.launch { runStoreJob(key, packages, remove) }
+        storeJobs[key] = viewModelScope.launch { runStoreJob(key, packages, remove, upgrade) }
     }
 
     /** Runs one apt job; true when apt succeeded (a failure stays in the job's state). */
-    private suspend fun runStoreJob(key: String, packages: List<String>, remove: Boolean): Boolean {
+    private suspend fun runStoreJob(key: String, packages: List<String>, remove: Boolean, upgrade: Boolean = false): Boolean {
         fun set(job: StoreJob?) = _state.update { if (job == null) it.copy(storeJobs = it.storeJobs - key) else it.copy(storeJobs = it.storeJobs + (key to job)) }
         set(StoreJob.Queued)
         try {
             val error = apt.withLock {
                 set(StoreJob.Running(remove))
-                withContext(Dispatchers.IO) { runApt(key, packages, remove) { done, total, part -> set(StoreJob.Running(remove, done, total, part)) } }
+                withContext(Dispatchers.IO) { runApt(key, packages, remove, upgrade) { done, total, part -> set(StoreJob.Running(remove, done, total, part)) } }
             }
             refreshPackages()
             if (error != null) {
@@ -322,8 +381,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 return false
             }
             set(null)
+            // What is left to update changes with what is installed: apt knows it without the network.
+            if (upgrade || _state.value.storeUpdates.updates.isNotEmpty()) checkStoreUpdates(refresh = false)
             // Search installs are listed with the installed apps; catalog ones are known already.
-            if (StoreCatalog.get(key) == null) {
+            if (!upgrade && StoreCatalog.get(key) == null) {
                 val list = if (remove) _state.value.storePackages - key else (_state.value.storePackages + key).distinct()
                 _state.update { it.copy(storePackages = list) }
                 withContext(Dispatchers.IO) { writeLines(storeFile, list) }
@@ -339,8 +400,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** Runs apt in the container; null when it succeeded, else the reason. */
-    private fun runApt(key: String, packages: List<String>, remove: Boolean, progress: (Int, Int, Float) -> Unit): String? {
-        val script = if (remove) {
+    private fun runApt(key: String, packages: List<String>, remove: Boolean, upgrade: Boolean, progress: (Int, Int, Float) -> Unit): String? {
+        val script = if (upgrade) {
+            AppStore.upgradeScript(packages)
+        } else if (remove) {
             AppStore.removeScript(packages, DesktopEnvironment.desktopPackages)
         } else {
             AppStore.installScript(packages, Locale.getDefault().language)
