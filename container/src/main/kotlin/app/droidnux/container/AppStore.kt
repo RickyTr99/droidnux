@@ -298,9 +298,11 @@ object AppStore {
      * The desktop id of the first shown launcher [pkg] installs ("org.gimp.GIMP"), or else one of its
      * dependencies does (keepassxc is only a dependency on keepassxc-full).
      */
-    fun desktopId(rootfs: File, pkg: String): String? =
-        if (pkg.startsWith(FLATPAK)) pkg.removePrefix(FLATPAK).takeIf(::isFlatpakId) else launcherOf(rootfs, pkg)
-            ?: dependencies(rootfs, pkg).firstNotNullOfOrNull { launcherOf(rootfs, it) }
+    fun desktopId(rootfs: File, pkg: String): String? {
+        if (pkg.startsWith(FLATPAK)) return pkg.removePrefix(FLATPAK).takeIf(::isFlatpakId)
+        val name = pkg.removePrefix(BACKPORTS)
+        return launcherOf(rootfs, name) ?: dependencies(rootfs, name).firstNotNullOfOrNull { launcherOf(rootfs, it) }
+    }
 
     /** The packages [pkg] depends on, from dpkg's status file. */
     private fun dependencies(rootfs: File, pkg: String): List<String> {

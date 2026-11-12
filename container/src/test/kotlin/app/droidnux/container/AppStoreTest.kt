@@ -70,6 +70,18 @@ class AppStoreTest {
     }
 
     @Test
+    fun backportsHaveTheirLauncher() {
+        val rootfs = Files.createTempDirectory("rootfs").toFile()
+        java.io.File(rootfs, "var/lib/dpkg/info").mkdirs()
+        java.io.File(rootfs, "var/lib/dpkg/info/flameshot.list").writeText("/usr/share/applications/org.flameshot.Flameshot.desktop\n")
+        java.io.File(rootfs, "usr/share/applications").mkdirs()
+        java.io.File(rootfs, "usr/share/applications/org.flameshot.Flameshot.desktop").writeText("[Desktop Entry]\n")
+        assertEquals("org.flameshot.Flameshot", AppStore.desktopId(rootfs, "backports:flameshot"))
+        assertEquals("org.flameshot.Flameshot", AppStore.desktopId(rootfs, "flameshot"))
+        rootfs.deleteRecursively()
+    }
+
+    @Test
     fun backportsVersions() {
         val list = "Package: darktable\nVersion: 5.4.1-1~bpo13+1\n\nPackage: libreoffice-core\nVersion: 4:26.8.2.2-2~bpo13+1\n"
         val versions = BackportsCatalog.parse(list.byteInputStream())
