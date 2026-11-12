@@ -277,9 +277,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private val backlight by lazy { DesktopEnvironment.backlightDevice(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)) }
     @Volatile private var backlightValue = -1
     /**
-     * Until when a brightness from the session is its own setting coming back, not the user: KWin applies its saved
-     * output settings after a resize, and powerdevil writes its own brightness while the session starts (seen: its
-     * minimum, and once the maximum). Android's stays.
+     * Until when a brightness from the session is its own setting coming back, not the user: powerdevil writes its
+     * own brightness while the session starts (seen: its minimum, and once the maximum). Android's stays.
      */
     @Volatile private var settleUntil = 0L
     private val backlightWatch by lazy {
@@ -488,7 +487,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout())
             clipboardToDesktop()
         } else {
-            settleUntil = maxOf(settleUntil, SystemClock.uptimeMillis() + RESIZE_SETTLE_MS)
             DisplayServer.resize(desktopWidth, desktopHeight)
         }
         DisplayServer.redraw()
@@ -1007,8 +1005,6 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val TAG = "DroidNux.Desktop"
         /** How long after a finger leaves a focused text field its tap may still reach it. */
         private const val TAP_FOCUS_MS = 150L
-        /** How long after a resize a brightness from KWin counts as its saved setting coming back, not the user. */
-        private const val RESIZE_SETTLE_MS = 2000L
         /** How long after the session starts a brightness from it counts as powerdevil's own (Plasma starts in ~20 s). */
         private const val START_SETTLE_MS = 60_000L
 
