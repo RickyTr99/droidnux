@@ -1,5 +1,6 @@
 package app.droidnux.desktop
 
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -398,6 +399,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         super.onPause()
     }
 
+    @SuppressLint("GestureBackNavigation") // Android 13 and newer register an OnBackInvokedCallback in onCreate
     @Deprecated("Android 12 and older; newer versions use the OnBackInvokedCallback")
     override fun onBackPressed() = onBack()
 
@@ -803,8 +805,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** Hides whichever keyboard shows, or shows the full one. */
     private fun toggleKeyboard() {
-        val androidShown = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
+        val androidShown = window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
         when {
             androidShown -> getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(surfaceView.windowToken, 0)
             pcKeyboard.isShown -> pcKeyboard.hide()

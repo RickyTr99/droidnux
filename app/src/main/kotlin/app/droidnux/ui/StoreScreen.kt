@@ -84,6 +84,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
@@ -522,13 +523,13 @@ private fun ListPage(
 ) {
     var query by rememberSaveable(title) { mutableStateOf("") }
     var filter by rememberSaveable(title) { mutableStateOf<String?>(null) }
-    val context = LocalContext.current
+    val resources = LocalResources.current
     val counts = remember(items, filters) {
         filters.map { f -> f to items.count { f in it.catalog?.categories.orEmpty() } }.filter { it.second > 0 }
     }
     val shown = remember(items, filter, query) {
         val filtered = filter?.let { f -> items.filter { f in it.catalog?.categories.orEmpty() } } ?: items
-        if (query.isBlank()) filtered else StoreItem.search(filtered, query) { context.getString(it) }
+        if (query.isBlank()) filtered else StoreItem.search(filtered, query) { resources.getString(it) }
     }
     BackHandler(enabled = query.isNotEmpty()) { query = "" }
     Column(Modifier.fillMaxSize()) {

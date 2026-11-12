@@ -63,9 +63,7 @@ private:
         ALooper* looper = ALooper_prepare(0);
         choreographer_ = AChoreographer_getInstance();
         ALooper_addFd(looper, eventFd_, ALOOPER_POLL_CALLBACK, ALOOPER_EVENT_INPUT, onRequest, this);
-        if (__builtin_available(android 30, *)) {
-            AChoreographer_registerRefreshRateCallback(choreographer_, onRefreshRate, this);
-        }
+        AChoreographer_registerRefreshRateCallback(choreographer_, onRefreshRate, this);
         {
             std::lock_guard lock(mutex_);
             started_ = true;
@@ -387,10 +385,7 @@ public:
     // vsync that paces the desktop (and KWin) stays there. A layer that does not
     // change has no say, so this costs nothing while the desktop is still.
     void voteMaxRefreshLocked(ASurfaceTransaction* t) {
-        if (__builtin_available(android 30, *)) {
-            ASurfaceTransaction_setFrameRate(t, surface_, maxRefreshRate_,
-                                             ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
-        }
+        ASurfaceTransaction_setFrameRate(t, surface_, maxRefreshRate_, ANATIVEWINDOW_FRAME_RATE_COMPATIBILITY_DEFAULT);
     }
 
     // Counts a frame transaction until SurfaceFlinger latches it (framePending()).

@@ -351,10 +351,12 @@
     <plurals name="store_app_count">
         <item quantity="one">%d app</item>
         <item quantity="other">%d app</item>
+        <item quantity="many">%d app</item>
     </plurals>
     <plurals name="store_package_count">
         <item quantity="one">%d pacchetto</item>
         <item quantity="other">%d pacchetti</item>
+        <item quantity="many">%d pacchetti</item>
     </plurals>
     <string name="store_tools">Strumenti</string>
     <string name="store_tool_ssh">Connessione ad altri computer (ssh, scp).</string>
@@ -418,5 +420,6 @@
     <plurals name="install_apps_failed">
         <item quantity="one">%1$s non installata</item>
         <item quantity="other">%1$s non installate</item>
+        <item quantity="many">%1$s non installate</item>
     </plurals>
 </resources>

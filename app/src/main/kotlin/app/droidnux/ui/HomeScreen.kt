@@ -841,7 +841,7 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                                     },
                                 ),
                         ) {
-                            AppTile(app, viewModel, height, iconSize = if (compact) 52.dp else 56.dp, editing = editing, lifted = lifted || focused)
+                            AppTile(app, app.id in state.homeApps, viewModel, height, iconSize = if (compact) 52.dp else 56.dp, editing = editing, lifted = lifted || focused)
                             androidx.compose.animation.AnimatedVisibility(
                                 editing,
                                 modifier = Modifier.align(Alignment.TopEnd),
@@ -919,7 +919,7 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         row.forEach { app ->
                             key(app.id) {
-                                AppTile(app, viewModel, if (compact) 92.dp else 104.dp, iconSize = if (compact) 48.dp else 52.dp, modifier = Modifier.weight(1f))
+                                AppTile(app, app.id in state.homeApps, viewModel, if (compact) 92.dp else 104.dp, iconSize = if (compact) 48.dp else 52.dp, modifier = Modifier.weight(1f))
                             }
                         }
                         repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
@@ -1055,6 +1055,7 @@ private fun DockAction(
 @Composable
 private fun AppTile(
     app: LinuxApp,
+    inHome: Boolean,
     viewModel: AppViewModel,
     height: Dp,
     iconSize: Dp,
@@ -1106,7 +1107,6 @@ private fun AppTile(
             )
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            val inHome = app.id in viewModel.state.value.homeApps
             DropdownMenuItem(
                 text = { Text(stringResource(if (inHome) R.string.apps_home_remove else R.string.apps_home_add)) },
                 onClick = {
@@ -1441,7 +1441,7 @@ internal fun ThemeColorRow(settings: DesktopSettings, save: ((DesktopSettings) -
 
 /** A color's dot: its primary color, or the wallpaper's colors around the circle. */
 private fun themeSwatch(context: android.content.Context, color: String): Brush =
-    if (color == ThemeColor.DYNAMIC && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+    if (color == ThemeColor.DYNAMIC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val first = Color(context.getColor(android.R.color.system_accent1_300))
         Brush.sweepGradient(listOf(first, Color(context.getColor(android.R.color.system_accent2_300)), Color(context.getColor(android.R.color.system_accent3_300)), first))
     } else {
@@ -1735,13 +1735,14 @@ private fun AccountPage(settings: DesktopSettings, save: ((DesktopSettings) -> D
     var changingPassword by remember { mutableStateOf(false) }
     // The password in clear, after the fingerprint or the screen lock; hidden again when the app leaves the screen.
     var shown by remember { mutableStateOf<String?>(null) }
+    val showTitle = stringResource(R.string.settings_password_show)
     LifecycleResumeEffect(Unit) { onPauseOrDispose { shown = null } }
     InfoRow(stringResource(R.string.wizard_account_name), text = settings.user) {
         FilledTonalButton(onClick = { changingName = true }) { Text(stringResource(R.string.action_change)) }
     }
     InfoRow(stringResource(R.string.wizard_account_password), text = shown ?: "••••••••") {
         IconButton(onClick = {
-            if (shown != null) shown = null else unlock(context, context.getString(R.string.settings_password_show)) {
+            if (shown != null) shown = null else unlock(context, showTitle) {
                 shown = Account.password(context)
             }
         }) {
@@ -1761,13 +1762,9 @@ private fun AccountPage(settings: DesktopSettings, save: ((DesktopSettings) -> D
 /** Runs [onUnlocked] after the fingerprint, face or screen lock; at once on a device with no lock to ask for. */
 private fun unlock(context: Context, title: String, onUnlocked: () -> Unit) {
     if (!context.getSystemService(KeyguardManager::class.java).isDeviceSecure) return onUnlocked()
-    val prompt = BiometricPrompt.Builder(context).setTitle(title).apply {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-        } else {
-            @Suppress("DEPRECATION") setDeviceCredentialAllowed(true)
-        }
-    }.build()
+    val prompt = BiometricPrompt.Builder(context).setTitle(title)
+        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+        .build()
     prompt.authenticate(CancellationSignal(), context.mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = onUnlocked()
     })

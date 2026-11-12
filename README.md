@@ -43,7 +43,7 @@ video decoding. Made for tablets first, then phones, with touch, keyboard and tr
 
 ## Requirements
 
-- Android 10 or later, arm64.
+- Android 11 or later, arm64.
 - A Snapdragon (Adreno) GPU for hardware acceleration; other devices run without it.
 - A few GB of free space.
 - "Disable child process restrictions" in Android's developer options, or Android stops the desktop past 32
