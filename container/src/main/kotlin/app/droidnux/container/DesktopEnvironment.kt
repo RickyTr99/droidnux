@@ -167,6 +167,8 @@ object DesktopEnvironment {
         "ca-certificates",
         // ssh for git and editors' remote hosts (VS Code's Remote - SSH): the slim image has none.
         "openssh-client",
+        // ip and ss, which every Linux has (Burrow answers their netlink requests): the slim image has neither.
+        "iproute2",
         // Chinese, Japanese, Korean and emoji: without them web pages show empty boxes.
         "fonts-noto-cjk", "fonts-noto-color-emoji",
         // Android's language in the desktop's apps (SESSION generates the locale).

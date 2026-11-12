@@ -131,6 +131,9 @@ if [ "$1" != --in-dbus ]; then
     # AppImages and archives carry without the bit (they would abort). Chromium's
     # vendor builds (Brave, Chrome, Vivaldi) install the helper: their sandbox works.
     export ELECTRON_DISABLE_SANDBOX=1
+    # AppImages mount themselves with FUSE, which Android does not give apps: their runtime
+    # extracts them to /tmp and runs them from there instead (a slower start, the same app).
+    export APPIMAGE_EXTRACT_AND_RUN=1
     # Set by startplasma-wayland too, but xdg-desktop-portal starts on the bus before it
     # (the session services below) and without it takes no backend: no file chooser, no settings.
     export XDG_CURRENT_DESKTOP=KDE

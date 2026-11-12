@@ -41,10 +41,11 @@ class Container(context: Context) {
             .start()
     }
 
-    /** Burrow command for [distro], with the guest network settings refreshed first. */
+    /** Burrow command for [distro], with the guest's network, host name and time zone refreshed first. */
     private fun guestCommand(distro: Distro, command: List<String>): List<String> {
         val rootfs = installer.rootfsDir(distro)
         NetworkConfig.writeResolvConf(context, rootfs, proxied = burrow.dnsPort > 0)
+        GuestSystem.write(context, rootfs)
         return burrow.guestCommand(rootfs, command)
     }
 

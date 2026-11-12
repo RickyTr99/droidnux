@@ -63,8 +63,9 @@ class Burrow(context: Context) {
             add("--")
             add("/usr/bin/env"); add("-i")
             addAll(GUEST_ENVIRONMENT.map { (k, v) -> "$k=$v" })
-            // Android's time zone (the guest's /etc/localtime says UTC).
-            add("TZ=${java.util.TimeZone.getDefault().id}")
+            // Android's time zone is in /etc/localtime (GuestSystem); in TZ when the guest has no data for it.
+            val zone = java.util.TimeZone.getDefault().id
+            if (!GuestSystem.hasZone(rootfs, zone)) add("TZ=$zone")
             addAll(command)
         }
 
