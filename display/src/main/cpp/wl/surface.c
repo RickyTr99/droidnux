@@ -79,6 +79,23 @@ static void damage_all(struct dnx_wl_surface* s) {
  * vsync. True if a frame went to the presenter. */
 static void flush_held_feedbacks(bool presented);
 
+/* wl_output_transform says how the buffer is turned from the surface; Android
+ * turns it back. shortcut: flipped transforms are shown unflipped, as nothing
+ * asks for them (kscreen offers rotations only). */
+static int32_t window_transform(int32_t transform) {
+    switch (transform) {
+    case WL_OUTPUT_TRANSFORM_90: return ANATIVEWINDOW_TRANSFORM_ROTATE_90;
+    case WL_OUTPUT_TRANSFORM_180: return ANATIVEWINDOW_TRANSFORM_ROTATE_180;
+    case WL_OUTPUT_TRANSFORM_270: return ANATIVEWINDOW_TRANSFORM_ROTATE_270;
+    default: return ANATIVEWINDOW_TRANSFORM_IDENTITY;
+    }
+}
+
+/* A quarter turn swaps the buffer's sides on the surface. */
+static bool turned(const struct dnx_wl_surface* s) {
+    return s->transform & 1;
+}
+
 static bool present_shown(void) {
     struct dnx_wl_surface* s = shown;
     if (!s || !s->buffer || s->damage.count == 0) return false;
@@ -112,6 +129,7 @@ static bool present_shown(void) {
         return false;
     }
 
+    dnx_presenter_set_transform(window_transform(s->transform));
     bool ok;
     if (dmabuf) {
         ok = dnx_wl_dmabuf_present(dmabuf, rects, count);
@@ -252,7 +270,8 @@ bool dnx_wl_surface_snapshot(uint32_t* pixels, int width, int height) {
         return false;
     }
     if (base) {
-        /* Nearest pixel: a thumbnail taken when the desktop leaves the screen. */
+        /* Nearest pixel: a thumbnail taken when the desktop leaves the screen.
+         * shortcut: a turned buffer (Plasma's orientation) gives a turned thumbnail. */
         for (int y = 0; y < height; y++) {
             const uint32_t* row = (const uint32_t*) (base + (size_t) (y * s->height / height) * stride);
             for (int x = 0; x < width; x++) pixels[y * width + x] = row[x * s->width / width] | 0xff000000u;
@@ -578,8 +597,8 @@ static void surface_damage(struct wl_client* client, struct wl_resource* resourc
 static void surface_factor(struct dnx_wl_surface* s, double* fx, double* fy) {
     *fx = *fy = s->scale;
     if (s->xdg && s->xdg->configured && s->width > 0 && s->height > 0) {
-        *fx = (double) s->width / logical_size(dnx_wl_width);
-        *fy = (double) s->height / logical_size(dnx_wl_height);
+        *fx = (double) (turned(s) ? s->height : s->width) / logical_size(dnx_wl_width);
+        *fy = (double) (turned(s) ? s->width : s->height) / logical_size(dnx_wl_height);
     }
 }
 
@@ -606,7 +625,15 @@ static void surface_frame(struct wl_client* client, struct wl_resource* resource
 }
 
 static void surface_set_region(struct wl_client* c, struct wl_resource* r, struct wl_resource* region) {}
-static void surface_set_int(struct wl_client* c, struct wl_resource* r, int32_t v) {}
+static void surface_set_buffer_transform(struct wl_client* client, struct wl_resource* resource, int32_t transform) {
+    (void) client;
+    struct dnx_wl_surface* s = wl_resource_get_user_data(resource);
+    if (transform < WL_OUTPUT_TRANSFORM_NORMAL || transform > WL_OUTPUT_TRANSFORM_FLIPPED_270) {
+        wl_resource_post_error(resource, WL_SURFACE_ERROR_INVALID_TRANSFORM, "transform %d", transform);
+        return;
+    }
+    s->pending_transform = transform;
+}
 
 static void surface_set_buffer_scale(struct wl_client* client, struct wl_resource* resource, int32_t scale) {
     (void) client;
@@ -649,6 +676,8 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
         s->height = height;
     }
     s->scale = s->pending_scale;
+    if (s->transform != s->pending_transform) damage_all(s);
+    s->transform = s->pending_transform;
     for (int i = 0; i < s->pending_damage.count; i++) {
         dnx_box* r = &s->pending_damage.rects[i];
         dnx_wl_damage_add(&s->damage, r->x1, r->y1, r->x2 - r->x1, r->y2 - r->y1);
@@ -656,7 +685,10 @@ static void surface_commit(struct wl_client* client, struct wl_resource* resourc
     s->pending_damage.count = 0;
     double fx, fy;
     surface_factor(s, &fx, &fy);
-    for (int i = 0; i < s->pending_surface_damage.count; i++) {
+    /* shortcut: surface damage on a turned buffer repaints it all; KWin
+     * presents its buffers without copies, where damage does not count. */
+    if (s->transform != WL_OUTPUT_TRANSFORM_NORMAL && s->pending_surface_damage.count > 0) damage_all(s);
+    else for (int i = 0; i < s->pending_surface_damage.count; i++) {
         dnx_box* r = &s->pending_surface_damage.rects[i];
         int32_t x1 = (int32_t) floor(r->x1 * fx), y1 = (int32_t) floor(r->y1 * fy);
         dnx_wl_damage_add(&s->damage, x1, y1, clamp_coord((int64_t) ceil(r->x2 * fx)) - x1,
@@ -733,7 +765,7 @@ static const struct wl_surface_interface surface_impl = {
     .set_opaque_region = surface_set_region,
     .set_input_region = surface_set_region,
     .commit = surface_commit,
-    .set_buffer_transform = surface_set_int,
+    .set_buffer_transform = surface_set_buffer_transform,
     .set_buffer_scale = surface_set_buffer_scale,
     .damage_buffer = surface_damage_buffer,
     .offset = surface_offset,

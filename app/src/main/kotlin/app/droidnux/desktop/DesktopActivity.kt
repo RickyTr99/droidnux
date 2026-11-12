@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.database.ContentObserver
 import android.graphics.Color
@@ -313,6 +314,30 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
+    // The orientation chosen in Plasma's display settings: Android turns the screen to it, the normal one
+    // follows Android's rotation (DesktopEnvironment.orientationFile).
+    private val orientationSetting by lazy {
+        DesktopEnvironment.orientationFile(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE))
+    }
+    private val orientationWatch by lazy {
+        object : FileObserver(orientationSetting.parentFile!!, MOVED_TO) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == orientationSetting.name) runOnUiThread { readOrientation() }
+            }
+        }
+    }
+
+    private fun readOrientation() {
+        // Before the session starts the file is the last session's: KWin writes it again when it turns.
+        val setting = if (DisplayServer.running) runCatching { orientationSetting.readText().trim() }.getOrNull() else null
+        requestedOrientation = when (setting) {
+            "1" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            "2" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+            "3" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+            else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
     private fun readPointerSettings() {
         val values = runCatching { pointerSettings.readLines() }.getOrNull()
             ?.associate { it.substringBefore('=') to it.substringAfter('=') } ?: return
@@ -348,6 +373,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         backlightWatch.startWatching()
         readPointerSettings()
         pointerSettingsWatch.startWatching()
+        readOrientation()
+        orientationWatch.startWatching()
         contentResolver.registerContentObserver(Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS), false, brightnessObserver)
         // Back to a paused desktop: it continues.
         SessionPause.resume(this)
@@ -361,6 +388,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     override fun onPause() {
         backlightWatch.stopWatching()
         pointerSettingsWatch.stopWatching()
+        orientationWatch.stopWatching()
         contentResolver.unregisterContentObserver(brightnessObserver)
         // The Home shows Plasma's wallpaper, and this picture only of a paused desktop (taken before the
         // pause) or until a session copied the wallpaper: a full-size snapshot at every exit otherwise goes unseen.

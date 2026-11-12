@@ -249,7 +249,7 @@ public:
         if (geometryDirty_) {
             ARect source{0, 0, static_cast<int32_t>(width), static_cast<int32_t>(height)};
             ARect destination{0, 0, windowWidth_, windowHeight_};
-            ASurfaceTransaction_setGeometry(t, surface_, source, destination, ANATIVEWINDOW_TRANSFORM_IDENTITY);
+            ASurfaceTransaction_setGeometry(t, surface_, source, destination, transform_);
             ASurfaceTransaction_setBufferTransparency(t, surface_, ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE);
             ASurfaceTransaction_setVisibility(t, surface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
             ASurfaceTransaction_setZOrder(t, cursorSurface_, 1);
@@ -293,7 +293,7 @@ public:
         if (geometryDirty_ || width != width_ || height != height_) {
             ARect source{0, 0, static_cast<int32_t>(width), static_cast<int32_t>(height)};
             ARect destination{0, 0, windowWidth_, windowHeight_};
-            ASurfaceTransaction_setGeometry(t, surface_, source, destination, ANATIVEWINDOW_TRANSFORM_IDENTITY);
+            ASurfaceTransaction_setGeometry(t, surface_, source, destination, transform_);
             ASurfaceTransaction_setBufferTransparency(t, surface_, ASURFACE_TRANSACTION_TRANSPARENCY_OPAQUE);
             ASurfaceTransaction_setVisibility(t, surface_, ASURFACE_TRANSACTION_VISIBILITY_SHOW);
             ASurfaceTransaction_setZOrder(t, cursorSurface_, 1);
@@ -336,6 +336,14 @@ public:
         cursorImageDirty_ = true;
         cursorDirty_ = true;
         flushCursorLocked();
+    }
+
+    void setTransform(int32_t transform) {
+        std::lock_guard lock(mutex_);
+        if (transform == transform_) return;
+        transform_ = transform;
+        geometryDirty_ = true;
+        shownWidth_ = shownHeight_ = 0;  // set again, oriented, by the next frame
     }
 
     void moveCursor(int32_t x, int32_t y) {
@@ -482,6 +490,7 @@ private:
     }
 
     void setShownSizeLocked(uint32_t width, uint32_t height) {
+        if (transform_ & ANATIVEWINDOW_TRANSFORM_ROTATE_90) std::swap(width, height);
         if (width == shownWidth_ && height == shownHeight_) return;
         shownWidth_ = width;
         shownHeight_ = height;
@@ -668,6 +677,7 @@ private:
     int onScreen_ = -1;
     External external_;  // client buffer on screen (or about to be), instead of frames_[onScreen_]
     bool geometryDirty_ = true;
+    int32_t transform_ = ANATIVEWINDOW_TRANSFORM_IDENTITY;  // of the frames, onto the window
     bool pending_ = false;
     std::atomic<uint64_t> frameCount_{0};
     std::atomic<int> uncommitted_{0};              // frame transactions not latched yet
@@ -725,6 +735,7 @@ bool dnx_presenter_present_buffer(AHardwareBuffer* buffer, uint32_t width, uint3
 void dnx_presenter_set_cursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot) {
     presenter().setCursor(rgba, width, height, xhot, yhot);
 }
+void dnx_presenter_set_transform(int32_t transform) { presenter().setTransform(transform); }
 void dnx_presenter_move_cursor(int32_t x, int32_t y) { presenter().moveCursor(x, y); }
 void dnx_presenter_set_cursor_visible(bool visible) { presenter().setCursorVisible(visible); }
 int32_t dnx_presenter_cursor_y(void) { return presenter().cursorY(); }

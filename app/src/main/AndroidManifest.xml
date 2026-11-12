@@ -24,6 +24,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.DroidNux">
 
+        <!-- The desktop turns the screen to the orientation chosen in Plasma's
+             display settings, which Android 16 ignores on large screens without
+             this opt-out (API 36 only). -->
+        <property
+            android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"
+            android:value="true" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

@@ -195,6 +195,10 @@ if [ "$1" != --in-dbus ]; then
     fi
     # Plasma's mouse settings the app applies (left-handed, speed): KWin writes them here (KWin patch 0003).
     export DROIDNUX_POINTER_SETTINGS=@POINTER_FILE@
+    # The orientation chosen in Plasma's display settings, which the app gives Android (KWin patch 0004);
+    # KWin writes it when it changes, so last session's goes.
+    rm -f @ORIENTATION_FILE@
+    export DROIDNUX_ORIENTATION=@ORIENTATION_FILE@
     # Turnip on KGSL has no calibrated timestamps: Zink answers
     # GL_TIMESTAMP with a GPU round trip, which KWin asks every frame.
     export KWIN_NO_TIMER_QUERY=1

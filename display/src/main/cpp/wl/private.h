@@ -44,6 +44,8 @@ struct dnx_wl_surface {
 
     /* wl_surface.set_buffer_scale. */
     int32_t pending_scale, scale;
+    /* wl_surface.set_buffer_transform (wl_output_transform). */
+    int32_t pending_transform, transform;
 
     /* Cursor role: hotspot set by wl_pointer.set_cursor. */
     int32_t hotspot_x, hotspot_y;

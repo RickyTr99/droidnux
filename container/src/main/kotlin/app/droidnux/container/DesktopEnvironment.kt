@@ -98,6 +98,9 @@ object DesktopEnvironment {
     /** The mouse's settings the app applies, written by KWin (guest/plasma, KWin patch 0003). */
     private const val POINTER_FILE = "/tmp/.droidnux-pointer"
 
+    /** The orientation chosen in Plasma's display settings, written by KWin (guest/plasma, KWin patch 0004). */
+    private const val ORIENTATION_FILE = "/tmp/.droidnux-orientation"
+
     /** bubblewrap for Flatpak, on what Burrow emulates (droidnux-bwrap). */
     private const val BWRAP_SCRIPT = "$GUEST_LIB_DIR/droidnux-bwrap"
 
@@ -408,6 +411,13 @@ object DesktopEnvironment {
     fun pointerSettingsFile(rootfs: File): File = File(rootfs, POINTER_FILE.removePrefix("/"))
 
     /**
+     * The orientation chosen in Plasma's display settings, as KWin's output transform: 0 (normal), 1, 2 or 3
+     * (turned by 90, 180 or 270 degrees). KWin renames it into place at every change; missing until the
+     * first one in a session.
+     */
+    fun orientationFile(rootfs: File): File = File(rootfs, ORIENTATION_FILE.removePrefix("/"))
+
+    /**
      * No power profiles in the battery applet: Android manages the CPU and an app
      * cannot change it, so the applet would only say they are not available. The
      * applet has no setting for it: its QML is changed in place, again after
@@ -547,6 +557,7 @@ object DesktopEnvironment {
         "PLASMA_DEFAULTS" to PLASMA_DEFAULTS,
         "PLASMA_PREFIX" to PLASMA_PREFIX,
         "POLKIT_SCRIPT" to POLKIT_SCRIPT,
+        "ORIENTATION_FILE" to ORIENTATION_FILE,
         "POINTER_FILE" to POINTER_FILE,
         "SESSION_END_MARKER" to SESSION_END_MARKER,
         "SYSTEM_BUS_CONF" to SYSTEM_BUS_CONF,
