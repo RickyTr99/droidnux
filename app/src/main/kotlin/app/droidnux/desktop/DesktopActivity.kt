@@ -336,7 +336,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     override fun onPause() {
         backlightWatch.stopWatching()
         contentResolver.unregisterContentObserver(brightnessObserver)
-        saveThumbnail()
+        // The Home shows Plasma's wallpaper, and this picture only of a paused desktop (taken before the
+        // pause) or until a session copied the wallpaper: a full-size snapshot at every exit otherwise goes unseen.
+        val rootfs = Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)
+        if (!SessionPause.isPaused(this) && !DesktopEnvironment.wallpaperFile(rootfs).isFile) saveThumbnail()
         handler.removeCallbacks(overlayUpdater)
         clipboard.removePrimaryClipChangedListener(clipboardListener)
         super.onPause()
@@ -933,8 +936,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             val refresh = window.decorView.display?.refreshRate ?: 60f
             val width = (surfaceWidth * desktopScale).toInt() and 1.inv()
             val height = (surfaceHeight * desktopScale).toInt() and 1.inv()
+            val style = prefs.statsStyle
+            val items = prefs.statsItems(style)
             statsThread.execute {
-                val sample = statsSampler.sample(count, ms, if (count > 0) maxMs else null, refresh, width, height)
+                val sample = statsSampler.sample(
+                    count, ms, if (count > 0) maxMs else null, refresh, width, height, items, notes = style == StatsStyle.PANEL,
+                )
                 handler.post { overlay?.show(sample) }
             }
             handler.postDelayed(this, 1000)

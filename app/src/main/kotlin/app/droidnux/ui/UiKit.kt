@@ -7,7 +7,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.composed
 import androidx.compose.foundation.gestures.ScrollableState
 import androidx.compose.animation.core.tween
@@ -117,8 +117,8 @@ fun Modifier.fadingEdges(state: ScrollableState, vertical: Boolean = true, lengt
     val start by animateFloatAsState(if (state.canScrollBackward) 1f else 0f, tween(150), label = "fadeStart")
     val end by animateFloatAsState(if (state.canScrollForward) 1f else 0f, tween(150), label = "fadeEnd")
     graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-        .drawWithContent {
-            drawContent()
+        // The gradients are made again only when the size or an edge's fade changes, not at every scrolled frame.
+        .drawWithCache {
             val edge = length.toPx()
             val full = if (vertical) size.height else size.width
             val band = if (vertical) Size(size.width, edge) else Size(edge, size.height)
@@ -128,8 +128,13 @@ fun Modifier.fadingEdges(state: ScrollableState, vertical: Boolean = true, lengt
                 listOf(opaque.copy(alpha = startAlpha), opaque.copy(alpha = endAlpha)).let {
                     if (vertical) Brush.verticalGradient(it, from, to) else Brush.horizontalGradient(it, from, to)
                 }
-            drawRect(gradient(0f, edge, 1f - start, 1f), size = band, blendMode = BlendMode.DstIn)
-            drawRect(gradient(full - edge, full, 1f, 1f - end), topLeft = far, size = band, blendMode = BlendMode.DstIn)
+            val startFade = gradient(0f, edge, 1f - start, 1f)
+            val endFade = gradient(full - edge, full, 1f, 1f - end)
+            onDrawWithContent {
+                drawContent()
+                drawRect(startFade, size = band, blendMode = BlendMode.DstIn)
+                drawRect(endFade, topLeft = far, size = band, blendMode = BlendMode.DstIn)
+            }
         }
 }
 

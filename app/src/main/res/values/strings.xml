@@ -25,12 +25,9 @@
     <string name="menu_keyboard">Keyboard</string>
     <string name="menu_mode_touch">Direct touch</string>
     <string name="menu_mode_trackpad">Trackpad</string>
-    <string name="menu_to_android">Back to Android</string>
-    <string name="menu_exit">Exit the session</string>
     <string name="menu_exit_title">Exit the session?</string>
     <string name="menu_exit_text">Apps open in the desktop will close.</string>
     <string name="menu_exit_confirm">Exit</string>
-    <string name="menu_light">Brightness and volume</string>
     <string name="menu_brightness">Brightness</string>
     <string name="menu_volume">Volume</string>
     <string name="menu_resolution">Resolution</string>
@@ -80,7 +77,6 @@
     <string name="home_paused_text">Debian 13 · Plasma · no power draw</string>
     <string name="action_resume_paused">Resume</string>
     <string name="action_resume_desktop">Back to the desktop</string>
-    <string name="action_terminal">Terminal</string>
     <string name="home_update_title">Updates available</string>
     <string name="home_update_text">New packages or components in Settings › Components</string>
     <string name="home_quick">Favorites</string>
@@ -155,11 +151,9 @@
     <string name="check_battery">Unrestricted battery</string>
     <string name="check_files">Phone files</string>
     <string name="check_notifications">Notifications</string>
-    <string name="settings_debug">Debug</string>
     <string name="settings_stats">Statistics</string>
     <string name="stats_off">Off</string>
     <string name="stats_show">Show on the desktop</string>
-    <string name="stats_style">Style</string>
     <string name="stats_style_bar">Bar</string>
     <string name="stats_style_panel">Panel</string>
     <string name="stats_style_mini">Mini</string>
@@ -249,6 +243,47 @@
     <string name="store_chromium">A second browser.</string>
     <string name="store_thunderbird">Mail and calendar.</string>
     <string name="store_qbittorrent">Torrent downloads.</string>
+    <string name="store_source_backports" translatable="false">Debian backports</string>
+    <string name="store_source_github" translatable="false">GitHub</string>
+    <string name="store_vendor_mozilla" translatable="false">Mozilla</string>
+    <string name="store_vendor_brave" translatable="false">Brave Software</string>
+    <string name="store_vendor_sublime" translatable="false">Sublime HQ</string>
+    <string name="store_vendor_element" translatable="false">Element</string>
+    <string name="store_vendor_github" translatable="false">GitHub</string>
+    <string name="store_source_vendor">Vendor</string>
+    <string name="store_firefox">The newest Firefox, from Mozilla.</string>
+    <string name="store_brave">Browser with built-in ad blocking.</string>
+    <string name="store_sublime_text">Fast code editor.</string>
+    <string name="store_sublime_merge">Git client.</string>
+    <string name="store_element">Chat on Matrix.</string>
+    <string name="store_vesktop">Discord client.</string>
+    <string name="store_localsend">Share files with nearby devices.</string>
+    <string name="store_feishin">Music player for Jellyfin and Navidrome.</string>
+    <string name="store_youtube_music">YouTube Music on the desktop.</string>
+    <string name="store_bruno">API testing.</string>
+    <string name="store_beekeeper">SQL editor and database manager.</string>
+    <string name="store_pulsar">Hackable text editor.</string>
+    <string name="store_drawio">Diagrams and flowcharts.</string>
+    <string name="store_siyuan">Notes and personal knowledge base.</string>
+    <string name="store_mattermost">Team chat.</string>
+    <string name="store_tabby">Terminal and SSH client.</string>
+    <string name="store_motrix">Download manager.</string>
+    <string name="store_rustdesk">Remote desktop.</string>
+    <string name="store_ferdium">Messaging apps in one window.</string>
+    <string name="store_github_desktop">Git client for GitHub.</string>
+    <string name="store_tool_gh">GitHub from the terminal.</string>
+    <string name="store_shelf_vendors">From vendors</string>
+    <string name="store_shelf_github">From GitHub</string>
+    <string name="store_shelf_suggested">Suggested</string>
+    <string name="store_shelf_flathub">From Flathub</string>
+    <string name="store_for_you">For you</string>
+    <string name="store_source">Source</string>
+    <string name="store_version">Version</string>
+    <string name="store_stable">stable</string>
+    <string name="store_show_all">Show all · %1$d</string>
+    <string name="store_search_packages">Search Debian packages</string>
+    <string name="store_installed_tag">Installed</string>
+    <string name="store_search_hint">Search apps</string>
     <string name="store_games">Games</string>
     <string name="store_science">Education and science</string>
     <string name="store_utility">Utilities and system</string>

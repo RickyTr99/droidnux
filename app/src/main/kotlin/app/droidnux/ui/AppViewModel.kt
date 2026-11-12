@@ -10,6 +10,7 @@ import androidx.lifecycle.viewModelScope
 import app.droidnux.InstallService
 import app.droidnux.R
 import app.droidnux.container.AppCatalog
+import app.droidnux.container.BackportsCatalog
 import app.droidnux.container.FlathubCatalog
 import app.droidnux.container.AppStore
 import app.droidnux.container.CommandResult
@@ -25,7 +26,6 @@ import app.droidnux.display.DisplayCore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -89,10 +89,16 @@ sealed interface StoreJob {
 }
 
 /**
- * The store's search for [query]: the store's apps and Debian's catalog ([results], at once), then
- * the other Debian packages apt finds ([more], null while apt searches).
+ * The store's search for [query]: the store's apps and the catalogs ([results], at once), and when
+ * asked the other Debian packages apt finds ([more]: null until asked, empty while apt searches
+ * ([searchingMore])).
  */
-data class StoreSearch(val query: String, val results: List<StoreItem> = emptyList(), val more: List<AppStore.Found>? = null)
+data class StoreSearch(
+    val query: String,
+    val results: List<StoreItem> = emptyList(),
+    val more: List<AppStore.Found>? = null,
+    val searchingMore: Boolean = false,
+)
 
 /** Debian's AppStream catalog in the store: being read, there, or not loaded (the store's own apps only). */
 enum class CatalogState { LOADING, READY, FAILED }
@@ -255,6 +261,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(packages = packages) }
     }
 
+    /** The installed version of [pkg] (blocking), as people know it ("26.8.2.2"); null when not installed. */
+    fun storeVersion(pkg: String): String? =
+        runCatching { AppStore.installedVersions(rootfs)[pkg.removePrefix(AppStore.BACKPORTS)] }.getOrNull()
+            ?.takeIf { it.isNotEmpty() }?.let(BackportsCatalog::shortVersion)
+
     /** The launcher that opens a store app's [packages] once installed ([launcher] if it names one). */
     fun storeLauncher(packages: List<String>, launcher: String? = null): String? =
         launcher ?: packages.firstNotNullOfOrNull { AppStore.desktopId(rootfs, it) }
@@ -361,10 +372,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /**
-     * Searches the store for [query]: the store's apps and Debian's catalog at once, then (after a
-     * short pause, so typing does not start one per key) the rest of Debian with apt.
-     */
+    /** Searches the store's apps and catalogs for [query], in memory: fast enough for every key typed. */
     fun storeSearch(query: String) {
         searchJob?.cancel()
         if (query.isBlank()) {
@@ -375,16 +383,33 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         searchJob = viewModelScope.launch {
             val results = withContext(Dispatchers.Default) { StoreItem.search(_state.value.storeItems, query) { app.getString(it) } }
             _state.update { it.copy(storeSearch = StoreSearch(query, results)) }
-            val command = AppStore.searchCommand(query)
-            if (command == null) {
-                _state.update { it.copy(storeSearch = StoreSearch(query, results, emptyList())) }
-                return@launch
-            }
-            delay(SEARCH_DELAY_MS)
+        }
+    }
+
+    /**
+     * Searches the rest of Debian's packages with apt for the current query: a command in the
+     * container (over a second), so only when asked. Typing on cancels it, apt included.
+     */
+    fun storeSearchPackages() {
+        val search = _state.value.storeSearch ?: return
+        val command = AppStore.searchCommand(search.query)
+        if (command == null) {
+            _state.update { it.copy(storeSearch = search.copy(more = emptyList())) }
+            return
+        }
+        searchJob?.cancel()
+        _state.update { it.copy(storeSearch = search.copy(more = emptyList(), searchingMore = true)) }
+        searchJob = viewModelScope.launch {
             val shown = _state.value.storeItems.flatMapTo(HashSet()) { it.packages }
-            val more = runCatching { AppStore.parseSearch(container.shell(_state.value.distro, command).output) }.getOrDefault(emptyList())
-                .filter { it.name !in shown }
-            _state.update { it.copy(storeSearch = StoreSearch(query, results, more)) }
+            val output = try {
+                container.shell(_state.value.distro, command).output
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                ""
+            }
+            val more = AppStore.parseSearch(output).filter { it.name !in shown }
+            _state.update { it.copy(storeSearch = search.copy(more = more, searchingMore = false)) }
         }
     }
 
@@ -400,9 +425,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(storeCatalog = CatalogState.FAILED) }
                 return@launch
             }
-            // Debian's alone if Flathub's cannot be had.
+            // Debian's alone if Flathub's or the backports' cannot be had.
             val flathub = withContext(Dispatchers.IO) { runCatching { FlathubCatalog.load(dir, language) } }.getOrDefault(emptyList())
-            val items = withContext(Dispatchers.Default) { StoreItem.all(catalog, flathub) }
+            val backports = withContext(Dispatchers.IO) { runCatching { BackportsCatalog.load(dir) } }.getOrDefault(emptyMap())
+            val items = withContext(Dispatchers.Default) { StoreItem.all(catalog, flathub, backports) }
             _state.update { it.copy(storeItems = items, storeCatalog = CatalogState.READY) }
         }
     }
@@ -475,12 +501,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** The store's icon called [name] (off the main thread), null until downloaded; a Flathub app's ("flatpak:<id>") on demand. */
-    fun storeIcon(name: String): Bitmap? {
+    /** The store's icon called [name] (off the main thread), null until downloaded; a Flathub app's ("flatpak:<id>") or a URL's on demand. */
+    suspend fun storeIcon(name: String): Bitmap? {
         storeBitmaps.get("store:$name")?.let { return it }
         val id = name.removePrefix(AppStore.FLATPAK).takeIf { it != name && AppStore.isFlatpakId(it) }
-        val file = File(storeIconsDir, if (id != null) "flatpak-$id.png" else "$name.png")
-        if (id != null && !file.isFile) runCatching { AppStore.download(FlathubCatalog.iconUrl(id), file) }
+        val url = id?.let(FlathubCatalog::iconUrl) ?: name.takeIf { it.startsWith("https://") }
+        val file = File(storeIconsDir, if (id != null) "flatpak-$id.png" else if (url != null) "url-${url.hashCode().toUInt()}.png" else "$name.png")
+        // A list of Flathub apps scrolled fast asks for dozens at once: a few downloads at a time.
+        if (url != null && !file.isFile) shotDownloads.withPermit { if (!file.isFile) runCatching { AppStore.download(url, file) } }
         return file.takeIf { it.isFile }?.let { BitmapFactory.decodeFile(it.path) }?.also { storeBitmaps.put("store:$name", it) }
     }
 
@@ -699,7 +727,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             val unit = when (match.groupValues[2]) { "k" -> 1e3; "M" -> 1e6; "G" -> 1e9; else -> 1.0 }
             return (value * unit).toLong()
         }
-        const val SEARCH_DELAY_MS = 350L
         const val MIN_FREE_BYTES = 500_000_000L
         const val STORE_BITMAPS_BYTES = 48 * 1024 * 1024
 

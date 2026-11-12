@@ -36,10 +36,6 @@ static bool frame_sent;                /* a frame went to the presenter since th
 static bool quick_answered;            /* an empty commit was answered at once since the last vsync */
 static struct dnx_wl_surface* shown;
 
-struct dnx_wl_surface* dnx_wl_shown_surface(void) {
-    return shown;
-}
-
 /* -- Damage --------------------------------------------------------------- */
 
 static int32_t clamp_coord(int64_t v) {

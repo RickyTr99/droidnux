@@ -51,21 +51,34 @@ object SessionPause {
      * The session's processes now: the guest's that come from this process (the desktop's). The
      * store's apt and the Home's queries run under the app's other process and are left alone.
      */
-    fun guestPids(context: Context): List<Int> {
+    fun guestPids(context: Context): List<Int> = guest(context).keys.toList()
+
+    /** CPU time of the session's processes and of this one (the display server), in clock ticks. */
+    fun cpuTicks(context: Context): Long =
+        guest(context).values.sumOf(::ticks) + (stat(android.os.Process.myPid())?.let(::ticks) ?: 0L)
+
+    /** The session's processes with their [stat], each read once. */
+    private fun guest(context: Context): Map<Int, List<String>> {
         val burrow = File(context.applicationInfo.nativeLibraryDir, "libburrow.so").path
-        val guest = File("/proc").list().orEmpty().mapNotNull { it.toIntOrNull() }
-            .filter { runCatching { Os.readlink("/proc/$it/exe") }.getOrNull() == burrow }.toHashSet()
+        val stats = HashMap<Int, List<String>>()
+        for (pid in File("/proc").list().orEmpty().mapNotNull { it.toIntOrNull() }) {
+            if (runCatching { Os.readlink("/proc/$pid/exe") }.getOrNull() == burrow) stat(pid)?.let { stats[pid] = it }
+        }
         val self = android.os.Process.myPid()
-        return guest.filter { pid ->
+        return stats.filterKeys { pid ->
             // Up through the guest's own processes to the first one outside: ours, or init for an orphan.
             var ancestor: Int? = pid
-            while (ancestor != null && ancestor in guest) ancestor = parent(ancestor)
+            while (ancestor != null && ancestor in stats) ancestor = stats.getValue(ancestor).getOrNull(1)?.toIntOrNull()
             ancestor == null || ancestor == self || ancestor == 1
         }
     }
 
-    // After the name (which may hold spaces): the state, then the parent.
-    private fun parent(pid: Int): Int? = runCatching {
-        File("/proc/$pid/stat").readText().substringAfterLast(')').trim().split(' ')[1].toInt()
+    // The fields of /proc/<pid>/stat after the name (which may hold spaces): the state, then the parent.
+    private fun stat(pid: Int): List<String>? = runCatching {
+        File("/proc/$pid/stat").readText().substringAfterLast(')').trim().split(' ')
     }.getOrNull()
+
+    // utime and stime are the 12th and 13th of those fields.
+    private fun ticks(stat: List<String>): Long =
+        (stat.getOrNull(11)?.toLongOrNull() ?: 0L) + (stat.getOrNull(12)?.toLongOrNull() ?: 0L)
 }
