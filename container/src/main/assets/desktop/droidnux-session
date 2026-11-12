@@ -126,11 +126,11 @@ if [ "$1" != --in-dbus ]; then
     # Its crash reporter (and Thunderbird's) hangs on a futex writing the minidump
     # under Burrow, which leaves the crashed app frozen: crashes just end it.
     export MOZ_CRASHREPORTER_DISABLE=1
-    # Electron apps (VS Code, Discord, Obsidian) and Chromium's vendor builds (Brave,
-    # Chrome, Vivaldi): Chromium's sandbox needs user namespaces or its set-user-ID
-    # helper, neither of which Android allows.
+    # Electron apps (VS Code, Discord, Obsidian): Chromium's sandbox needs user
+    # namespaces, which Android does not give, or its set-user-ID helper, which
+    # AppImages and archives carry without the bit (they would abort). Chromium's
+    # vendor builds (Brave, Chrome, Vivaldi) install the helper: their sandbox works.
     export ELECTRON_DISABLE_SANDBOX=1
-    export CHROME_EXTRA_FLAGS="${CHROME_EXTRA_FLAGS:+$CHROME_EXTRA_FLAGS }--no-sandbox"
     # Set by startplasma-wayland too, but xdg-desktop-portal starts on the bus before it
     # (the session services below) and without it takes no backend: no file chooser, no settings.
     export XDG_CURRENT_DESKTOP=KDE
