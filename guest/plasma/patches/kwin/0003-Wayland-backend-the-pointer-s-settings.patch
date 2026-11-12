@@ -8,7 +8,7 @@ Android's events into the pointer's and reads them from the file
 DROIDNUX_POINTER_SETTINGS names.
 ---
 diff --git a/src/backends/wayland/wayland_backend.cpp b/src/backends/wayland/wayland_backend.cpp
-index f0bf15f..7a7700b 100644
+index f0bf15f..a562a49 100644
 --- a/src/backends/wayland/wayland_backend.cpp
 +++ b/src/backends/wayland/wayland_backend.cpp
 @@ -24,7 +24,12 @@
@@ -24,7 +24,7 @@ index f0bf15f..7a7700b 100644
  
  #include <drm_fourcc.h>
  #include <fcntl.h>
-@@ -47,6 +52,87 @@ inline static QPointF sizeToPoint(const QSizeF &size)
+@@ -47,6 +52,85 @@ inline static QPointF sizeToPoint(const QSizeF &size)
      return QPointF(size.width(), size.height());
  }
  
@@ -46,11 +46,9 @@ index f0bf15f..7a7700b 100644
 +    connect(this, &WaylandPointerSettings::changed, this, &WaylandPointerSettings::save);
 +
 +    QDBusConnection::sessionBus().registerObject(QStringLiteral("/org/kde/KWin/InputDevice"),
-+                                                 QStringLiteral("org.kde.KWin.InputDeviceManager"),
 +                                                 new WaylandPointerSettingsList(this),
 +                                                 QDBusConnection::ExportAllProperties | QDBusConnection::ExportAllSignals);
 +    QDBusConnection::sessionBus().registerObject(QStringLiteral("/org/kde/KWin/InputDevice/") + sysName(),
-+                                                 QStringLiteral("org.kde.KWin.InputDevice"),
 +                                                 this,
 +                                                 QDBusConnection::ExportAllProperties);
 +}
@@ -112,7 +110,7 @@ index f0bf15f..7a7700b 100644
  WaylandInputDevice::WaylandInputDevice(KWayland::Client::Keyboard *keyboard, WaylandSeat *seat)
      : m_seat(seat)
      , m_keyboard(keyboard)
-@@ -81,6 +167,7 @@ WaylandInputDevice::WaylandInputDevice(KWayland::Client::Keyboard *keyboard, Way
+@@ -81,6 +165,7 @@ WaylandInputDevice::WaylandInputDevice(KWayland::Client::Keyboard *keyboard, Way
  WaylandInputDevice::WaylandInputDevice(KWayland::Client::Pointer *pointer, WaylandSeat *seat)
      : m_seat(seat)
      , m_pointer(pointer)
@@ -120,7 +118,7 @@ index f0bf15f..7a7700b 100644
  {
      connect(pointer, &Pointer::entered, this, [this](quint32 serial, const QPointF &relativeToSurface) {
          WaylandOutput *output = m_seat->backend()->findOutput(m_pointer->enteredSurface());
-@@ -152,7 +239,10 @@ WaylandInputDevice::WaylandInputDevice(KWayland::Client::Pointer *pointer, Wayla
+@@ -152,7 +237,10 @@ WaylandInputDevice::WaylandInputDevice(KWayland::Client::Pointer *pointer, Wayla
              Q_UNREACHABLE();
          }
          qint32 &discrete = m_axisDiscrete[axis == PointerAxis::Vertical ? 1 : 0];
@@ -133,7 +131,7 @@ index f0bf15f..7a7700b 100644
      });
  
 diff --git a/src/backends/wayland/wayland_backend.h b/src/backends/wayland/wayland_backend.h
-index 8156994..d5f295e 100644
+index 8156994..569d6ca 100644
 --- a/src/backends/wayland/wayland_backend.h
 +++ b/src/backends/wayland/wayland_backend.h
 @@ -23,6 +23,7 @@
@@ -144,7 +142,7 @@ index 8156994..d5f295e 100644
  
  struct wl_buffer;
  struct wl_display;
-@@ -56,6 +57,110 @@ class WaylandOutput;
+@@ -56,6 +57,112 @@ class WaylandOutput;
  class WaylandEglBackend;
  class WaylandDisplay;
  
@@ -157,6 +155,7 @@ index 8156994..d5f295e 100644
 +class WaylandPointerSettings : public QObject
 +{
 +    Q_OBJECT
++    Q_CLASSINFO("D-Bus Interface", "org.kde.KWin.InputDevice")
 +    Q_PROPERTY(QString name READ name CONSTANT)
 +    Q_PROPERTY(QString sysName READ sysName CONSTANT)
 +    Q_PROPERTY(bool pointer READ yes CONSTANT)
@@ -237,6 +236,7 @@ index 8156994..d5f295e 100644
 +class WaylandPointerSettingsList : public QObject
 +{
 +    Q_OBJECT
++    Q_CLASSINFO("D-Bus Interface", "org.kde.KWin.InputDeviceManager")
 +    Q_PROPERTY(QStringList devicesSysNames READ devicesSysNames CONSTANT)
 +
 +public:
@@ -255,7 +255,7 @@ index 8156994..d5f295e 100644
  class WaylandInputDevice : public InputDevice
  {
      Q_OBJECT
-@@ -92,6 +197,7 @@ private:
+@@ -92,6 +199,7 @@ private:
      std::unique_ptr<KWayland::Client::Pointer> m_pointer;
      std::unique_ptr<KWayland::Client::PointerPinchGesture> m_pinchGesture;
      std::unique_ptr<KWayland::Client::PointerSwipeGesture> m_swipeGesture;
