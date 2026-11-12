@@ -193,6 +193,8 @@ if [ "$1" != --in-dbus ]; then
         # ksystemstats' GPU, disk and network plugins for Android, found before the distro's of the same name.
         export QT_PLUGIN_PATH=$PLASMA/lib/aarch64-linux-gnu/qt6/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}
     fi
+    # Plasma's mouse settings the app applies (left-handed, speed): KWin writes them here (KWin patch 0003).
+    export DROIDNUX_POINTER_SETTINGS=@POINTER_FILE@
     # Turnip on KGSL has no calibrated timestamps: Zink answers
     # GL_TIMESTAMP with a GPU round trip, which KWin asks every frame.
     export KWIN_NO_TIMER_QUERY=1

@@ -298,6 +298,29 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         }
     }
 
+    // Plasma's mouse settings that apply here, where Android's events become the pointer's: KWin renames the
+    // file into place (DesktopEnvironment.pointerSettingsFile).
+    private val pointerSettings by lazy {
+        DesktopEnvironment.pointerSettingsFile(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE))
+    }
+    @Volatile private var leftHanded = false
+    @Volatile private var pointerSpeed = 1f
+    private val pointerSettingsWatch by lazy {
+        object : FileObserver(pointerSettings.parentFile!!, MOVED_TO) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == pointerSettings.name) readPointerSettings()
+            }
+        }
+    }
+
+    private fun readPointerSettings() {
+        val values = runCatching { pointerSettings.readLines() }.getOrNull()
+            ?.associate { it.substringBefore('=') to it.substringAfter('=') } ?: return
+        leftHanded = values["leftHanded"] == "true"
+        // As libinput's flat profile turns its speed (-1 to 1) into a factor.
+        pointerSpeed = (1f + (values["pointerAcceleration"]?.toFloatOrNull() ?: 0f)).coerceAtLeast(0.005f)
+    }
+
     /** The setting the desktop last gave Android: that change coming back is not a new one. */
     private var writtenSetting = -1
     // Android's own slider (the quick settings over the desktop) moves the desktop's too.
@@ -323,6 +346,8 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         super.onResume()
         writeBacklight(menuListener.brightness())
         backlightWatch.startWatching()
+        readPointerSettings()
+        pointerSettingsWatch.startWatching()
         contentResolver.registerContentObserver(Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS), false, brightnessObserver)
         // Back to a paused desktop: it continues.
         SessionPause.resume(this)
@@ -335,6 +360,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onPause() {
         backlightWatch.stopWatching()
+        pointerSettingsWatch.stopWatching()
         contentResolver.unregisterContentObserver(brightnessObserver)
         // The Home shows Plasma's wallpaper, and this picture only of a paused desktop (taken before the
         // pause) or until a session copied the wallpaper: a full-size snapshot at every exit otherwise goes unseen.
@@ -597,7 +623,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         return true // also stops the right button from acting as Back
     }
 
-    /** Captured mouse: relative motion, accelerated by the desktop. */
+    /** Captured mouse: relative motion, at the speed set in Plasma. */
     private fun onCapturedPointer(event: MotionEvent): Boolean {
         if (!DisplayServer.running) return false
         showCursor(true)
@@ -617,7 +643,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                     dx += event.getHistoricalX(i)
                     dy += event.getHistoricalY(i)
                 }
-                if (dx != 0f || dy != 0f) DisplayServer.pointerRelative(dx, dy)
+                if (dx != 0f || dy != 0f) DisplayServer.pointerRelative(dx * pointerSpeed, dy * pointerSpeed)
             }
             MotionEvent.ACTION_SCROLL -> DisplayServer.scroll(
                 event.getAxisValue(MotionEvent.AXIS_HSCROLL),
@@ -638,10 +664,11 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         Presenter.setCursorVisible(visible)
     }
 
+    /** A mouse's button; the left and right ones swapped when Plasma's setting is left-handed. */
     private fun xButton(androidButton: Int) = when (androidButton) {
-        MotionEvent.BUTTON_PRIMARY -> 1
+        MotionEvent.BUTTON_PRIMARY -> if (leftHanded) 3 else 1
         MotionEvent.BUTTON_TERTIARY -> 2
-        MotionEvent.BUTTON_SECONDARY -> 3
+        MotionEvent.BUTTON_SECONDARY -> if (leftHanded) 1 else 3
         MotionEvent.BUTTON_BACK -> 8
         MotionEvent.BUTTON_FORWARD -> 9
         else -> null

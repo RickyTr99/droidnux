@@ -95,6 +95,9 @@ object DesktopEnvironment {
     private const val WALLPAPER_SCRIPT = "$GUEST_LIB_DIR/droidnux-wallpaper"
     private const val WALLPAPER_FILE = "/tmp/.droidnux-wallpaper"
 
+    /** The mouse's settings the app applies, written by KWin (guest/plasma, KWin patch 0003). */
+    private const val POINTER_FILE = "/tmp/.droidnux-pointer"
+
     /** bubblewrap for Flatpak, on what Burrow emulates (droidnux-bwrap). */
     private const val BWRAP_SCRIPT = "$GUEST_LIB_DIR/droidnux-bwrap"
 
@@ -398,6 +401,13 @@ object DesktopEnvironment {
     fun wallpaperFile(rootfs: File): File = File(rootfs, WALLPAPER_FILE.removePrefix("/"))
 
     /**
+     * The mouse's settings from Plasma that the app applies: "leftHanded" (true or false) and
+     * "pointerAcceleration" (-1 to 1, libinput's speed), one "name=value" a line. KWin renames it
+     * into place at its start and at every change; missing before that and without the Plasma component.
+     */
+    fun pointerSettingsFile(rootfs: File): File = File(rootfs, POINTER_FILE.removePrefix("/"))
+
+    /**
      * No power profiles in the battery applet: Android manages the CPU and an app
      * cannot change it, so the applet would only say they are not available. The
      * applet has no setting for it: its QML is changed in place, again after
@@ -537,6 +547,7 @@ object DesktopEnvironment {
         "PLASMA_DEFAULTS" to PLASMA_DEFAULTS,
         "PLASMA_PREFIX" to PLASMA_PREFIX,
         "POLKIT_SCRIPT" to POLKIT_SCRIPT,
+        "POINTER_FILE" to POINTER_FILE,
         "SESSION_END_MARKER" to SESSION_END_MARKER,
         "SYSTEM_BUS_CONF" to SYSTEM_BUS_CONF,
         "SYSTEM_BUS_SOCKET" to SYSTEM_BUS_SOCKET,
