@@ -548,6 +548,8 @@ object DesktopEnvironment {
         // Chromium's sandbox needs user namespaces or its set-user-ID helper, neither of which
         // Android allows (Electron apps: ELECTRON_DISABLE_SANDBOX in the session).
         "chromium-flags" to CHROMIUM_FLAGS_PATH,
+        // gdb under Burrow: its traps pass, run starts the program without a shell.
+        "gdbinit" to "/etc/gdb/gdbinit.d/droidnux.gdb",
         // Android's network and Bluetooth in the system tray, as status only: Android does not let apps switch them.
         "network-metadata.json" to "$PLASMOIDS/org.droidnux.network/metadata.json",
         "network-main.qml" to "$PLASMOIDS/org.droidnux.network/contents/ui/main.qml",

@@ -1,0 +1,6 @@
+# DroidNux: gdb under Burrow (read by gdb at start, from /etc/gdb/gdbinit.d).
+# Burrow emulates syscalls on SIGSYS: each one stops a traced program otherwise.
+handle SIGSYS nostop noprint pass
+# run without a shell: the program's own execve() stops it once it is loaded,
+# the shell's would stop it before (no libraries, no breakpoints).
+set startup-with-shell off
