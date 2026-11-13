@@ -95,6 +95,16 @@ if [ "$(id -u)" = 0 ] && [ "$1" != --in-dbus ]; then
         dpkg-divert --local --rename --divert /usr/bin/bwrap.distrib --add /usr/bin/bwrap > /dev/null &&
             ln -sf @BWRAP_SCRIPT@ /usr/bin/bwrap
     fi
+    # systemctl without systemd, as for bwrap: apt's scripts start the services they install
+    # (deb-systemd-invoke), and loginctl, timedatectl and hostnamectl talk to droidnux-logind,
+    # once /run/systemd/system says systemd runs.
+    if [ "$(readlink /usr/bin/systemctl)" != @SYSTEMCTL_SCRIPT@ ]; then
+        dpkg-divert --local --rename --divert /usr/bin/systemctl.distrib --add /usr/bin/systemctl > /dev/null &&
+            ln -sf @SYSTEMCTL_SCRIPT@ /usr/bin/systemctl
+    fi
+    mkdir -p /run/systemd/system
+    # Docker's images refuse every service start to apt (exit 101): not this one's, unlike Docker's builds.
+    grep -qs "For most Docker users" /usr/sbin/policy-rc.d && rm -f /usr/sbin/policy-rc.d
     # A system bus with UPower on it, as root: Plasma shows Android's battery.
     mkdir -p "$(dirname @SYSTEM_BUS_SOCKET@)" && rm -f @SYSTEM_BUS_SOCKET@
     if dbus-daemon --config-file=@SYSTEM_BUS_CONF@ --fork --nopidfile; then
@@ -102,6 +112,8 @@ if [ "$(id -u)" = 0 ] && [ "$1" != --in-dbus ]; then
         @UPOWER_SCRIPT@ &
         @POLKIT_SCRIPT@ &
     fi
+    # The services enabled for multi-user.target (ssh, nginx...), on the system bus, as at boot.
+    systemctl default > /dev/null 2>&1 &
     # Burrow starts in /root: apps launched from Plasma (Konsole) inherit the directory.
     cd "$home" || true
     exec perl -e '$u = shift; @g = split / /, shift; $) = "$g[0] @g"; $( = $g[0]; $< = $> = $u;
@@ -284,6 +296,11 @@ if [ -n "$DBUS_SYSTEM_BUS_ADDRESS" ]; then
     @LOGIND_SCRIPT@ &
     gdbus wait --system --timeout 5 org.freedesktop.login1
 fi
+# The user's own services (systemctl --user enable): the distro's, enabled for every user
+# (PipeWire, DrKonqi, gpg-agent), are started below or not needed.
+for unit in "$HOME"/.config/systemd/user/default.target.wants/*; do
+    [ -e "$unit" ] && systemctl --user start "${unit##*/}" > /dev/null 2>&1 &
+done
 # Session services without systemd start here, on the session bus.
 if command -v pipewire > /dev/null; then
     # Its clients give up if its socket is not there yet: wait for it,

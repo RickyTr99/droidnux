@@ -1,0 +1,15 @@
+#!/bin/sh
+# Written by DroidNux: systemctl without systemd, which Android cannot run.
+# docker-systemctl-replacement (@SYSTEMCTL_PY@) starts and stops the services
+# from their unit files; the session diverts the distro's /usr/bin/systemctl
+# here, so apt's scripts start what they install. It reads the units at each
+# call: daemon-reload has nothing to do (its own would check every unit and
+# list what this system lacks).
+for a; do
+    case $a in
+    daemon-reload | daemon-reexec) exit 0 ;;
+    -*) ;;
+    *) break ;;
+    esac
+done
+exec python3 @SYSTEMCTL_PY@ "$@"

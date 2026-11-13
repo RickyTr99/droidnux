@@ -108,6 +108,10 @@ object DesktopEnvironment {
     /** bubblewrap for Flatpak, on what Burrow emulates (droidnux-bwrap). */
     private const val BWRAP_SCRIPT = "$GUEST_LIB_DIR/droidnux-bwrap"
 
+    /** systemctl without systemd (docker-systemctl-replacement), in place of the distro's. */
+    private const val SYSTEMCTL_SCRIPT = "$GUEST_LIB_DIR/droidnux-systemctl"
+    private const val SYSTEMCTL_PY = "$GUEST_LIB_DIR/systemctl3.py"
+
     /**
      * The document portal without FUSE (droidnux-documents), started on demand by the session bus: its
      * directory comes before /usr/share's, so it takes the place of xdg-document-portal.
@@ -524,6 +528,8 @@ object DesktopEnvironment {
         "droidnux-places" to PLACES_SCRIPT,
         "droidnux-app-groups" to APP_GROUPS_SCRIPT,
         "droidnux-bwrap" to BWRAP_SCRIPT,
+        "droidnux-systemctl" to SYSTEMCTL_SCRIPT,
+        "systemctl3.py" to SYSTEMCTL_PY,
         "droidnux-documents" to DOCUMENTS_SCRIPT,
         "droidnux-flatpak-gl" to FLATPAK_GL_SCRIPT,
         "droidnux-wallpaper" to WALLPAPER_SCRIPT,
@@ -564,6 +570,8 @@ object DesktopEnvironment {
         "BACKLIGHT_HELPER" to BACKLIGHT_HELPER,
         "BATTERY_FILE" to BATTERY_FILE,
         "BWRAP_SCRIPT" to BWRAP_SCRIPT,
+        "SYSTEMCTL_PY" to SYSTEMCTL_PY,
+        "SYSTEMCTL_SCRIPT" to SYSTEMCTL_SCRIPT,
         "DESKTOP_USER" to DESKTOP_USER,
         "DISPLAY" to "$DISPLAY",
         // The extension's builds, one "<branch> <url> <sha256>" line each.

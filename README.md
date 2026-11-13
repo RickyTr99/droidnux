@@ -82,6 +82,8 @@ The APK is in `app/build/outputs/apk/debug/`. Only `arm64-v8a` is supported.
   [wlr-protocols](https://gitlab.freedesktop.org/wlroots/wlr-protocols)
 - [libffi](https://sourceware.org/libffi/), MIT
 - [PipeWire](https://pipewire.org/) headers, MIT
+- [docker-systemctl-replacement](https://github.com/gdraheim/docker-systemctl-replacement), EUPL-1.2: `systemctl`
+  without systemd
 - [Debian](https://www.debian.org/) root filesystems from [debuerreotype](https://github.com/debuerreotype/docker-debian-artifacts)
 - [Quicksand](https://github.com/andrew-paglinawan/QuicksandFamily) (OFL) in the banner
 

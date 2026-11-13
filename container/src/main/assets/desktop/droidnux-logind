@@ -203,6 +203,13 @@ HOSTNAME_PROPS = {
     "HardwareModel": ("s", lambda: ""),
 }
 
+# hostnamectl asks systemd for these too, and gives up without them. Nothing else of systemd's
+# manager: its methods are unknown, as from a manager that has none of them.
+SYSTEMD_PROPS = {
+    "Virtualization": ("s", lambda: ""),
+    "Architecture": ("s", lambda: "arm64"),
+}
+
 CAN = ("CanPowerOff CanReboot CanHalt CanSuspend CanHibernate CanHybridSleep CanSuspendThenHibernate "
        "CanRebootToFirmwareSetup CanRebootToBootLoaderMenu").split()
 SLEEP = "Suspend Hibernate HybridSleep SuspendThenHibernate".split()
@@ -227,10 +234,12 @@ NODE = Gio.DBusNodeInfo.new_for_xml("<node>%s</node>" % "".join([
     interface("org.freedesktop.hostname1",
               "SetHostname(sb) SetStaticHostname(sb) SetPrettyHostname(sb) SetIconName(sb) SetChassis(sb) "
               "SetDeployment(sb) SetLocation(sb) Describe()s", "", HOSTNAME_PROPS),
+    interface("org.freedesktop.systemd1.Manager", "", "", SYSTEMD_PROPS),
 ]))
-MANAGER, SESSION_IFACE, SEAT_IFACE, USER_IFACE, TIMEDATE, HOSTNAME = NODE.interfaces
+MANAGER, SESSION_IFACE, SEAT_IFACE, USER_IFACE, TIMEDATE, HOSTNAME, SYSTEMD = NODE.interfaces
 PROPS = {MANAGER.name: MANAGER_PROPS, SESSION_IFACE.name: SESSION_PROPS, SEAT_IFACE.name: SEAT_PROPS,
-         USER_IFACE.name: USER_PROPS, TIMEDATE.name: TIMEDATE_PROPS, HOSTNAME.name: HOSTNAME_PROPS}
+         USER_IFACE.name: USER_PROPS, TIMEDATE.name: TIMEDATE_PROPS, HOSTNAME.name: HOSTNAME_PROPS,
+         SYSTEMD.name: SYSTEMD_PROPS}
 
 bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
 
@@ -370,11 +379,32 @@ OBJECTS = {
     BASE + "/session/self": [SESSION_IFACE], SEAT: [SEAT_IFACE], BASE + "/seat/auto": [SEAT_IFACE],
     BASE + "/seat/self": [SEAT_IFACE], USER_PATH: [USER_IFACE], BASE + "/user/self": [USER_IFACE],
     "/org/freedesktop/timedate1": [TIMEDATE], "/org/freedesktop/hostname1": [HOSTNAME],
+    "/org/freedesktop/systemd1": [SYSTEMD],
 }
 for path, ifaces in OBJECTS.items():
     for iface in ifaces:
         bus.register_object(path, iface, method_call, get_property, None)
-for name in ("org.freedesktop.login1", "org.freedesktop.timedate1", "org.freedesktop.hostname1"):
+
+
+# systemd's tools (loginctl, hostnamectl, timedatectl) ask GetAll("") for every interface at
+# once, which GDBus refuses: answered here, before it, from a filter (its own thread).
+def all_properties(connection, message, incoming):
+    if (not incoming or message.get_message_type() != Gio.DBusMessageType.METHOD_CALL
+            or message.get_interface() != "org.freedesktop.DBus.Properties" or message.get_member() != "GetAll"
+            or message.get_path() not in OBJECTS or message.get_signature() != "s"
+            or message.get_body().unpack()[0] != ""):
+        return message
+    props = {name: GLib.Variant(signature, value())
+             for iface in OBJECTS[message.get_path()] for name, (signature, value) in PROPS[iface.name].items()}
+    reply = message.new_method_reply()
+    reply.set_body(GLib.Variant("(a{sv})", (props,)))
+    connection.send_message(reply, Gio.DBusSendMessageFlags.NONE)
+    return None
+
+
+bus.add_filter(all_properties)
+for name in ("org.freedesktop.login1", "org.freedesktop.timedate1", "org.freedesktop.hostname1",
+             "org.freedesktop.systemd1"):
     Gio.bus_own_name_on_connection(bus, name, Gio.BusNameOwnerFlags.NONE, None, None)
 
 
