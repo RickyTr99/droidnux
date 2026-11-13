@@ -35,6 +35,8 @@
 PW_LOG_TOPIC_STATIC(camera_topic, "mod.droidnux.camera");
 #define PW_LOG_TOPIC_DEFAULT camera_topic
 
+#define DNX_CAMERA_MAX_CAMERAS 16
+
 struct camera {
     struct pw_impl_module* module;
     struct pw_context* context;
@@ -305,21 +307,27 @@ static int create_stream(struct camera* camera, uint32_t nth) {
     if (camera->stream == NULL) return -errno;
     pw_stream_add_listener(camera->stream, &camera->stream_listener, &stream_events, camera);
 
-    uint8_t buffer[8192];
+    /* A format each, a size each and the rates as a list, as V4L2 cameras are offered: libwebrtc
+     * (Firefox, Chromium) reads only a plain format, and drops a camera without one. */
+    static const uint32_t formats[] = {SPA_VIDEO_FORMAT_I420, SPA_VIDEO_FORMAT_NV12};
+    uint8_t buffer[16384];
     struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-    const struct spa_pod* params[DNX_CAMERA_MAX_SIZES];
+    const struct spa_pod* params[2 * DNX_CAMERA_MAX_SIZES];
     uint32_t count = 0;
     for (uint32_t i = 0; i < camera->info.sizes; i++) {
         const dnx_camera_size* s = &camera->info.size[i];
-        params[count++] = spa_pod_builder_add_object(
-            &b, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
-            SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
-            SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
-            SPA_FORMAT_VIDEO_format, SPA_POD_CHOICE_ENUM_Id(3, SPA_VIDEO_FORMAT_NV12, SPA_VIDEO_FORMAT_NV12,
-                                                            SPA_VIDEO_FORMAT_I420),
-            SPA_FORMAT_VIDEO_size, SPA_POD_Rectangle(&SPA_RECTANGLE(s->width, s->height)),
-            SPA_FORMAT_VIDEO_framerate, SPA_POD_CHOICE_RANGE_Fraction(&SPA_FRACTION(s->fps, 1), &SPA_FRACTION(1, 1),
-                                                                      &SPA_FRACTION(s->fps, 1)));
+        uint32_t low = s->fps > 15 ? 15 : s->fps;
+        for (uint32_t f = 0; f < SPA_N_ELEMENTS(formats); f++) {
+            params[count++] = spa_pod_builder_add_object(
+                &b, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat,
+                SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video),
+                SPA_FORMAT_mediaSubtype, SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw),
+                SPA_FORMAT_VIDEO_format, SPA_POD_Id(formats[f]),
+                SPA_FORMAT_VIDEO_size, SPA_POD_Rectangle(&SPA_RECTANGLE(s->width, s->height)),
+                SPA_FORMAT_VIDEO_framerate, SPA_POD_CHOICE_ENUM_Fraction(3, &SPA_FRACTION(s->fps, 1),
+                                                                         &SPA_FRACTION(s->fps, 1),
+                                                                         &SPA_FRACTION(low, 1)));
+        }
     }
     return pw_stream_connect(camera->stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
                              PW_STREAM_FLAG_DRIVER | PW_STREAM_FLAG_MAP_BUFFERS, params, count);
@@ -345,52 +353,63 @@ static const struct pw_impl_module_events module_events = {
     .destroy = module_destroy,
 };
 
-/* A node for camera `index`; how many cameras there are in `count`, and how many face each way in `seen`. */
-static int create_camera(struct pw_impl_module* module, uint32_t index, uint32_t* count, uint32_t seen[3]) {
+/* Camera `index` of the app's camera service, connected; how many cameras there are in `count`. */
+static struct camera* connect_camera(struct pw_impl_module* module, uint32_t index, uint32_t* count) {
     struct camera* camera = calloc(1, sizeof(*camera));
-    int res;
-    if (camera == NULL) return -errno;
+    if (camera == NULL) return NULL;
     camera->module = module;
     camera->context = pw_impl_module_get_context(module);
     camera->index = index;
     camera->sock = -1;
-    if ((res = connect_app(camera)) < 0) goto error;
-    *count = camera->info.count;
-    if (camera->info.sizes == 0) {
-        res = -ENODEV;
-        goto error;
+    if (connect_app(camera) < 0) {
+        camera_destroy(camera);
+        return NULL;
     }
+    *count = camera->info.count;
+    return camera;
+}
+
+/* The node of a connected camera, the `nth` facing its way. */
+static int create_node(struct camera* camera, uint32_t nth) {
+    int res;
     camera->core = pw_context_get_object(camera->context, PW_TYPE_INTERFACE_Core);
     if (camera->core == NULL) {
         camera->core = pw_context_connect(camera->context, NULL, 0);
         camera->do_disconnect = true;
     }
-    if (camera->core == NULL) {
-        res = -errno;
-        goto error;
-    }
-    if ((res = create_stream(camera, ++seen[SPA_MIN(camera->info.facing, 2u)])) < 0) goto error;
+    if (camera->core == NULL) return -errno;
+    if ((res = create_stream(camera, nth)) < 0) return res;
     camera->sock_source = pw_loop_add_io(pw_context_get_main_loop(camera->context), camera->sock, SPA_IO_IN, false,
                                          on_app_message, camera);
-    if (camera->sock_source == NULL) {
-        res = -errno;
-        goto error;
-    }
-    pw_impl_module_add_listener(module, &camera->module_listener, &module_events, camera);
+    if (camera->sock_source == NULL) return -errno;
+    pw_impl_module_add_listener(camera->module, &camera->module_listener, &module_events, camera);
     pw_log_info("camera %u: %s, %u sizes up to %ux%u", camera->index,
                 camera->info.facing == DNX_CAMERA_FRONT ? "front" : "back", camera->info.sizes,
                 camera->info.size[0].width, camera->info.size[0].height);
     return 0;
-error:
-    camera_destroy(camera);
-    return res;
 }
 
-/* Called by module-droidnux's init: a node for each of the device's cameras. */
+/* Called by module-droidnux's init: a node for each of the device's cameras. The front ones first:
+ * browsers offer the first camera, and a video call wants the one facing the user. */
 int dnx_camera_nodes(struct pw_impl_module* module) {
-    uint32_t count = 0, seen[3] = {0, 0, 0};
+    struct camera* cameras[DNX_CAMERA_MAX_CAMERAS];
+    uint32_t count = 0, made = 0, seen[3] = {0, 0, 0};
     PW_LOG_TOPIC_INIT(camera_topic);
-    int res = create_camera(module, 0, &count, seen);
-    for (uint32_t i = 1; i < count; i++) create_camera(module, i, &count, seen);
-    return count ? 0 : res;
+    cameras[0] = connect_camera(module, 0, &count);
+    if (cameras[0] == NULL) return -ENODEV;
+    count = SPA_MIN(count, (uint32_t) DNX_CAMERA_MAX_CAMERAS);
+    for (uint32_t i = 1; i < count; i++) cameras[i] = connect_camera(module, i, &count);
+    for (int front = 1; front >= 0; front--) {
+        for (uint32_t i = 0; i < count; i++) {
+            struct camera* camera = cameras[i];
+            if (camera == NULL || (camera->info.facing == DNX_CAMERA_FRONT) != front) continue;
+            cameras[i] = NULL;
+            if (camera->info.sizes > 0 && create_node(camera, ++seen[SPA_MIN(camera->info.facing, 2u)]) == 0) {
+                made++;
+            } else {
+                camera_destroy(camera);
+            }
+        }
+    }
+    return made ? 0 : -ENODEV;
 }
