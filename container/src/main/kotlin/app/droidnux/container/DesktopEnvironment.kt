@@ -112,6 +112,9 @@ object DesktopEnvironment {
     private const val SYSTEMCTL_SCRIPT = "$GUEST_LIB_DIR/droidnux-systemctl"
     private const val SYSTEMCTL_PY = "$GUEST_LIB_DIR/systemctl3.py"
 
+    /** journalctl -u from the services' logs of systemctl.py, in place of the distro's. */
+    private const val JOURNALCTL_SCRIPT = "$GUEST_LIB_DIR/droidnux-journalctl"
+
     /**
      * The document portal without FUSE (droidnux-documents), started on demand by the session bus: its
      * directory comes before /usr/share's, so it takes the place of xdg-document-portal.
@@ -530,6 +533,7 @@ object DesktopEnvironment {
         "droidnux-bwrap" to BWRAP_SCRIPT,
         "droidnux-systemctl" to SYSTEMCTL_SCRIPT,
         "systemctl3.py" to SYSTEMCTL_PY,
+        "droidnux-journalctl" to JOURNALCTL_SCRIPT,
         "droidnux-documents" to DOCUMENTS_SCRIPT,
         "droidnux-flatpak-gl" to FLATPAK_GL_SCRIPT,
         "droidnux-wallpaper" to WALLPAPER_SCRIPT,
@@ -572,6 +576,7 @@ object DesktopEnvironment {
         "BWRAP_SCRIPT" to BWRAP_SCRIPT,
         "SYSTEMCTL_PY" to SYSTEMCTL_PY,
         "SYSTEMCTL_SCRIPT" to SYSTEMCTL_SCRIPT,
+        "JOURNALCTL_SCRIPT" to JOURNALCTL_SCRIPT,
         "DESKTOP_USER" to DESKTOP_USER,
         "DISPLAY" to "$DISPLAY",
         // The extension's builds, one "<branch> <url> <sha256>" line each.

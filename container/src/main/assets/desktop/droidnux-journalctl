@@ -1,0 +1,62 @@
+#!/usr/bin/python3
+# Written by DroidNux: journalctl -u without systemd-journald, which Android
+# cannot run. A service's output is in its log from systemctl (@SYSTEMCTL_PY@);
+# without a unit, the distro's journalctl (moved aside to journalctl.distrib).
+import os
+import re
+import sys
+
+args = sys.argv[1:]
+VALUE = {"-u", "--unit", "--user-unit", "-n", "--lines", "-S", "--since", "-U", "--until", "-o", "--output",
+         "-p", "--priority", "-g", "--grep", "-t", "--identifier", "-c", "--cursor", "--after-cursor", "-D",
+         "--directory", "--file", "--facility", "-M", "--machine", "-i"}
+units, lines, follow, user, pager = [], None, False, False, True
+i = 0
+while i < len(args):
+    arg, value = args[i], None
+    if arg.startswith("--"):
+        name, _, value = arg.partition("=")
+        if not value and name in VALUE and i + 1 < len(args):
+            i += 1
+            value = args[i]
+        if name in ("--unit", "--user-unit"):
+            units.append(value)
+            user = user or name == "--user-unit"
+        elif name == "--lines":
+            lines = value
+        elif name == "--follow":
+            follow = True
+        elif name == "--user":
+            user = True
+        elif name == "--no-pager":
+            pager = False
+        elif name == "--pager-end":
+            lines = lines or "1000"
+        elif name == "--boot" and not value and i + 1 < len(args) and re.fullmatch(r"-?\d+", args[i + 1]):
+            i += 1
+    elif arg.startswith("-") and len(arg) > 1:
+        for at, flag in enumerate(arg[1:], 2):
+            if "-" + flag in VALUE:  # the rest of the group, or the next argument
+                value = arg[at:]
+                if not value and i + 1 < len(args):
+                    i += 1
+                    value = args[i]
+                if flag == "u":
+                    units.append(value)
+                elif flag == "n":
+                    lines = value
+                break
+            if flag == "f":
+                follow = True
+            elif flag == "e":
+                lines = lines or "1000"
+            elif flag == "b" and at == len(arg) and i + 1 < len(args) and re.fullmatch(r"-?\d+", args[i + 1]):
+                i += 1
+    i += 1
+
+if not units:
+    os.execv("/usr/bin/journalctl.distrib", ["journalctl"] + args)
+command = ["python3", "@SYSTEMCTL_PY@"] + (["--user"] if user else []) + ["log"]
+command += (["-n", lines] if lines and lines != "all" else []) + (["-f"] if follow else [])
+command += ([] if pager else ["--no-pager"]) + units
+os.execvp(command[0], command)

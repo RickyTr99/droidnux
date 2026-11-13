@@ -3,8 +3,12 @@
 # https://github.com/gdraheim/docker-systemctl-replacement. Changed for DroidNux: a negated Condition*
 # whose path is missing is no error, only numbered /proc entries are read for the boot time
 # (Android refuses /proc/net/stat), a bare command is looked up in systemd's search path, and
-# ConditionFirstBoot is checked, units other than targets may be WantedBy, and an unmet Condition*
-# skips a unit without an error. Each change is marked "DroidNux:".
+# ConditionFirstBoot is checked, units other than targets and any target with a unit file may be
+# WantedBy, and an unmet Condition* skips a unit without an error. A socket unit is systemd's socket
+# activation: a listener process holds its sockets and starts the service with them (LISTEN_FDS).
+# $$ in a command is a $, show has --value, preset enables a unit no preset names, --root=/ is no
+# root, default reaches sockets.target, and an init script with a unit file is not started. Each change
+# is marked "DroidNux:".
 # pylint: disable=too-many-lines,line-too-long,too-many-branches,too-many-statements,too-many-public-methods,too-many-nested-blocks,too-many-locals,too-many-return-statements,too-many-instance-attributes,too-few-public-methods,too-many-arguments,too-many-positional-arguments,multiple-statements
 # pylint: disable=missing-function-docstring,missing-class-docstring,consider-using-f-string,consider-using-ternary,import-outside-toplevel
 # pylint: disable=no-else-return,no-else-break,unspecified-encoding,unnecessary-lambda,unnecessary-comprehension,use-yield-from,superfluous-parens
@@ -88,6 +92,7 @@ _only_what: List[str] = []
 _only_type: List[str] = []
 _only_state: List[str] = []
 _only_property: List[str] = []
+_value = False # DroidNux: show --value
 LOG_BUFSIZE = 8192
 FORCE_IPV4 = False
 FORCE_IPV6 = False
@@ -604,7 +609,7 @@ def _pid_exists(pid: int) -> bool:
         if err.errno == errno.ESRCH:
             # ESRCH == No such process
             return False
-        elif err.errno == errno.EPERM:
+        elif err.errno in (errno.EPERM, errno.EACCES): # DroidNux: SELinux denies with EACCES
             # EPERM clearly means there's a process to deny access to
             return True
         else:
@@ -1743,6 +1748,8 @@ class SystemctlUnitFiles:
         while requires in target_requires:
             targets = [requires] + targets
             requires = target_requires[requires]
+        if requires in target_requires.values(): # DroidNux: the end of the chain too (sockets.target)
+            targets = [requires] + targets
         logg.debug("the [%s] requires %s", module, targets)
         return targets
     def get_InstallTargets(self, conf: SystemctlConf, section: str = Install, default: Optional[str] = None) -> List[str]:
@@ -2369,8 +2376,9 @@ class SystemctlUnitFiles:
         unit = conf.name()
         targets = wordlist(conf.getlist(section, "WantedBy", []))
         for target in targets:
-            # DroidNux: units other than targets want units too (sshd-keygen.service: ssh.service).
-            if target not in target_requires and target not in target_alias and target.endswith(".target"):
+            # DroidNux: units other than targets want units too (sshd-keygen.service: ssh.service),
+            # and any target with a unit file (sockets.target, printer.target) is known.
+            if target not in target_requires and target not in target_alias and target.endswith(".target") and not self.load_conf(target):
                 logg.error("%s: [Install] WantedBy unknown: %s", unit, target)
                 logg.info(" must be in %s", list(target_requires.keys()))
                 errors += 1
@@ -2561,7 +2569,7 @@ class SystemctlUnitFiles:
         return newcmd
     def split_cmd_and_expand(self, cmd: str, env: Dict[str, str], conf: SystemctlConf) -> List[str]:
         """ expand ExecCmd statements including %i and $MAINPID """
-        cmd2 = cmd.replace("\\\n", "")
+        cmd2 = cmd.replace("\\\n", "").replace("$$", "\0") # DroidNux: $$ is a $, as with systemd
         # according to documentation, when bar="one two" then the expansion
         # of '$bar' is ["one","two"] and '${bar}' becomes ["one two"]. We
         # tackle that by expand $bar before shlex, and the rest thereafter.
@@ -2581,7 +2589,7 @@ class SystemctlUnitFiles:
         newcmd: List[str] = []
         for part in shlex.split(cmd3):
             part2 = self.expand_special(part, conf)
-            newcmd += [re.sub(r"[$][{](\w+)[}]", lambda m: get_env2(m), part2)] # type: ignore[arg-type]
+            newcmd += [re.sub(r"[$][{](\w+)[}]", lambda m: get_env2(m), part2).replace("\0", "$")] # type: ignore[arg-type]
         return newcmd
 
 class SystemctlStandardInpOutErr(NamedTuple):
@@ -2704,7 +2712,7 @@ class SystemctlJournal:
             return os.execvp(cmd_args[0], cmd_args) # pragma: no cover
         elif lines:
             tail_cmd = get_exist_path(self.tail_cmds)
-            logg.fatal("%s => %s", self.tail_cmds, tail_cmd)
+            logg.debug("%s => %s", self.tail_cmds, tail_cmd) # DroidNux: not fatal, journalctl -n shows it
             if tail_cmd is None:
                 print("tail command not found")
                 return 1
@@ -2939,6 +2947,8 @@ class Systemctl:
         self._restarted_unit = {}
         self._restart_failed_units = {}
         self._sockets = {}
+        self._listen_fds: List[int] = [] # DroidNux: socket activation
+        self._listen_names: List[str] = []
         self.loop_sleep = max(1, InitLoopSleep // INIT_MODE) if INIT_MODE else InitLoopSleep
         self.loop_lock = threading.Lock()
         self.unitfiles = SystemctlUnitFiles(self._root)
@@ -3959,6 +3969,9 @@ class Systemctl:
                 logg.info("%s was skipped due to an unmet condition (%s)", conf.name(), " and ".join(missing))
                 return OK_CONDITION_FAILURE
         if conf.name().endswith(".service"):
+            started = self.start_through_socket(conf) # DroidNux
+            if started is not None:
+                return started
             return self.do_start_service_from(conf)
         elif conf.name().endswith(".socket"):
             return self.do_start_socket_from(conf)
@@ -4011,7 +4024,7 @@ class Systemctl:
                 forkpid = os.fork()
                 if not forkpid: # pragma: no cover
                     os.setsid() # detach child process from parent
-                    self.execve_from(conf, newcmd, env)
+                    self.execve_from(conf, newcmd, self.listen_env(env)) # DroidNux: the sockets
                 run = subprocess_waitpid(forkpid)
                 if run.returncode and exe.check:
                     returncode = run.returncode
@@ -4045,7 +4058,7 @@ class Systemctl:
                 forkpid = os.fork()
                 if not forkpid: # pragma: no cover
                     os.setsid() # detach child process from parent
-                    self.execve_from(conf, newcmd, env)
+                    self.execve_from(conf, newcmd, self.listen_env(env)) # DroidNux: the sockets
                 self.write_status_from(conf, MainPID=forkpid)
                 logg.info("%s started PID %s", runs, forkpid)
                 env["MAINPID"] = strE(forkpid)
@@ -4088,7 +4101,7 @@ class Systemctl:
                 forkpid = os.fork()
                 if not forkpid: # pragma: no cover
                     os.setsid() # detach child process from parent
-                    self.execve_from(conf, newcmd, env)
+                    self.execve_from(conf, newcmd, self.listen_env(env)) # DroidNux: the sockets
                 # via NOTIFY # self.write_status_from(conf, MainPID=forkpid)
                 logg.info("%s started PID %s", runs, forkpid)
                 mainpid = forkpid
@@ -4131,7 +4144,7 @@ class Systemctl:
                 forkpid = os.fork()
                 if not forkpid: # pragma: no cover
                     os.setsid() # detach child process from parent
-                    self.execve_from(conf, newcmd, env)
+                    self.execve_from(conf, newcmd, self.listen_env(env)) # DroidNux: the sockets
                 logg.info("%s started PID %s", runs, forkpid)
                 run = subprocess_waitpid(forkpid)
                 if run.returncode and exe.check:
@@ -4279,6 +4292,8 @@ class Systemctl:
             logg.debug("unit could not be loaded (%s)", service_unit)
             logg.error("Unit %s not found.", service_unit)
             return False
+        if self.active_pid_from(conf): # DroidNux: listening already
+            return True
         env = self.unitfiles.get_env(conf)
         if not self._quiet:
             okee = self.unitfiles.exec_check(conf, env, Socket, "Exec") # all...
@@ -4301,25 +4316,21 @@ class Systemctl:
                     return False
         # service_directories = self.create_service_directories(conf)
         # env.update(service_directories)
-        listening=False
-        if not accept:
-            sock = self.create_socket(conf)
-            if sock and TestListen:
-                listening=True
-                self._sockets[conf.name()] = SystemctlSocket(conf, sock)
-                service_result = "success"
-                state = sock and "active" or "failed"
-                self.write_status_from(conf, AS=state)
-        if not listening:
-            # we do not listen but have the service started right away
-            done = self.do_start_service_from(service_conf)
-            service_result = done and "success" or "failed"
-            if not self.is_active_from(service_conf):
-                service_result = "failed"
-            state = service_result
-            if service_result in ["success"]:
-                state = "active"
-            self.write_status_from(conf, AS=state)
+        # DroidNux: a listener process holds the sockets, as systemd does (systemctl.py's
+        # init-loop would, as PID 1 only), and starts the service on the first connection
+        socks = self.create_sockets(conf)
+        if socks:
+            listener = os.fork()
+            if not listener: # pragma: no cover
+                os.setsid()
+                self.listen_loop(conf, service_unit, socks)
+            for sock in socks:
+                sock.close()
+            self.write_status_from(conf, AS=None, MainPID=listener)
+            service_result = "success"
+        else:
+            service_result = "failed"
+            self.write_status_from(conf, AS=service_result)
         # POST sequence
         if service_result in ["failed"]:
             # according to the systemd documentation, a failed start-sequence
@@ -4348,7 +4359,112 @@ class Systemctl:
             return True
     def socketlist(self) -> List[SystemctlSocket]:
         return list(self._sockets.values())
-    def create_socket(self, conf: SystemctlConf) -> Optional[socket.socket]:
+    def create_sockets(self, conf: SystemctlConf) -> List[socket.socket]:
+        """ DroidNux: every Listen line of the unit, listening """
+        socks: List[socket.socket] = []
+        for key, dgram in [("ListenStream", False), ("ListenDatagram", True)]:
+            for address in conf.getlist(Socket, key, []):
+                sock = self.create_socket(conf, self.unitfiles.expand_special(address, conf), dgram)
+                if not sock:
+                    for made in socks:
+                        made.close()
+                    return []
+                if not dgram:
+                    sock.listen(int(conf.get(Socket, "Backlog", "4096")))
+                socks.append(sock)
+        if not socks:
+            logg.error("%s: no sockets to listen on", conf.name())
+        return socks
+    def listen_loop(self, conf: SystemctlConf, service_unit: str, socks: List[socket.socket]) -> NoReturn:
+        """ DroidNux: a socket unit's listener, until it is stopped. With Accept=no it starts the
+            service with the sockets and listens again once the service is gone; with Accept=yes
+            it starts an instance for each connection, as inetd does. """
+        self.dup2_journal_log(conf)
+        fds = [sock.fileno() for sock in socks]
+        for name in os.listdir("/proc/self/fd"): # what the caller (apt, a terminal) left open
+            if int(name) > 2 and int(name) not in fds:
+                try: os.close(int(name))
+                except OSError: pass
+        wake, wake_write = os.pipe()
+        os.set_blocking(wake_write, False)
+        signal.set_wakeup_fd(wake_write)
+        signal.signal(signal.SIGCHLD, lambda *_: None)
+        signal.signal(signal.SIGUSR1, lambda *_: None) # a start of the service (start_through_socket)
+        accept = conf.getbool(Socket, "Accept", "no")
+        names = [conf.get(Socket, "FileDescriptorName", conf.name())] * len(fds)
+        instances: Dict[int, SystemctlConf] = {}
+        def reap() -> None:
+            while True:
+                try:
+                    pid, _ = os.waitpid(-1, os.WNOHANG)
+                except ChildProcessError:
+                    return
+                if not pid:
+                    return
+                if pid in instances:
+                    self.clean_status_from(instances.pop(pid))
+        count = failures = 0
+        while True:
+            ready = select.select(fds + [wake], [], [])[0]
+            requested = wake in ready and int(signal.SIGUSR1) in os.read(wake, 256)
+            reap()
+            if accept:
+                for sock in socks:
+                    if sock.fileno() not in ready:
+                        continue
+                    conn, _ = sock.accept()
+                    count += 1
+                    instance = self.unitfiles.load_conf(service_unit.replace("@.service", "@%s.service" % count))
+                    self._listen_fds, self._listen_names = [conn.fileno()], ["connection"]
+                    if instance:
+                        self.do_start_service_from(instance)
+                        pid = self.is_active_pid(self.read_mainpid_from(instance))
+                        if pid:
+                            instances[pid] = instance
+                        else: # done already
+                            self.clean_status_from(instance)
+                    conn.close()
+            elif requested or set(fds) & set(ready):
+                self._listen_fds, self._listen_names = fds, names
+                service = self.unitfiles.load_conf(service_unit)
+                if service and self.do_start_service_from(service) and self.is_active_from(service):
+                    failures = 0
+                    while self.is_active_from(service): # the service has the sockets
+                        if select.select([wake], [], [], 1)[0]:
+                            os.read(wake, 256)
+                        reap()
+                        service.status = None
+                else:
+                    failures += 1
+                    if failures >= 5: # systemd's trigger limit, roughly
+                        logg.error("%s: %s fails to start, not listening any more", conf.name(), service_unit)
+                        sys.exit(1)
+                    time.sleep(1)
+    def start_through_socket(self, conf: SystemctlConf) -> Optional[bool]:
+        """ DroidNux: a service whose socket unit listens starts from its listener, with the sockets """
+        if self._listen_fds:
+            return None
+        names = [path_replace_extension(conf.name(), ".service", ".socket")]
+        for item in conf.getlist(Service, "Sockets", []):
+            names += item.split()
+        for name in names:
+            sconf = self.unitfiles.load_conf(name)
+            if not sconf or sconf.getbool(Socket, "Accept", "no") or self.get_socket_service_from(sconf) != conf.name():
+                continue
+            listener = self.active_pid_from(sconf)
+            if not listener:
+                continue
+            os.kill(listener, signal.SIGUSR1)
+            deadline = time.monotonic() + self.unitfiles.get_TimeoutStartSec(conf)
+            while time.monotonic() < deadline and self.active_pid_from(sconf):
+                conf.status = None
+                if self.is_active_from(conf):
+                    return True
+                time.sleep(MinimumYield)
+            conf.status = None
+            return self.is_active_from(conf)
+        return None
+    def create_socket(self, conf: SystemctlConf, address: str, dgram: bool) -> Optional[socket.socket]:
         unsupported = ["ListenUSBFunction", "ListenMessageQueue", "ListenNetlink"]
         unsupported += ["ListenSpecial", "ListenFIFO", "ListenSequentialPacket"]
         for item in unsupported:
@@ -4356,33 +4472,30 @@ class Systemctl:
                 logg.warning("%s: %s sockets are not implemented", conf.name(), item)
                 self.error |= NOT_OK
                 return None
-        vListenDatagram = conf.get(Socket, "ListenDatagram", "")
-        vListenStream = conf.get(Socket, "ListenStream", "")
-        address = vListenStream or vListenDatagram
         m = re.match(r"(/.*)", address)
         if m:
             path = m.group(1)
-            sock = self.create_unix_socket(conf, path, not vListenStream)
+            sock = self.create_unix_socket(conf, path, dgram)
             self.set_status_from(conf, "path", path)
             return sock
         m = re.match(r"(\d+[.]\d*[.]\d*[.]\d+):(\d+)", address)
         if m:
             addr, port = m.group(1), m.group(2)
-            sock = self.create_port_ipv4_socket(conf, addr, port, not vListenStream)
+            sock = self.create_port_ipv4_socket(conf, addr, port, dgram)
             self.set_status_from(conf, "port", port)
             self.set_status_from(conf, "addr", addr)
             return sock
         m = re.match(r"\[([0-9a-fA-F:]*)\]:(\d+)", address)
         if m:
             addr, port = m.group(1), m.group(2)
-            sock = self.create_port_ipv6_socket(conf, addr, port, not vListenStream)
+            sock = self.create_port_ipv6_socket(conf, addr, port, dgram)
             self.set_status_from(conf, "port", port)
             self.set_status_from(conf, "addr", addr)
             return sock
         m = re.match(r"(\d+)$", address)
         if m:
             port = m.group(1)
-            sock = self.create_port_socket(conf, port, not vListenStream)
+            sock = self.create_port_socket(conf, port, dgram)
             self.set_status_from(conf, "port", port)
             return sock
         if re.match("@.*", address):
@@ -4421,6 +4534,7 @@ class Systemctl:
         inet = dgram and socket.SOCK_DGRAM or socket.SOCK_STREAM
         sock = socket.socket(socket.AF_INET, inet)
         try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # DroidNux: as systemd
             sock.bind(('', int(port)))
             logg.info("%s: bound socket at %s %s:%s", conf.name(), strINET(inet), ALL, port)
         except OSError as e:
@@ -4432,6 +4546,7 @@ class Systemctl:
         inet = dgram and socket.SOCK_DGRAM or socket.SOCK_STREAM
         sock = socket.socket(socket.AF_INET, inet)
         try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # DroidNux: as systemd
             sock.bind((addr, int(port)))
             logg.info("%s: bound socket at %s %s:%s", conf.name(), strINET(inet), addr, port)
         except OSError as e:
@@ -4443,6 +4558,7 @@ class Systemctl:
         inet = dgram and socket.SOCK_DGRAM or socket.SOCK_STREAM
         sock = socket.socket(socket.AF_INET6, inet)
         try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # DroidNux: as systemd
             sock.bind((addr, int(port)))
             logg.info("%s: bound socket at %s [%s]:%s", conf.name(), strINET(inet), addr, port)
         except OSError as e:
@@ -4481,11 +4597,30 @@ class Systemctl:
             os.dup2(std.out.fileno(), sys.stdout.fileno())
             os.dup2(std.err.fileno(), sys.stderr.fileno())
         # implicit: std.inp.close(), std.out.close(), std.err.close()
+    def listen_env(self, env: Dict[str, str]) -> Dict[str, str]:
+        """ DroidNux: socket activation, the listener's sockets as fd 3... of ExecStart """
+        if not self._listen_fds:
+            return env
+        count = len(self._listen_fds)
+        moved = [fcntl.fcntl(fd, fcntl.F_DUPFD, 3 + count) for fd in self._listen_fds]
+        for index, fd in enumerate(moved):
+            os.dup2(fd, 3 + index) # inheritable
+            os.close(fd)
+        return dict(env, LISTEN_FDS=str(count), LISTEN_PID=str(os.getpid()),
+                    LISTEN_FDNAMES=":".join(self._listen_names))
     def execve_from(self, conf: SystemctlConf, cmd: List[str], env: Dict[str, str]) -> NoReturn:
         """ this code is commonly run in a child process // returns exit-code"""
         runs = conf.get(Service, "Type", "simple").lower()
         # logg.debug("%s process for %s => %s", runs, strE(conf.name()), strQ(conf.filename()))
         self.dup2_journal_log(conf)
+        if env.get("LISTEN_PID") == str(os.getpid()) and conf.get(Service, "StandardInput", "") == "socket":
+            # DroidNux: inetd's way (Accept=yes), the connection as stdin and stdout
+            os.dup2(3, 0)
+            if conf.get(Service, "StandardOutput", "inherit") in ["inherit", "socket"]:
+                os.dup2(3, 1)
+            std_err = conf.get(Service, "StandardError", "inherit")
+            if std_err in ["inherit", "socket"]:
+                os.dup2(3 if std_err == "socket" else 1, 2)
         cmd_args: List[Union[str, bytes]] = []
         #
         runuser = self.unitfiles.get_User(conf)
@@ -4712,13 +4847,17 @@ class Systemctl:
             okee = self.unitfiles.exec_check(conf, env, Socket, "ExecStop")
             if not okee and _no_reload:
                 return False
+        listener = self.active_pid_from(conf) # DroidNux: the listener goes first
+        if listener:
+            os.kill(listener, signal.SIGTERM)
+            self.wait_vanished_pid(listener, timeout)
+        self.clean_status_from(conf)
         if not accept:
             # we do not listen but have the service started right away
             done = self.do_stop_service_from(service_conf)
             service_result = done and "success" or "failed"
-        else:
-            done = self.do_stop_service_from(service_conf)
-            service_result = done and "success" or "failed"
+        else: # DroidNux: the connections keep their instances, as with systemd
+            service_result = "success"
         # service_directories = self.env_service_directories(conf)
         # env.update(service_directories)
         # POST sequence
@@ -5230,9 +5369,7 @@ class Systemctl:
         if conf.name().endswith(".service"):
             return self.get_active_service_from(conf)
         elif conf.name().endswith(".socket"):
-            service_unit = self.get_socket_service_from(conf)
-            service_conf = self.unitfiles.load_conf(service_unit)
-            return self.get_active_service_from(service_conf)
+            return self.get_active_service_from(conf) # DroidNux: its listener
         elif conf.name().endswith(".target"):
             return self.get_active_target_from(conf)
         else:
@@ -5522,10 +5659,11 @@ class Systemctl:
         fails = 0
         found = 0
         for unit in units:
-            status = self.unitfiles.get_preset_of_unit(unit)
-            if not status:
-                continue
+            status = self.unitfiles.get_preset_of_unit(unit) or "enable" # DroidNux: systemd's default
             found += 1
+            conf = self.unitfiles.load_conf(unit)
+            if conf and not self.unitfiles.get_InstallTargets(conf): # DroidNux: static, nothing to do
+                continue
             if status.startswith("enable"):
                 if self._preset_mode == "disable":
                     continue
@@ -6053,7 +6191,7 @@ class Systemctl:
                 else:
                     if not value and not self._show_all:
                         continue
-                result += ["%s=%s" % (var, value)]
+                result += [value if _value else "%s=%s" % (var, value)]
         return result
     def show_unit_items(self, unit: str) -> Iterable[Tuple[str, str]]:
         """ __show_unit_items [UNIT] -- show properties of a unit.
@@ -6311,6 +6449,9 @@ class Systemctl:
                     unit = service + ".service"
                     if self._ignored_unit(unit, igno):
                         continue # ignore
+                    conf = self.unitfiles.load_conf(unit)
+                    if conf and strE(conf.filename()).endswith(".service"):
+                        continue # DroidNux: a unit file wins over its init script, enabled or not, as with systemd
                     units.append(unit)
         return units
     def required_target_units(self, target: str, unit_type: str, igno: List[str]) -> List[str]:
@@ -7162,7 +7303,7 @@ def runcommand(command: str, *modules: str) -> int:
 def main() -> int:
     # pylint: disable=global-statement
     global _extra_vars, _force, _full, _log_lines, _no_pager, _no_reload, _no_legend, _no_ask_password
-    global _now, _preset_mode, _quiet, _root, _show_all, _only_state, _only_type, _only_property, _only_what
+    global _now, _preset_mode, _quiet, _root, _value, _show_all, _only_state, _only_type, _only_property, _only_what
     global DefaultMaximumTimeout, INIT_MODE, EXIT_MODE, _user_mode, FORCE_IPV4, FORCE_IPV6
     import optparse # pylint: disable=deprecated-module # not anymore
     _o = optparse.OptionParser("%prog [options] command [name...]", description=__doc__.strip(),
@@ -7181,6 +7322,8 @@ def main() -> int:
                   help="List units of a particual type")
     _o.add_option("--state", metavar="STATE", action="append", dest="only_state", default=_only_state,
                   help="List units with particular LOAD or SUB or ACTIVE state")
+    _o.add_option("--value", action="store_true", default=_value,
+                  help="Show only the values of the properties (DroidNux)")
     _o.add_option("-p", "--property", metavar="NAME", action="append", dest="only_property", default=_only_property,
                   help="Show only properties by this name")
     _o.add_option("--what", metavar="TYPE", action="append", dest="only_what", default=_only_what,
@@ -7267,7 +7410,8 @@ def main() -> int:
     _now = int(opt.now)
     _preset_mode = opt.preset_mode
     _quiet = opt.quiet
-    _root = opt.root
+    _value = opt.value
+    _root = "" if opt.root == "/" else opt.root # DroidNux: deb-systemd-helper passes --root=/
     _show_all = int(opt.show_all)
     _only_state = opt.only_state
     _only_type = opt.only_type

@@ -97,11 +97,13 @@ if [ "$(id -u)" = 0 ] && [ "$1" != --in-dbus ]; then
     fi
     # systemctl without systemd, as for bwrap: apt's scripts start the services they install
     # (deb-systemd-invoke), and loginctl, timedatectl and hostnamectl talk to droidnux-logind,
-    # once /run/systemd/system says systemd runs.
-    if [ "$(readlink /usr/bin/systemctl)" != @SYSTEMCTL_SCRIPT@ ]; then
-        dpkg-divert --local --rename --divert /usr/bin/systemctl.distrib --add /usr/bin/systemctl > /dev/null &&
-            ln -sf @SYSTEMCTL_SCRIPT@ /usr/bin/systemctl
-    fi
+    # once /run/systemd/system says systemd runs. journalctl -u reads the services' logs.
+    for tool in systemctl:@SYSTEMCTL_SCRIPT@ journalctl:@JOURNALCTL_SCRIPT@; do
+        if [ "$(readlink "/usr/bin/${tool%%:*}")" != "${tool#*:}" ]; then
+            dpkg-divert --local --rename --divert "/usr/bin/${tool%%:*}.distrib" --add "/usr/bin/${tool%%:*}" > /dev/null &&
+                ln -sf "${tool#*:}" "/usr/bin/${tool%%:*}"
+        fi
+    done
     mkdir -p /run/systemd/system
     # Docker's images refuse every service start to apt (exit 101): not this one's, unlike Docker's builds.
     grep -qs "For most Docker users" /usr/sbin/policy-rc.d && rm -f /usr/sbin/policy-rc.d
@@ -112,7 +114,9 @@ if [ "$(id -u)" = 0 ] && [ "$1" != --in-dbus ]; then
         @UPOWER_SCRIPT@ &
         @POLKIT_SCRIPT@ &
     fi
-    # The services enabled for multi-user.target (ssh, nginx...), on the system bus, as at boot.
+    # The services enabled for multi-user.target (ssh, nginx...), on the system bus, as at boot:
+    # what systemctl.py knew of the last session's goes, as /run does with systemd.
+    rm -f /run/*.status /run/user/*/run/*.status /tmp/run-*/run/*.status
     systemctl default > /dev/null 2>&1 &
     # Burrow starts in /root: apps launched from Plasma (Konsole) inherit the directory.
     cd "$home" || true
@@ -298,7 +302,7 @@ if [ -n "$DBUS_SYSTEM_BUS_ADDRESS" ]; then
 fi
 # The user's own services (systemctl --user enable): the distro's, enabled for every user
 # (PipeWire, DrKonqi, gpg-agent), are started below or not needed.
-for unit in "$HOME"/.config/systemd/user/default.target.wants/*; do
+for unit in "$HOME"/.config/systemd/user/sockets.target.wants/* "$HOME"/.config/systemd/user/default.target.wants/*; do
     [ -e "$unit" ] && systemctl --user start "${unit##*/}" > /dev/null 2>&1 &
 done
 # Session services without systemd start here, on the session bus.
