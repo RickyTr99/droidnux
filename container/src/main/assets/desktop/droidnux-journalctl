@@ -1,16 +1,27 @@
 #!/usr/bin/python3
-# Written by DroidNux: journalctl -u without systemd-journald, which Android
-# cannot run. A service's output is in its log from systemctl (@SYSTEMCTL_PY@);
-# without a unit, the distro's journalctl (moved aside to journalctl.distrib).
+# Written by DroidNux: journalctl without systemd-journald, which Android
+# cannot run. droidnux-journald writes a service's messages to its log from
+# systemctl (@SYSTEMCTL_PY@), which -u shows, and every message to SYSLOG;
+# upkeep of journal files (--vacuum-size, --update-catalog) goes to the distro's
+# journalctl, moved aside to journalctl.distrib. -p, -b, --since: everything.
 import os
 import re
+import subprocess
 import sys
+
+SYSLOG = "/var/log/syslog"
+UPKEEP = {"--update-catalog", "--list-catalog", "--dump-catalog", "--vacuum-size", "--vacuum-time", "--vacuum-files",
+          "--disk-usage", "--list-boots", "--flush", "--rotate", "--sync", "--verify", "--header", "--setup-keys",
+          "--relinquish-var", "--smart-relinquish-var", "--new-id128", "--field", "-F", "--fields", "-N"}
 
 args = sys.argv[1:]
 VALUE = {"-u", "--unit", "--user-unit", "-n", "--lines", "-S", "--since", "-U", "--until", "-o", "--output",
          "-p", "--priority", "-g", "--grep", "-t", "--identifier", "-c", "--cursor", "--after-cursor", "-D",
          "--directory", "--file", "--facility", "-M", "--machine", "-i"}
 units, lines, follow, user, pager = [], None, False, False, True
+idents, patterns = [], []
+if any(arg.partition("=")[0] in UPKEEP for arg in args):
+    os.execv("/usr/bin/journalctl.distrib", ["journalctl"] + args)
 i = 0
 while i < len(args):
     arg, value = args[i], None
@@ -24,6 +35,10 @@ while i < len(args):
             user = user or name == "--user-unit"
         elif name == "--lines":
             lines = value
+        elif name == "--identifier":
+            idents.append(value)
+        elif name == "--grep":
+            patterns.append(value)
         elif name == "--follow":
             follow = True
         elif name == "--user":
@@ -45,6 +60,10 @@ while i < len(args):
                     units.append(value)
                 elif flag == "n":
                     lines = value
+                elif flag == "t":
+                    idents.append(value)
+                elif flag == "g":
+                    patterns.append(value)
                 break
             if flag == "f":
                 follow = True
@@ -55,7 +74,37 @@ while i < len(args):
     i += 1
 
 if not units:
-    os.execv("/usr/bin/journalctl.distrib", ["journalctl"] + args)
+    def shown(line):
+        ident = line.split(" ", 4)[4].split(":", 1)[0].split("[", 1)[0] if line.count(" ") >= 4 else ""
+        return (not idents or ident in idents) and all(re.search(pattern, line) for pattern in patterns)
+    count = None if lines == "all" else int(lines) if lines else (10 if follow else None)
+    if not os.path.exists(SYSLOG):
+        print("-- No entries --")
+        sys.exit(0)
+    with open(SYSLOG, errors="replace") as log:
+        found = [line for line in log if shown(line)]
+    found = found[-count:] if count else found
+    if follow:
+        sys.stdout.writelines(found)
+        sys.stdout.flush()
+        tail = subprocess.Popen(["tail", "-n", "0", "-F", SYSLOG], stdout=subprocess.PIPE, text=True, errors="replace")
+        try:
+            for line in tail.stdout:
+                if shown(line):
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+        except KeyboardInterrupt:
+            pass
+        sys.exit(0)
+    if pager and sys.stdout.isatty():
+        less = subprocess.Popen(["less", "-FRSX"] + (["+G"] if lines else []), stdin=subprocess.PIPE, text=True)
+        try:
+            less.communicate("".join(found))
+        except (BrokenPipeError, KeyboardInterrupt):
+            pass
+    else:
+        sys.stdout.writelines(found or ["-- No entries --\n"])
+    sys.exit(0)
 command = ["python3", "@SYSTEMCTL_PY@"] + (["--user"] if user else []) + ["log"]
 command += (["-n", lines] if lines and lines != "all" else []) + (["-f"] if follow else [])
 command += ([] if pager else ["--no-pager"]) + units

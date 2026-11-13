@@ -1,14 +1,16 @@
 #! /usr/bin/env python3
 # docker-systemctl-replacement v1.7.1097 (files/docker/systemctl3.py), by Guido U. Draheim, EUPL-1.2:
 # https://github.com/gdraheim/docker-systemctl-replacement. Changed for DroidNux: a negated Condition*
-# whose path is missing is no error, only numbered /proc entries are read for the boot time
-# (Android refuses /proc/net/stat), a bare command is looked up in systemd's search path, and
-# ConditionFirstBoot is checked, units other than targets and any target with a unit file may be
-# WantedBy, and an unmet Condition* skips a unit without an error. A socket unit is systemd's socket
-# activation: a listener process holds its sockets and starts the service with them (LISTEN_FDS).
-# $$ in a command is a $, show has --value, preset enables a unit no preset names, --root=/ is no
-# root, default reaches sockets.target, and an init script with a unit file is not started. Each change
-# is marked "DroidNux:".
+# whose path is missing is no error, only numbered /proc entries are read for the boot time (Android
+# refuses /proc/net/stat), a bare command is looked up in systemd's search path, and ConditionFirstBoot,
+# ConditionVirtualization (a container) and ConditionACPower are checked, units other than targets and any
+# target with a unit file may be WantedBy, and an unmet Condition* skips a unit without an error. A socket
+# unit is systemd's socket activation: a listener process holds its sockets and starts the service with
+# them (LISTEN_FDS). $$ in a command is a $, show has --value, preset enables a unit no preset names,
+# --root=/ is no root, default reaches sockets.target, and an init script with a unit file is not started.
+# A timer unit is a process that starts its unit at each elapse (OnCalendar= from systemd-analyze), and a
+# done oneshot without RemainAfterExit is inactive. The output goes to droidnux-journald when it runs.
+# Each change is marked "DroidNux:".
 # pylint: disable=too-many-lines,line-too-long,too-many-branches,too-many-statements,too-many-public-methods,too-many-nested-blocks,too-many-locals,too-many-return-statements,too-many-instance-attributes,too-few-public-methods,too-many-arguments,too-many-positional-arguments,multiple-statements
 # pylint: disable=missing-function-docstring,missing-class-docstring,consider-using-f-string,consider-using-ternary,import-outside-toplevel
 # pylint: disable=no-else-return,no-else-break,unspecified-encoding,unnecessary-lambda,unnecessary-comprehension,use-yield-from,superfluous-parens
@@ -21,6 +23,9 @@ import threading
 import grp
 import pwd
 import select
+import calendar # DroidNux: timers
+import random
+import subprocess
 import fcntl
 import string
 import datetime
@@ -1152,6 +1157,13 @@ def parse_unit(fullname: str) -> SystemctlUnitName: # -> object(prefix, instance
         component = prefix[has_component+1:]
     return SystemctlUnitName(fullname, name, prefix, instance, suffix, component)
 
+def timespan_seconds(text: str) -> float:
+    """ DroidNux: a systemd time span ("1h 30min", "2d", "90") in seconds """
+    units = {"": 1, "s": 1, "sec": 1, "second": 1, "seconds": 1, "ms": 1e-3, "msec": 1e-3, "us": 1e-6, "usec": 1e-6,
+             "m": 60, "min": 60, "minute": 60, "minutes": 60, "h": 3600, "hr": 3600, "hour": 3600, "hours": 3600,
+             "d": 86400, "day": 86400, "days": 86400, "w": 604800, "week": 604800, "weeks": 604800,
+             "M": 2629800, "month": 2629800, "months": 2629800, "y": 31557600, "year": 31557600, "years": 31557600}
+    return sum(float(number) * units.get(unit, 0) for number, unit in re.findall(r"(\d+(?:\.\d+)?)\s*([a-zA-Z]*)", text))
 def time_to_seconds(text: str, maximum: float) -> float:
     value = 0.
     for part in str(text).split(" "):
@@ -1750,6 +1762,8 @@ class SystemctlUnitFiles:
             requires = target_requires[requires]
         if requires in target_requires.values(): # DroidNux: the end of the chain too (sockets.target)
             targets = [requires] + targets
+        if "basic.target" in targets: # DroidNux: which wants timers.target too
+            targets = ["timers.target"] + targets
         logg.debug("the [%s] requires %s", module, targets)
         return targets
     def get_InstallTargets(self, conf: SystemctlConf, section: str = Install, default: Optional[str] = None) -> List[str]:
@@ -2196,6 +2210,25 @@ class SystemctlUnitFiles:
                 except OSError:
                     first = True
                 if first != (want.strip().lower() in ("yes", "true", "on", "1")):
+                    logg.log(warn, "%s: %s - not %s", unit, spec, want)
+                    problems += [spec]
+        # DroidNux: the distro runs as a container (fstrim is skipped), on AC power when Android's charger is.
+        for spec in ["ConditionVirtualization", "AssertVirtualization"]:
+            warn = logging.ERROR if "Assert" in spec else warning
+            for want in conf.getlist(section, spec):
+                value = want.lstrip("!").strip().lower()
+                if (value in ("yes", "true", "on", "1", "container")) == want.startswith("!"):
+                    logg.log(warn, "%s: %s - not %s", unit, spec, want)
+                    problems += [spec]
+        for spec in ["ConditionACPower", "AssertACPower"]:
+            warn = logging.ERROR if "Assert" in spec else warning
+            for want in conf.getlist(section, spec):
+                try:
+                    with open("@BATTERY_FILE@") as f:
+                        plugged = "plugged=1" in f.read().split()
+                except OSError:
+                    plugged = True
+                if plugged != (want.strip().lower() in ("yes", "true", "on", "1")):
                     logg.log(warn, "%s: %s - not %s", unit, spec, want)
                     problems += [spec]
         import platform
@@ -2756,7 +2789,23 @@ class SystemctlJournal:
         if log_file.startswith("."):
             log_file = "dot."+log_file
         return os.path.join(log_folder, log_file)
+    def open_journal_stream(self, conf: SystemctlConf) -> Optional[TextIO]:
+        """ DroidNux: the output to droidnux-journald, as systemd's to journald (a line each, stamped) """
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.connect("/run/systemd/journal/stdout")
+        except OSError:
+            return None
+        command = (conf.getlist(Service, "ExecStart", []) or [""])[0].lstrip("-@+!:").split()
+        ident = conf.get(Service, "SyslogIdentifier", "") or (command and os.path.basename(command[0])) \
+            or conf.name().rsplit(".", 1)[0]
+        sock.sendall(("%s\n%s\n6\n1\n0\n0\n0\n" % (ident, conf.name())).encode())
+        sock.shutdown(socket.SHUT_RD)
+        return sock.makefile("w")
     def open_log(self, conf: SystemctlConf) -> TextIO:
+        stream = self.open_journal_stream(conf) # DroidNux
+        if stream:
+            return stream
         log_file = self.get_log_from(conf)
         log_folder = os.path.dirname(log_file)
         if not os.path.isdir(log_folder):
@@ -3975,6 +4024,8 @@ class Systemctl:
             return self.do_start_service_from(conf)
         elif conf.name().endswith(".socket"):
             return self.do_start_socket_from(conf)
+        elif conf.name().endswith(".timer"):
+            return self.do_start_timer_from(conf) # DroidNux
         elif conf.name().endswith(".target"):
             return self.do_start_target_from(conf)
         else:
@@ -4036,7 +4087,8 @@ class Systemctl:
                           run.returncode or "OK", run.signal or "")
             if TRUE:
                 self.set_status_from(conf, "ExecMainCode", strE(returncode))
-                active = returncode and "failed" or "active"
+                # DroidNux: done is inactive without RemainAfterExit, as with systemd (a timer runs it again)
+                active = returncode and "failed" or (doRemainAfterExit and "active" or "inactive")
                 self.write_status_from(conf, AS=active)
         elif runs in ["simple", "exec", "idle"]:
             status_file = self.get_status_file_from(conf)
@@ -4464,6 +4516,105 @@ class Systemctl:
             conf.status = None
             return self.is_active_from(conf)
         return None
+    def timer_service(self, conf: SystemctlConf) -> str:
+        """ DroidNux: the unit a timer starts """
+        return conf.get("Timer", "Unit", "") or path_replace_extension(conf.name(), ".timer", ".service")
+    def timer_stamp(self, conf: SystemctlConf) -> str:
+        """ DroidNux: systemd's record of a Persistent= timer's last run """
+        folder = "/var/lib/systemd/timers" if conf.root_mode() else os.path.join(get_CONFIG_HOME(False), "systemd/timers")
+        return os.path.join(folder, "stamp-" + conf.name())
+    def calendar_after(self, spec: str, base: float) -> Optional[float]:
+        """ DroidNux: the next elapse of an OnCalendar= spec after @base, from systemd-analyze """
+        try:
+            out = subprocess.run(["systemd-analyze", "calendar", "--base-time=@%d" % (int(base) + 1), spec],
+                                 capture_output=True, text=True, timeout=30, check=False).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        m = re.search(r"\(in UTC\): \w+ (\d+-\d+-\d+ \d+:\d+:\d+) UTC", out)
+        return calendar.timegm(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) if m else None
+    def do_start_timer_from(self, conf: SystemctlConf) -> bool:
+        """ DroidNux: a process per timer waits for its elapses and starts its unit, as systemd does """
+        if self.active_pid_from(conf):
+            return True
+        if not self.unitfiles.load_conf(self.timer_service(conf)):
+            logg.error("Unit %s not found.", self.timer_service(conf))
+            return False
+        calendars = [spec for spec in conf.getlist("Timer", "OnCalendar", []) if spec]
+        for spec in calendars:
+            if self.calendar_after(spec, time.time()) is None:
+                logg.error("%s: OnCalendar=%s has no next elapse", conf.name(), spec)
+                calendars.remove(spec)
+        timer = os.fork()
+        if not timer: # pragma: no cover
+            os.setsid()
+            self.timer_loop(conf, calendars)
+        self.write_status_from(conf, AS=None, MainPID=timer)
+        return True
+    def timer_loop(self, conf: SystemctlConf, calendars: List[str]) -> NoReturn:
+        """ DroidNux: the boot is the session's start; OnUnitInactiveSec= counts from the last run """
+        self.dup2_journal_log(conf)
+        for name in os.listdir("/proc/self/fd"): # what the caller (apt, a terminal) left open
+            if int(name) > 2:
+                try: os.close(int(name))
+                except OSError: pass
+        start = time.time()
+        once = [start + timespan_seconds(conf.get("Timer", key, ""))
+                for key in ["OnActiveSec", "OnBootSec", "OnStartupSec"] if conf.get("Timer", key, "")]
+        after_run = [timespan_seconds(conf.get("Timer", key, ""))
+                     for key in ["OnUnitActiveSec", "OnUnitInactiveSec"] if conf.get("Timer", key, "")]
+        delay = timespan_seconds(conf.get("Timer", "RandomizedDelaySec", "0"))
+        stamp = self.timer_stamp(conf) if conf.getbool("Timer", "Persistent", "no") else ""
+        last = os.path.getmtime(stamp) if stamp and os.path.exists(stamp) else None
+        while True:
+            elapses = list(once)
+            for spec in calendars:
+                elapse = self.calendar_after(spec, last or start)
+                if elapse is not None:
+                    elapses.append(elapse)
+            elapses += [last + seconds for seconds in after_run] if last else []
+            if not elapses:
+                logg.info("%s: no more elapses", conf.name())
+                sys.exit(0)
+            elapse = min(elapses) + random.uniform(0, delay)
+            self.write_status_from(conf, NextElapse=int(elapse))
+            while time.time() < elapse:
+                time.sleep(min(elapse - time.time(), 60))
+            once = [at for at in once if at > time.time()]
+            last = time.time()
+            if stamp:
+                os.makedirs(os.path.dirname(stamp), exist_ok=True)
+                with open(stamp, "w"):
+                    pass
+            self.write_status_from(conf, LastTrigger=int(last))
+            service = self.unitfiles.load_conf(self.timer_service(conf))
+            if service and not self.is_active_from(service):
+                logg.info("%s: starting %s", conf.name(), service.name())
+                self.do_start_unit_from(service)
+            for _ in range(64): # its processes, once done
+                try:
+                    if os.waitpid(-1, os.WNOHANG)[0] == 0:
+                        break
+                except ChildProcessError:
+                    break
+    def do_stop_timer_from(self, conf: SystemctlConf) -> bool:
+        timer = self.active_pid_from(conf) # DroidNux
+        if timer:
+            os.kill(timer, signal.SIGTERM)
+            self.wait_vanished_pid(timer, 10)
+        self.clean_status_from(conf)
+        return True
+    def list_timers_modules(self, *modules: str) -> List[Tuple[str, str, str, str]]:
+        """ list-timers [PATTERN]... -- the timers that run, their next and last elapse (DroidNux) """
+        result: List[Tuple[str, str, str, str]] = [("NEXT", "LAST", "UNIT", "ACTIVATES")]
+        def when(value: Optional[str]) -> str:
+            return time.strftime("%a %Y-%m-%d %H:%M:%S", time.localtime(int(value))) if value else "-"
+        for unit in self.unitfiles.match_units(to_list(modules) or ["*.timer"]):
+            conf = self.unitfiles.load_conf(unit)
+            if not conf or not unit.endswith(".timer") or not self.active_pid_from(conf):
+                continue
+            result.append((when(self.get_status_from(conf, "NextElapse", "")),
+                           when(self.get_status_from(conf, "LastTrigger", "")), unit, self.timer_service(conf)))
+        return result
     def create_socket(self, conf: SystemctlConf, address: str, dgram: bool) -> Optional[socket.socket]:
         unsupported = ["ListenUSBFunction", "ListenMessageQueue", "ListenNetlink"]
         unsupported += ["ListenSpecial", "ListenFIFO", "ListenSequentialPacket"]
@@ -4701,6 +4852,8 @@ class Systemctl:
             return self.do_stop_service_from(conf)
         elif conf.name().endswith(".socket"):
             return self.do_stop_socket_from(conf)
+        elif conf.name().endswith(".timer"):
+            return self.do_stop_timer_from(conf) # DroidNux
         elif conf.name().endswith(".target"):
             return self.do_stop_target_from(conf)
         else:
@@ -5368,8 +5521,8 @@ class Systemctl:
     def get_active_from(self, conf: SystemctlConf) -> str:
         if conf.name().endswith(".service"):
             return self.get_active_service_from(conf)
-        elif conf.name().endswith(".socket"):
-            return self.get_active_service_from(conf) # DroidNux: its listener
+        elif conf.name().endswith(".socket") or conf.name().endswith(".timer"):
+            return self.get_active_service_from(conf) # DroidNux: its listener or timer process
         elif conf.name().endswith(".target"):
             return self.get_active_target_from(conf)
         else:
@@ -6307,6 +6460,10 @@ class Systemctl:
                 for unit in self.enabled_target_user_local_units(targets, ".socket", igno):
                     if unit not in units:
                         units.append(unit)
+            for targets in targetlist: # DroidNux: and timers
+                for unit in self.enabled_target_user_local_units(targets, ".timer", igno):
+                    if unit not in units:
+                        units.append(unit)
             for targets in targetlist:
                 for unit in self.required_target_units(targets, ".service", igno):
                     if unit not in units:
@@ -6332,6 +6489,10 @@ class Systemctl:
                         units.append(unit)
             for targets in targetlist:
                 for unit in self.enabled_target_installed_system_units(targets, ".socket", igno):
+                    if unit not in units:
+                        units.append(unit)
+            for targets in targetlist: # DroidNux: and timers
+                for unit in self.enabled_target_installed_system_units(targets, ".timer", igno):
                     if unit not in units:
                         units.append(unit)
             for targets in targetlist:
@@ -7205,6 +7366,8 @@ def runcommand(command: str, *modules: str) -> int:
         print_str_list_list(systemctl.list_unit_files_modules(*modules))
     elif command in ["list-units"]:
         print_str_list_list(systemctl.list_units_modules(*modules))
+    elif command in ["list-timers"]: # DroidNux
+        print_str_list_list(systemctl.list_timers_modules(*modules))
     elif command in ["listen"]:
         exitcode = is_not_ok(systemctl.listen_modules(*modules))
     elif command in ["log", "logs"]:

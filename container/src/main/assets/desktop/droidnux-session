@@ -105,6 +105,10 @@ if [ "$(id -u)" = 0 ] && [ "$1" != --in-dbus ]; then
         fi
     done
     mkdir -p /run/systemd/system
+    # The journal, before anything logs (/dev/log is its dev-log, bound by Burrow).
+    rm -f /run/systemd/journal/stdout
+    @JOURNALD_SCRIPT@ &
+    for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S /run/systemd/journal/stdout ] && break; sleep 0.1; done
     # Docker's images refuse every service start to apt (exit 101): not this one's, unlike Docker's builds.
     grep -qs "For most Docker users" /usr/sbin/policy-rc.d && rm -f /usr/sbin/policy-rc.d
     # A system bus with UPower on it, as root: Plasma shows Android's battery.
@@ -302,7 +306,8 @@ if [ -n "$DBUS_SYSTEM_BUS_ADDRESS" ]; then
 fi
 # The user's own services (systemctl --user enable): the distro's, enabled for every user
 # (PipeWire, DrKonqi, gpg-agent), are started below or not needed.
-for unit in "$HOME"/.config/systemd/user/sockets.target.wants/* "$HOME"/.config/systemd/user/default.target.wants/*; do
+for unit in "$HOME"/.config/systemd/user/sockets.target.wants/* "$HOME"/.config/systemd/user/timers.target.wants/* \
+    "$HOME"/.config/systemd/user/default.target.wants/*; do
     [ -e "$unit" ] && systemctl --user start "${unit##*/}" > /dev/null 2>&1 &
 done
 # Session services without systemd start here, on the session bus.

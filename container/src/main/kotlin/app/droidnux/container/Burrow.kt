@@ -44,6 +44,8 @@ class Burrow(context: Context) {
             }
             // Android has no /dev/shm; glibc shm_open() needs one.
             add("-b"); add("${File(rootfs, SHM_DIR).apply { mkdirs() }.absolutePath}:/dev/shm")
+            // syslog()'s socket, as systemd links it: droidnux-journald listens there (Android's /dev has no room).
+            add("-b"); add("${File(rootfs, "run/systemd/journal/dev-log").absolutePath}:/dev/log")
             // The desktop's own cgroup tree (DesktopEnvironment's droidnux-app-groups): Android's is not readable.
             val cgroups = File(rootfs, CGROUP_DIR).apply { mkdirs() }
             File(cgroups, CGROUP_MARKER).createNewFile()
