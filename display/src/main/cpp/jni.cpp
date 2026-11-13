@@ -5,39 +5,11 @@
 #include <string>
 #include <vector>
 
-#include "buffer_spike.h"
 #include "probe.h"
-
-using droidnux::display::BufferSpike;
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_app_droidnux_display_DisplayCore_nativeProbe(JNIEnv* env, jobject /* this */) {
     return env->NewStringUTF(droidnux::display::probe().c_str());
-}
-
-extern "C" JNIEXPORT jlong JNICALL
-Java_app_droidnux_display_BufferSpike_nativeStart(JNIEnv* env, jclass, jobject surface, jint width, jint height,
-                                                 jint buffers) {
-    ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
-    if (window == nullptr) return 0;
-    auto* spike = new BufferSpike(window, width, height, buffers);
-    ANativeWindow_release(window);  // BufferSpike holds its own reference
-    if (!spike->ok()) {
-        env->ThrowNew(env->FindClass("java/lang/IllegalStateException"), spike->error().c_str());
-        delete spike;
-        return 0;
-    }
-    return reinterpret_cast<jlong>(spike);
-}
-
-extern "C" JNIEXPORT jstring JNICALL
-Java_app_droidnux_display_BufferSpike_nativeStats(JNIEnv* env, jclass, jlong handle) {
-    return env->NewStringUTF(reinterpret_cast<BufferSpike*>(handle)->stats().c_str());
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_app_droidnux_display_BufferSpike_nativeStop(JNIEnv*, jclass, jlong handle) {
-    delete reinterpret_cast<BufferSpike*>(handle);
 }
 
 // -- Audio focus -------------------------------------------------------------
@@ -114,6 +86,52 @@ Java_app_droidnux_display_AudioVolume_nativeInit(JNIEnv* env, jclass clazz) {
 extern "C" JNIEXPORT void JNICALL
 Java_app_droidnux_display_AudioVolume_nativeSetVolume(JNIEnv*, jclass, jfloat volume, jboolean mute) {
     dnx_audio_output_set_volume(volume, mute);
+}
+
+// -- Camera ------------------------------------------------------------------
+
+#include "camera_input.h"
+
+namespace {
+jclass cameraClass;
+jmethodID cameraPermissionMethod;
+
+// On a camera's thread, as onAudioPlaying.
+void onCameraPermission() {
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (audioVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (audioVm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+        attached = true;
+    }
+    env->CallStaticVoidMethod(cameraClass, cameraPermissionMethod);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (attached) audioVm->DetachCurrentThread();
+}
+}  // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_CameraInput_nativeInit(JNIEnv* env, jclass clazz) {
+    if (cameraClass != nullptr) return;
+    if (audioVm == nullptr) env->GetJavaVM(&audioVm);
+    cameraClass = static_cast<jclass>(env->NewGlobalRef(clazz));
+    cameraPermissionMethod = env->GetStaticMethodID(clazz, "onPermissionNeeded", "()V");
+    dnx_camera_input_set_permission_callback(onCameraPermission);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_CameraInput_nativeSetRotation(JNIEnv*, jclass, jint degrees) {
+    dnx_camera_input_set_rotation(degrees);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_CameraInput_nativeSetPermission(JNIEnv*, jclass, jboolean granted) {
+    dnx_camera_input_set_permission(granted);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_CameraInput_nativeSetPaused(JNIEnv*, jclass, jboolean paused) {
+    dnx_camera_input_set_paused(paused);
 }
 
 // -- Presenter ---------------------------------------------------------------

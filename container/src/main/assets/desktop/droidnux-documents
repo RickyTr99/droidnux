@@ -1,0 +1,47 @@
+#!/usr/bin/python3
+# Written by DroidNux: org.freedesktop.portal.Documents without its FUSE file system.
+# Every file is "already visible to the app" (an empty document id), so the portals
+# hand the app its real path, which Flatpak's apps see here (filesystems=home).
+# xdg-document-portal exports files through a FUSE file system, which apps cannot
+# mount on Android, and without a portal the file chooser gives them nothing.
+from gi.repository import Gio, GLib
+
+NAME = "org.freedesktop.portal.Documents"
+PATH = "/org/freedesktop/portal/documents"
+NODE = Gio.DBusNodeInfo.new_for_xml("""<node><interface name="org.freedesktop.portal.Documents">
+  <property name="version" type="u" access="read"/>
+  <method name="GetMountPoint"><arg type="ay" direction="out"/></method>
+  <method name="Add"><arg type="h"/><arg type="b"/><arg type="b"/><arg type="s" direction="out"/></method>
+  <method name="AddNamed"><arg type="h"/><arg type="ay"/><arg type="b"/><arg type="b"/>
+    <arg type="s" direction="out"/></method>
+  <method name="AddFull"><arg type="ah"/><arg type="u"/><arg type="s"/><arg type="as"/>
+    <arg type="as" direction="out"/><arg type="a{sv}" direction="out"/></method>
+  <method name="AddNamedFull"><arg type="h"/><arg type="ay"/><arg type="u"/><arg type="s"/><arg type="as"/>
+    <arg type="s" direction="out"/><arg type="a{sv}" direction="out"/></method>
+  <method name="GrantPermissions"><arg type="s"/><arg type="s"/><arg type="as"/></method>
+  <method name="RevokePermissions"><arg type="s"/><arg type="s"/><arg type="as"/></method>
+  <method name="Delete"><arg type="s"/></method>
+</interface></node>""")
+
+
+def call(connection, sender, path, interface, method, parameters, invocation):
+    if method == "GetMountPoint":
+        # No mount point: Flatpak then binds no /run/flatpak/doc into the sandbox.
+        invocation.return_dbus_error("org.freedesktop.DBus.Error.NotSupported", "no FUSE on Android")
+    elif method in ("Add", "AddNamed"):
+        invocation.return_value(GLib.Variant("(s)", ("",)))
+    elif method == "AddFull":
+        invocation.return_value(GLib.Variant("(asa{sv})", ([""] * len(parameters[0]), {})))
+    elif method == "AddNamedFull":
+        invocation.return_value(GLib.Variant("(sa{sv})", ("", {})))
+    else:
+        invocation.return_value(None)
+
+
+def acquired(connection, name):
+    connection.register_object(PATH, NODE.interfaces[0], call, lambda *_: GLib.Variant("u", 4), None)
+
+
+loop = GLib.MainLoop()
+Gio.bus_own_name(Gio.BusType.SESSION, NAME, Gio.BusNameOwnerFlags.NONE, acquired, None, lambda *_: loop.quit())
+loop.run()

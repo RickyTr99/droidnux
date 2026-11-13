@@ -27,11 +27,15 @@ object AppStore {
     private fun flatpakIds(packages: List<String>) =
         packages.filter { it.startsWith(FLATPAK) }.map { it.removePrefix(FLATPAK) }.filter(::isFlatpakId)
 
-    fun isFlatpakId(id: String) = Regex("""[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2,}""").matches(id)
+    // Compiled once: the catalogs and the icons' archive ask for thousands of names.
+    private val FLATPAK_ID = Regex("""[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2,}""")
+    private val PACKAGE_NAME = Regex("[a-z0-9][a-z0-9+.-]+")
+
+    fun isFlatpakId(id: String) = FLATPAK_ID.matches(id)
 
     /**
      * Flathub's apps, system-wide (the store runs as root), Flatpak and the remote set up the
-     * first time; then DroidNux's GL extension for their runtime (DesktopEnvironment's FLATPAK_GL).
+     * first time; then DroidNux's GL extension for their runtime (DesktopEnvironment's droidnux-flatpak-gl).
      */
     private fun flatpakInstallScript(ids: List<String>, glScript: String) = """
         $HEADER
@@ -47,47 +51,71 @@ object AppStore {
         set -e
         flatpak uninstall --system --noninteractive -y ${ids.joinToString(" ")}
         flatpak uninstall --system --noninteractive -y --unused || true
-        # Our GL extension is pinned (FLATPAK_GL): it goes with the last runtime of its branch.
+        # Our GL extension is pinned (droidnux-flatpak-gl): it goes with the last runtime taking its branch (GNOME's and KDE's too).
+        branches=${'$'}(flatpak list --system --runtime --columns=ref | while read -r ref; do flatpak info --system -m "${'$'}ref" 2> /dev/null; done |
+            sed -n '/^\[Extension org.freedesktop.Platform.GL\]/,/^\[/s/^versions *= *//p' | tr ';' '\n')
         for b in ${'$'}(flatpak list --system --runtime --columns=application,branch | awk '${'$'}1 == "org.freedesktop.Platform.GL.droidnux" { print ${'$'}2 }'); do
-            flatpak info --system org.freedesktop.Platform//${'$'}b > /dev/null 2>&1 && continue
+            echo "${'$'}branches" | grep -qx "${'$'}b" && continue
             flatpak uninstall --system --noninteractive -y org.freedesktop.Platform.GL.droidnux//${'$'}b || true
             flatpak pin --system --remove runtime/org.freedesktop.Platform.GL.droidnux/${'$'}(flatpak --default-arch)/${'$'}b || true
         done
         echo $DONE_MARKER
     """.trimIndent()
 
-    /** Vendor repositories, by the package that comes from them. */
-    private val REPOSITORIES = mapOf("code" to "microsoft")
+    /** A package from Debian's backports as a store package: "backports:libreoffice-writer". */
+    const val BACKPORTS = "backports:"
 
     /**
-     * Microsoft's release key (fingerprint BC52 8686 B50D 79E3 39D3 721C EB3E 94AD BE12 29CF),
-     * unarmored, where VS Code's own setup puts it: its postinst then keeps our source.
+     * Apps whose vendor releases an arm64 .deb on GitHub and no apt repository, by package: the
+     * repository whose latest release has it. Unsigned: only HTTPS from the app's own repository.
      */
-    private const val MICROSOFT_KEY =
-        "mQENBFYxWIwBCADAKoZhZlJxGNGWzqV+1OG1xiQeoowKhssGAKvd+buXCGISZJwTLXZqIcIiLP7pqdcZWtE9bSc7yBY2MalDp9Liu0Kek" +
-            "ywQ6VVX1T72NPf5Ev6x6DLV7aVWsCzUAF+eb7DC9fPuFLEdxmOEYoPjzrQ7cCnSV4JQxAqhU4T6OjbvRazGl3agOeizPXmRljMtUUttHQZnRh" +
-            "tlzkmwIrUivbfFPD+fEoHJ1+uIdfOzZX8/oKHKLe2jH632kvsNzJFlROVvGLYAk2WRcLu+RjjggixhwiB+Mu/A8Tf4V6b+YppS44q8EvVrM+Qv" +
-            "Y7LNSOffSO6Slsy9oisGTdfE39nC7pVRABEBAAG0N01pY3Jvc29mdCAoUmVsZWFzZSBzaWduaW5nKSA8Z3Bnc2VjdXJpdHlAbWljcm9zb2Z0" +
-            "LmNvbT6JATQEEwEIAB4FAlYxWIwCGwMGCwkIBwMCAxUIAwMWAgECHgECF4AACgkQ6z6Urb4SKc+P9gf/diY2900wvWEgV7iMgrtGzx79W/Pb" +
-            "wWiOkKoD9sdzhARXWiP8Q5teL/t5TUH6TZ3BENboDjwr705jLLPwuEDtPI9jz4kvdT86JwwG6N8gnWM8Ldi56SdJEtXrzwtlB/Fe6tyfMT1E" +
-            "/PrJfgALUG9MWTIJkc0GhRJoyPpGZ6YWSLGXnk4c0HltYKDFR7q4wtI84cBu4mjZHZbxIO6r8Cci+xxuJkpOTIpr4pdpQKpECM6x5SaT2gVn" +
-            "scbN0PE19KK9nPsBxyK4wW0AvAhed2qldBPTipgzPhqB2gu0jSryil95bKrSmlYJd1Y1XfNHno5Dxfn5JwgySBIdWWvtOI05gw=="
+    private val GITHUB = mapOf(
+        "vesktop" to "Vencord/Vesktop",
+        "bruno" to "usebruno/bruno",
+        "beekeeper-studio" to "beekeeper-studio/beekeeper-studio",
+        "feishin" to "jeffvli/feishin",
+        "youtube-music" to "pear-devs/pear-desktop",
+        "pulsar" to "pulsar-edit/pulsar",
+        "localsend" to "localsend/localsend",
+        "draw.io" to "jgraph/drawio-desktop",
+        "siyuan" to "siyuan-note/siyuan",
+        "mattermost-desktop" to "mattermost/desktop",
+        "tabby-terminal" to "Eugeny/tabby",
+        "motrix" to "agalwood/Motrix",
+        "rustdesk" to "rustdesk/rustdesk",
+        "ferdium" to "ferdium/ferdium-app",
+        "github-desktop" to "shiftkey/desktop",
+    )
 
-    private val MICROSOFT_SETUP = """
-        if [ ! -s /etc/apt/sources.list.d/vscode.sources ]; then
-            apt-get install -y --no-install-recommends ca-certificates
-            echo '$MICROSOFT_KEY' | base64 -d > /usr/share/keyrings/microsoft.gpg
-            printf 'Types: deb\nURIs: https://packages.microsoft.com/repos/code\nSuites: stable\nComponents: main\nArchitectures: arm64\nSigned-By: /usr/share/keyrings/microsoft.gpg\n' \
-                > /etc/apt/sources.list.d/vscode.sources
-            apt-get update
-        fi
+    /** Where a package comes from outside Debian: its vendor's apt repository, or a release on GitHub. */
+    fun isFromVendor(pkg: String) = pkg in VendorRepository.BY_PACKAGE
+    fun isFromGitHub(pkg: String) = pkg in GITHUB
+
+    private fun githubDeb(pkg: String) = "/tmp/droidnux-$pkg.deb"
+
+    /** Downloads the arm64 .deb of [pkg]'s latest release on GitHub to [githubDeb]. */
+    private fun githubFetch(pkg: String, repo: String) = """
+        command -v curl > /dev/null || $APT install -y --no-install-recommends curl ca-certificates || { $APT update && $APT install -y --no-install-recommends curl ca-certificates; }
+        url=${'$'}(curl -fsSL https://api.github.com/repos/$repo/releases/latest | grep -o '"browser_download_url": *"[^"]*"' | cut -d '"' -f 4 | grep -E '(arm64|aarch64|arm-64)[^/]*\.deb${'$'}' | head -n 1)
+        [ -n "${'$'}url" ] || { echo "No arm64 package in the latest release of $repo"; exit 1; }
+        curl -fL --retry 2 -o ${githubDeb(pkg)} "${'$'}url"
     """.trimIndent()
 
     /** Translations installed along with a package, by the package (the language follows). */
     private val TRANSLATIONS = mapOf(
         "libreoffice-writer" to "libreoffice-l10n-",
         "thunderbird" to "thunderbird-l10n-",
+        "firefox" to "firefox-l10n-",
     )
+
+    /** Adds Debian's backports to apt's sources, once: apt takes nothing from them unless asked ("-t"). */
+    private val BACKPORTS_SETUP = """
+        if [ ! -s /etc/apt/sources.list.d/debian-backports.sources ]; then
+            printf '%s\n' 'Types: deb' 'URIs: http://deb.debian.org/debian' 'Suites: ${BackportsCatalog.SUITE}' 'Components: main' 'Signed-By: /usr/share/keyrings/debian-archive-keyring.pgp' \
+                > /etc/apt/sources.list.d/debian-backports.sources
+            apt-get update -o Dir::Etc::sourcelist=sources.list.d/debian-backports.sources -o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0
+        fi
+    """.trimIndent()
 
     // apt waits for a desktop install (or another store job) instead of failing on dpkg's lock.
     private const val APT = "apt-get -o DPkg::Lock::Timeout=600"
@@ -106,24 +134,26 @@ object AppStore {
      */
     fun installScript(packages: List<String>, language: String): String {
         flatpakIds(packages).takeIf { it.isNotEmpty() }?.let { return flatpakInstallScript(it, DesktopEnvironment.FLATPAK_GL_SCRIPT) }
-        val names = packages.filter(::isPackageName)
+        val backports = packages.any { it.startsWith(BACKPORTS) }
+        val names = packages.map { it.removePrefix(BACKPORTS) }.filter(::isPackageName)
         require(names.isNotEmpty()) { "no package to install" }
         val lang = language.takeIf { Regex("[a-z]{2,3}").matches(it) } ?: "en"
-        val setup = names.mapNotNull { REPOSITORIES[it] }.distinct().joinToString("\n") {
-            when (it) {
-                "microsoft" -> MICROSOFT_SETUP
-                else -> error(it)
-            }
-        }
+        val setup = (names.mapNotNull { VendorRepository.BY_PACKAGE[it]?.setupScript() } + listOfNotNull(BACKPORTS_SETUP.takeIf { backports }))
+            .distinct().joinToString("\n")
+        val fetch = names.filter { it in GITHUB }.joinToString("\n") { githubFetch(it, GITHUB.getValue(it)) }
         val translations = names.mapNotNull { TRANSLATIONS[it] }.distinct().joinToString(" ") { "$it$lang" }
-        val list = names.joinToString(" ")
+        // A GitHub app is its downloaded file; "-t" takes the packages (and what they need) from backports.
+        val list = names.joinToString(" ") { if (it in GITHUB) githubDeb(it) else it }
+        val install = "$APT install -y --no-install-recommends" + if (backports) " -t ${BackportsCatalog.SUITE}" else ""
         return """
         $HEADER
         $setup
+        $fetch
         # Lists from the desktop install can be old: the mirror no longer has those versions.
-        $APT install -y --no-install-recommends $list || { $APT update && $APT install -y --no-install-recommends $list; }
+        $install $list || { $APT update && $install $list; }
+        rm -f /tmp/droidnux-*.deb
         for t in $translations; do
-            if apt-cache show ${'$'}t > /dev/null 2>&1; then $APT install -y --no-install-recommends ${'$'}t; fi
+            if apt-cache show ${'$'}t > /dev/null 2>&1; then $install ${'$'}t; fi
         done
         $APT clean
         echo $DONE_MARKER
@@ -136,7 +166,7 @@ object AppStore {
      */
     fun removeScript(packages: List<String>, keep: List<String>): String {
         flatpakIds(packages).takeIf { it.isNotEmpty() }?.let { return flatpakRemoveScript(it) }
-        val list = packages.filter(::isPackageName).joinToString(" ")
+        val list = packages.map { it.removePrefix(BACKPORTS) }.filter(::isPackageName).joinToString(" ")
         require(list.isNotEmpty()) { "no package to remove" }
         return """
         $HEADER
@@ -145,6 +175,115 @@ object AppStore {
         done
         $APT remove -y $list
         $APT autoremove -y
+        echo $DONE_MARKER
+        """.trimIndent()
+    }
+
+    /**
+     * A newer version of an installed package: a Debian one, or a Flathub app or runtime as [FLATPAK]<id>
+     * ([from] empty when apt brings it in new); [bytes] to download.
+     */
+    data class Update(val pkg: String, val from: String, val to: String, val bytes: Long)
+
+    /**
+     * Holds the packages the Plasma component replaces libraries of while they are the versions it was
+     * built from: a newer KWin from Debian would turn its patches off (the session checks the versions).
+     */
+    private val HOLD_PLASMA = """
+        v=${DesktopEnvironment.PLASMA_PREFIX}/droidnux-plasma.version
+        if [ -f "${'$'}v" ]; then
+            sed 1d "${'$'}v" | while read -r p ver; do
+                if [ "${'$'}(dpkg-query -W -f '${'$'}{Version}' "${'$'}p" 2> /dev/null)" = "${'$'}ver" ]; then apt-mark hold "${'$'}p"; else apt-mark unhold "${'$'}p"; fi
+            done > /dev/null
+        fi
+    """.trimIndent()
+
+    // apt upgrades without new packages' prompts and keeps the user's changed config files.
+    private const val KEEP_CONFIG = "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+    private const val UPGRADE = "$APT upgrade -y --with-new-pkgs $KEEP_CONFIG"
+    private const val UPGRADE_ONLY = "$APT install -y --only-upgrade $KEEP_CONFIG"
+
+    private const val SECTION = "DROIDNUX_UPDATES"
+
+    /**
+     * Guest script listing the updates (after fetching apt's lists when [refresh]): apt's upgrade as
+     * it would run, with the size of each download, and Flathub's. Ends with [DONE_MARKER]; read by [parseUpdates].
+     */
+    fun updatesScript(refresh: Boolean) = """
+        set -e
+        $HOLD_PLASMA
+        ${if (refresh) "$APT update -q > /dev/null" else ""}
+        echo "$SECTION apt"
+        $APT -s upgrade --with-new-pkgs | grep '^Inst ' || true
+        echo "$SECTION uris"
+        $APT -qq --print-uris upgrade --with-new-pkgs
+        if command -v flatpak > /dev/null; then
+            echo "$SECTION flatpak"
+            flatpak list --system --columns=application,branch,version
+            echo "$SECTION flatpak-updates"
+            flatpak remote-ls --updates --system --columns=application,branch,version,download-size
+        fi
+        echo $DONE_MARKER
+    """.trimIndent()
+
+    /** The updates in [updatesScript]'s output. */
+    fun parseUpdates(output: String): List<Update> {
+        var section = ""
+        val apt = ArrayList<Triple<String, String, String>>()
+        val sizes = HashMap<String, Long>()
+        val flatpaks = HashMap<String, String>()
+        val updates = ArrayList<Update>()
+        for (line in output.lineSequence()) {
+            if (line.startsWith("$SECTION ")) {
+                section = line.substringAfter(' ')
+                continue
+            }
+            val fields = line.split('\t')
+            when (section) {
+                // "Inst libfoo [1.2-1] (1.2-2 Debian-Security:13/stable-security [arm64])", no "[…]" when new.
+                "apt" -> APT_INST.find(line)?.let { apt += Triple(it.groupValues[1], it.groupValues[2], it.groupValues[3]) }
+                // "'http://…/libfoo_1.2-2_arm64.deb' libfoo_1.2-2_arm64.deb 302984 SHA256:…"
+                "uris" -> line.split(' ').takeIf { it.size >= 3 }?.let { sizes[it[1].substringBefore('_')] = it[2].toLongOrNull() ?: 0 }
+                "flatpak" -> if (fields.size >= 3) flatpaks[fields[0] + "//" + fields[1]] = fields[2]
+                "flatpak-updates" -> if (fields.size >= 4 && isFlatpakId(fields[0])) {
+                    updates += Update(FLATPAK + fields[0], flatpaks[fields[0] + "//" + fields[1]].orEmpty(), fields[2], flatpakBytes(fields[3]))
+                }
+            }
+        }
+        return apt.map { (pkg, from, to) -> Update(pkg, from, to, sizes[pkg] ?: 0) } + updates
+    }
+
+    private val APT_INST = Regex("""^Inst (\S+) (?:\[(\S+)] )?\((\S+) """)
+
+    // GLib's sizes: "310.3 MB" with a no-break space, decimal units.
+    private val FLATPAK_SIZE = Regex("""([\d.]+)[\s ]*([kMG]?)B""")
+
+    private fun flatpakBytes(size: String): Long {
+        val match = FLATPAK_SIZE.find(size) ?: return 0
+        val unit = when (match.groupValues[2]) { "k" -> 1e3; "M" -> 1e6; "G" -> 1e9; else -> 1.0 }
+        return Math.round((match.groupValues[1].toDoubleOrNull() ?: 0.0) * unit)
+    }
+
+    /**
+     * Guest script installing updates: [packages] only (Debian names or Flatpak ones, with what they
+     * need), or everything when empty. Ends with [DONE_MARKER].
+     */
+    fun upgradeScript(packages: List<String>): String {
+        val debs = packages.map { it.removePrefix(BACKPORTS) }.filter(::isPackageName)
+        val flatpaks = flatpakIds(packages)
+        val all = packages.isEmpty()
+        val apt = if (all) UPGRADE else if (debs.isNotEmpty()) "$UPGRADE_ONLY ${debs.joinToString(" ")}" else ""
+        // Not --noninteractive: that drops the "Updating 1/3… 45%" lines the store's progress reads.
+        val flatpak = if (all || flatpaks.isNotEmpty()) {
+            "if command -v flatpak > /dev/null; then flatpak update --system -y ${flatpaks.joinToString(" ")} < /dev/null; " +
+                "${DesktopEnvironment.FLATPAK_GL_SCRIPT} || true; fi"
+        } else ""
+        return """
+        $HEADER
+        $HOLD_PLASMA
+        $apt
+        $flatpak
+        $APT clean
         echo $DONE_MARKER
         """.trimIndent()
     }
@@ -228,20 +367,39 @@ object AppStore {
         temp.renameTo(file)
     }
 
-    /** Packages dpkg has installed in [rootfs], read from its status file, and Flatpak's apps as [FLATPAK] ones. */
-    fun installedPackages(rootfs: File): Set<String> {
-        val installed = HashSet<String>()
+    /**
+     * Packages dpkg has installed in [rootfs], read from its status file, and Flatpak's apps as [FLATPAK] ones;
+     * a package from backports is there also as a [BACKPORTS] one.
+     */
+    fun installedPackages(rootfs: File): Set<String> = installedVersions(rootfs).flatMapTo(HashSet()) { (pkg, version) ->
+        if ("~bpo" in version) listOf(pkg, BACKPORTS + pkg) else listOf(pkg)
+    }
+
+    /** [installedPackages] with their versions (empty for Flatpak's apps). */
+    fun installedVersions(rootfs: File): Map<String, String> {
+        val installed = HashMap<String, String>()
         for (dir in flatpakAppDirs(rootfs)) {
-            dir.list()?.filter(::isFlatpakId)?.mapTo(installed) { FLATPAK + it }
+            dir.list()?.filter(::isFlatpakId)?.forEach { installed[FLATPAK + it] = "" }
         }
         val status = guestFile(rootfs, "var/lib/dpkg/status") ?: return installed
         var name = ""
+        var version = ""
+        var ok = false
+        fun stanza() {
+            if (ok && name.isNotEmpty()) installed[name] = version
+            name = ""
+            version = ""
+            ok = false
+        }
         status.forEachLine { line ->
             when {
+                line.isEmpty() -> stanza()
                 line.startsWith("Package: ") -> name = line.substring(9).trim()
-                line == "Status: install ok installed" -> installed += name
+                line.startsWith("Version: ") -> version = line.substring(9).trim()
+                line == "Status: install ok installed" -> ok = true
             }
         }
+        stanza()
         return installed
     }
 
@@ -249,9 +407,11 @@ object AppStore {
      * The desktop id of the first shown launcher [pkg] installs ("org.gimp.GIMP"), or else one of its
      * dependencies does (keepassxc is only a dependency on keepassxc-full).
      */
-    fun desktopId(rootfs: File, pkg: String): String? =
-        if (pkg.startsWith(FLATPAK)) pkg.removePrefix(FLATPAK).takeIf(::isFlatpakId) else launcherOf(rootfs, pkg)
-            ?: dependencies(rootfs, pkg).firstNotNullOfOrNull { launcherOf(rootfs, it) }
+    fun desktopId(rootfs: File, pkg: String): String? {
+        if (pkg.startsWith(FLATPAK)) return pkg.removePrefix(FLATPAK).takeIf(::isFlatpakId)
+        val name = pkg.removePrefix(BACKPORTS)
+        return launcherOf(rootfs, name) ?: dependencies(rootfs, name).firstNotNullOfOrNull { launcherOf(rootfs, it) }
+    }
 
     /** The packages [pkg] depends on, from dpkg's status file. */
     private fun dependencies(rootfs: File, pkg: String): List<String> {
@@ -294,5 +454,5 @@ object AppStore {
     private fun guestFile(rootfs: File, path: String): File? =
         File(rootfs.canonicalFile, path).takeIf { it.isFile && it.canonicalPath == it.path }
 
-    fun isPackageName(name: String) = Regex("[a-z0-9][a-z0-9+.-]+").matches(name)
+    fun isPackageName(name: String) = PACKAGE_NAME.matches(name)
 }

@@ -1,0 +1,44 @@
+Subject: [PATCH] Wayland backend: a resize keeps the brightness
+
+The nested output's resize queries the outputs again, and KWin applies the
+stored configuration back, brightness included: the brightness saved last,
+or full for a new configuration, went to the device's screen at every turn
+of the window. The brightness of a configuration applied back by a resize
+now stays the device's own.
+---
+diff --git a/src/backends/wayland/wayland_output.cpp b/src/backends/wayland/wayland_output.cpp
+index 634c650..245a397 100644
+--- a/src/backends/wayland/wayland_output.cpp
++++ b/src/backends/wayland/wayland_output.cpp
+@@ -301,7 +301,10 @@ void WaylandOutput::resize(const QSize &pixelSize)
+ {
+     setWindowSize(pixelSize);
+ 
++    // The stored configuration comes back with it: its brightness is not the user's.
++    m_requerying = true;
+     Q_EMIT m_backend->outputsQueried();
++    m_requerying = false;
+ }
+ 
+ void WaylandOutput::setWindowSize(const QSize &pixelSize)
+@@ -372,7 +375,7 @@ void WaylandOutput::applyChanges(const OutputConfiguration &config)
+         setWindowSize(windowSize);
+         saveOrientation();
+     }
+-    if (!props || !props->brightness) {
++    if (!props || !props->brightness || m_requerying) {
+         return;
+     }
+     State next = m_state;
+diff --git a/src/backends/wayland/wayland_output.h b/src/backends/wayland/wayland_output.h
+index 4039a9a..42fc82d 100644
+--- a/src/backends/wayland/wayland_output.h
++++ b/src/backends/wayland/wayland_output.h
+@@ -108,6 +108,7 @@ private:
+     QTimer m_turnOffTimer;
+     bool m_hasPointerLock = false;
+     bool m_ready = false;
++    bool m_requerying = false;
+     std::shared_ptr<OutputFrame> m_frame;
+     wl_buffer *m_presentationBuffer = nullptr;
+     quint32 m_pendingConfigureSerial = 0;

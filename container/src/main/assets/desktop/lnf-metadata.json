@@ -1,0 +1,9 @@
+{
+    "KPackageStructure": "Plasma/LookAndFeel",
+    "KPlugin": {
+        "Id": "org.droidnux.desktop",
+        "Name": "DroidNux",
+        "Description": "Breeze Dark, set up for DroidNux",
+        "License": "GPLv3+"
+    }
+}

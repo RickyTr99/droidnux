@@ -44,6 +44,7 @@ object SessionLog {
             out.appendLine("Kernel ${System.getProperty("os.version")}, board ${Build.BOARD}, hardware ${Build.HARDWARE}")
             out.appendLine("\n== GPU probe ==\n${probe ?: "—"}")
             if (install.isNotEmpty()) out.appendLine("\n== Desktop install ==\n$install")
+            SessionKill.history(context).takeIf { it.exists() }?.let { out.appendLine("\n== Killed by Android ==\n${it.readText()}") }
             out.appendLine("\n== Last session ==")
             file(context).takeIf { it.exists() }?.reader()?.use { it.copyTo(out) } ?: out.appendLine("—")
             // An app reads only its own processes' lines: the display server's and the session's.

@@ -21,6 +21,8 @@ data class Component(
     val sizeBytes: Long,
     /** Absolute guest path the archive's contents go to. */
     val guestPath: String,
+    /** Guest shell script run as root after unpacking; the install fails if it does. */
+    val setup: String? = null,
 ) {
     companion object {
         private const val RELEASES = "https://github.com/RickyTr99/droidnux/releases/download"
@@ -28,20 +30,20 @@ data class Component(
         /** Turnip (Vulkan on Adreno through KGSL), Zink (OpenGL on Vulkan), GBM (KWin) and the VA-API driver: guest/mesa, guest/va. */
         val MESA = Component(
             id = "mesa",
-            version = "26.2.5-dn8",
-            url = "$RELEASES/mesa-26.2.5-dn8/droidnux-mesa-26.2.5-dn8-arm64.tar.xz",
-            sha256 = "c4f0818f251c18383b28779c6ba0055e3a2465fb7af5b2ae1c81bcfbe18aaa4e",
-            sizeBytes = 5_223_644,
+            version = "26.2.5-dn9",
+            url = "$RELEASES/mesa-26.2.5-dn9/droidnux-mesa-26.2.5-dn9-arm64.tar.xz",
+            sha256 = "c955ca0cfb072d3f583eec24f64805956bc578719bed9f52849ccae8287cee07",
+            sizeBytes = 5_228_484,
             guestPath = DesktopEnvironment.MESA_PREFIX,
         )
 
-        /** KSvg and KIconThemes with fewer file lookups, KWin passing on the scroll source and taking the backlight, and system monitor plugins for Android: guest/plasma. */
+        /** KSvg and KIconThemes with fewer file lookups, KWin passing on the scroll source, taking the backlight, giving its pointer settings and turning its output, and system monitor plugins for Android: guest/plasma. */
         val PLASMA = Component(
             id = "plasma",
-            version = "6.13.0-dn7",
-            url = "$RELEASES/plasma-6.13.0-dn7/droidnux-plasma-6.13.0-dn7-arm64.tar.xz",
-            sha256 = "eaaa434fca4482d64c4c8593b1869e56882039560e65588a7dbed33199bab263",
-            sizeBytes = 2_130_836,
+            version = "6.13.0-dn13",
+            url = "$RELEASES/plasma-6.13.0-dn13/droidnux-plasma-6.13.0-dn13-arm64.tar.xz",
+            sha256 = "ec0ddc1cabdadfcb954cd1af50b619d5e46912d42cec2c1583f27b6b93f28c04",
+            sizeBytes = 2_131_624,
             guestPath = DesktopEnvironment.PLASMA_PREFIX,
         )
 
@@ -50,12 +52,12 @@ data class Component(
         /** [MESA] as Flatpak's GL extension, one per Freedesktop runtime branch (guest/mesa/flatpak.sh): the session installs it. */
         val FLATPAK_GL = listOf(
             FlatpakExtension(
-                "25.08", "$RELEASES/mesa-26.2.5-dn8/droidnux-mesa-26.2.5-dn8-flatpak-25.08-arm64.flatpak",
-                "245b6217173633aaecddedc777a94110514722a76657ce7a899d61cd3b6a96f4",
+                "25.08", "$RELEASES/mesa-26.2.5-dn9/droidnux-mesa-26.2.5-dn9-flatpak-25.08-arm64.flatpak",
+                "4253bea5e137bbfd5469cb53bd472bb0d5a5ada6e352a17af19147e043f3ff1d",
             ),
             FlatpakExtension(
-                "26.08", "$RELEASES/mesa-26.2.5-dn8/droidnux-mesa-26.2.5-dn8-flatpak-26.08-arm64.flatpak",
-                "70879d160a919212b9bb2d78826970398ca900302c0e2efd27f5158dd3ca825e",
+                "26.08", "$RELEASES/mesa-26.2.5-dn9/droidnux-mesa-26.2.5-dn9-flatpak-26.08-arm64.flatpak",
+                "8d589b8713d19bb3dc99d12ee9dbd4a1213b57802a7eafe0eb1d7c045a1a7c7a",
             ),
         )
     }
@@ -73,7 +75,8 @@ class ComponentInstaller(private val downloadDir: File) {
     fun isInstalled(rootfs: File, component: Component): Boolean =
         File(dir(rootfs, component), MARKER).readTextOrNull()?.lines()?.getOrNull(1) == component.sha256
 
-    suspend fun install(rootfs: File, component: Component, onProgress: (InstallProgress) -> Unit) =
+    /** [setup] runs with the new version in place; if it throws, the version that was there comes back. */
+    suspend fun install(rootfs: File, component: Component, onProgress: (InstallProgress) -> Unit, setup: suspend () -> Unit = {}) =
         withContext(Dispatchers.IO) {
             val archive = File(downloadDir, "${component.sha256}.tar.xz")
             Archive.download(component.url, component.sha256, component.sizeBytes, archive, onProgress)
@@ -83,15 +86,27 @@ class ComponentInstaller(private val downloadDir: File) {
             staging.mkdirs()
             Archive.extract(archive, Archive.Compression.XZ, staging, onProgress)
             File(staging, MARKER).writeText("${component.version}\n${component.sha256}\n")
-
-            // Running guest processes keep the files they have open or mapped.
-            target.deleteRecursivelyForce()
-            if (!staging.renameTo(target)) throw InstallException("Cannot move ${component.id} into $target")
+            replace(target, staging, setup)
             archive.delete()
         }
 
-    suspend fun uninstall(rootfs: File, component: Component) = withContext(Dispatchers.IO) {
-        dir(rootfs, component).deleteRecursivelyForce()
+    /** Puts [staging] in [target]'s place, keeping the old [target] aside until [setup] is done. */
+    internal suspend fun replace(target: File, staging: File, setup: suspend () -> Unit) {
+        val old = File(target.parentFile, ".${target.name}.old")
+        // Left by an install the app died in: the old version if its move back never happened.
+        if (old.exists() && !target.exists()) old.renameTo(target)
+        old.deleteRecursivelyForce()
+        // Running guest processes keep the files they have open or mapped.
+        if (target.exists() && !target.renameTo(old)) throw InstallException("Cannot move $target away")
+        try {
+            if (!staging.renameTo(target)) throw InstallException("Cannot move $staging into $target")
+            setup()
+        } catch (e: Throwable) {
+            target.deleteRecursivelyForce()
+            old.renameTo(target)
+            throw e
+        }
+        old.deleteRecursivelyForce()
     }
 
     /** The component's directory, refusing guest symlinks on the way (they point at host paths). */

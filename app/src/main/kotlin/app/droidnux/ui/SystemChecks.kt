@@ -13,8 +13,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -24,10 +27,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.droidnux.R
@@ -48,6 +53,7 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
     var phantomHelp by remember { mutableStateOf(false) }
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
     val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
 
     val phantomOk = remember(refresh) { phantomProcessesUnlimited(context) }
     val batteryOk = remember(refresh) {
@@ -57,98 +63,78 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
     val microphoneOk = remember(refresh) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
     }
+    val cameraOk = remember(refresh) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    }
     val notificationsOk = remember(refresh) {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
     }
 
     Column(modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        InfoRow(
-            title = stringResource(R.string.check_gpu),
-            text = if (gpu != null) stringResource(R.string.check_gpu_ok, gpu) else stringResource(R.string.check_gpu_none),
-            icon = if (gpu != null) Icons.Check else Icons.Warning,
-            iconTint = if (gpu != null) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-        )
-        InfoRow(
-            title = stringResource(R.string.check_phantom),
-            text = stringResource(if (phantomOk) R.string.check_phantom_ok else R.string.check_phantom_text),
-            icon = if (phantomOk) Icons.Check else Icons.Warning,
-            iconTint = if (phantomOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-            action = if (phantomOk) null else {
-                { FilledTonalButton(onClick = { phantomHelp = true }) { Text(stringResource(R.string.check_how)) } }
-            },
-        )
-        InfoRow(
-            title = stringResource(R.string.check_battery),
-            text = stringResource(R.string.check_battery_text),
-            icon = if (batteryOk) Icons.Check else Icons.Info,
-            iconTint = if (batteryOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            action = if (batteryOk) null else {
-                {
-                    FilledTonalButton(onClick = {
-                        context.startActivity(
-                            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.fromParts("package", context.packageName, null)),
-                        )
-                    }) { Text(stringResource(R.string.check_allow)) }
-                }
-            },
-        )
-        InfoRow(
-            title = stringResource(R.string.check_files),
-            text = stringResource(R.string.check_files_text),
-            icon = if (filesOk) Icons.Check else Icons.Info,
-            iconTint = if (filesOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            action = if (filesOk) null else {
-                {
-                    FilledTonalButton(onClick = {
-                        context.startActivity(
-                            Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.fromParts("package", context.packageName, null)),
-                        )
-                    }) { Text(stringResource(R.string.check_allow)) }
-                }
-            },
-        )
-        InfoRow(
-            title = stringResource(R.string.check_microphone),
-            text = stringResource(R.string.check_microphone_text),
-            icon = if (microphoneOk) Icons.Check else Icons.Info,
-            iconTint = if (microphoneOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            action = if (microphoneOk) null else {
-                {
-                    FilledTonalButton(onClick = { microphone.launch(Manifest.permission.RECORD_AUDIO) }) {
-                        Text(stringResource(R.string.check_allow))
-                    }
-                }
-            },
-        )
-        InfoRow(
-            title = stringResource(R.string.check_notifications),
-            text = stringResource(R.string.check_notifications_text),
-            icon = if (notificationsOk) Icons.Check else Icons.Info,
-            iconTint = if (notificationsOk) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            action = if (notificationsOk || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) null else {
-                {
-                    FilledTonalButton(onClick = { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
-                        Text(stringResource(R.string.check_allow))
-                    }
-                }
-            },
-        )
+        CheckRow(R.string.check_gpu, gpu != null, gpu ?: stringResource(R.string.check_gpu_none))
+        CheckRow(R.string.check_phantom, phantomOk, action = R.string.check_how) { phantomHelp = true }
+        CheckRow(R.string.check_battery, batteryOk) {
+            context.startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.fromParts("package", context.packageName, null)),
+            )
+        }
+        CheckRow(R.string.check_files, filesOk) {
+            context.startActivity(
+                Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION, Uri.fromParts("package", context.packageName, null)),
+            )
+        }
+        CheckRow(R.string.check_microphone, microphoneOk) { microphone.launch(Manifest.permission.RECORD_AUDIO) }
+        CheckRow(R.string.check_camera, cameraOk) { camera.launch(Manifest.permission.CAMERA) }
+        CheckRow(R.string.check_notifications, notificationsOk) { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }
     }
 
-    if (phantomHelp) {
-        AlertDialog(
-            onDismissRequest = { phantomHelp = false },
-            title = { Text(stringResource(R.string.check_phantom)) },
-            text = { Text(stringResource(R.string.check_phantom_steps)) },
-            confirmButton = {
+    if (phantomHelp) PhantomDialog(R.string.check_phantom) { phantomHelp = false }
+}
+
+/** Under [title], how to turn off Android's limit on child processes; the title alone when it is off already. */
+@Composable
+fun PhantomDialog(title: Int, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val limited = remember { !phantomProcessesUnlimited(context) }
+    val close = @Composable { TextButton(onClick = onDismiss) { Text(stringResource(R.string.action_close)) } }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(title)) },
+        text = if (limited) ({ Text(stringResource(R.string.check_phantom_steps)) }) else null,
+        confirmButton = {
+            if (limited) {
                 TextButton(onClick = {
-                    phantomHelp = false
+                    onDismiss()
                     runCatching { context.startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)) }
                 }) { Text(stringResource(R.string.check_open_developer)) }
-            },
-            dismissButton = { TextButton(onClick = { phantomHelp = false }) { Text(stringResource(R.string.action_close)) } },
-        )
+            } else {
+                close()
+            }
+        },
+        dismissButton = if (limited) close else null,
+    )
+}
+
+/**
+ * A setting: a check (after its [value]) when [ok], else the button that fixes it, or the [value] with a warning
+ * when nothing can.
+ */
+@Composable
+private fun CheckRow(title: Int, ok: Boolean, value: String? = null, action: Int = R.string.check_allow, onAction: (() -> Unit)? = null) {
+    InfoRow(stringResource(title)) {
+        if (ok || onAction == null) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (value != null) Text(value, fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Icon(
+                    if (ok) Icons.Selected else Icons.Warning, null,
+                    tint = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+        } else {
+            FilledTonalButton(onClick = onAction) { Text(stringResource(action)) }
+        }
     }
 }
 

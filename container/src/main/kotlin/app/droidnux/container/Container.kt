@@ -2,6 +2,9 @@ package app.droidnux.container
 
 import android.content.Context
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -38,19 +41,26 @@ class Container(context: Context) {
             .start()
     }
 
-    /** Burrow command for [distro], with the guest network settings refreshed first. */
+    /** Burrow command for [distro], with the guest's network, host name and time zone refreshed first. */
     private fun guestCommand(distro: Distro, command: List<String>): List<String> {
         val rootfs = installer.rootfsDir(distro)
         NetworkConfig.writeResolvConf(context, rootfs, proxied = burrow.dnsPort > 0)
+        GuestSystem.write(rootfs)
         return burrow.guestCommand(rootfs, command)
     }
 
-    private suspend fun run(command: List<String>): CommandResult =
-        withContext(Dispatchers.IO) {
-            val process = ProcessBuilder(command)
+    // Cancelling the caller ends the command too: a search typed further must not leave apt running.
+    private suspend fun run(command: List<String>): CommandResult = coroutineScope {
+        val process = withContext(Dispatchers.IO) {
+            ProcessBuilder(command)
                 .redirectErrorStream(true)
                 .start()
-            val output = process.inputStream.bufferedReader().readText()
-            CommandResult(process.waitFor(), output.trimEnd())
         }
+        try {
+            val output = async(Dispatchers.IO) { process.inputStream.bufferedReader().readText() }.await()
+            CommandResult(runInterruptible(Dispatchers.IO) { process.waitFor() }, output.trimEnd())
+        } finally {
+            process.destroy()
+        }
+    }
 }

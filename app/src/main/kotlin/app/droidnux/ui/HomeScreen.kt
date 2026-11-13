@@ -105,12 +105,14 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -149,15 +151,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
@@ -267,7 +266,9 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
     LaunchedEffect(Unit) { if (state.apps == null) viewModel.loadApps() }
 
     BackHandler(enabled = tab != Tab.HOME) { select(Tab.HOME) }
-    val updates = !state.desktopUpToDate || Component.ALL.any { it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled }
+    val updates = !state.desktopUpToDate || Component.ALL.any {
+        it.sha256.isNotEmpty() && state.components[it.id] == InstallState.NotInstalled
+    }
     // Every return to the app (from the desktop too) brings the Home's sections in one after another.
     // Hidden from the first frame and again once out of sight, so no frame shows the sections before they come in.
     val entrance = remember { Animatable(0f) }
@@ -319,6 +320,7 @@ fun HomeScreen(state: AppState, viewModel: AppViewModel) {
             ) { if (it != tab) select(it) }
         }
     }
+    if (state.sessionKilled) PhantomDialog(R.string.session_killed, viewModel::dismissSessionKilled)
 }
 
 /** The selected tab's pill in the theme's accent [color]: lit from above, like a raised key. */
@@ -486,7 +488,8 @@ private fun HomeTab(state: AppState, viewModel: AppViewModel, updates: Boolean, 
         }
     }
     Box(Modifier.fillMaxSize()) {
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        val scroll = rememberScrollState()
+        Column(Modifier.fillMaxSize().fadingEdges(scroll).verticalScroll(scroll)) {
             Hero(state, viewModel, side, thumbnail, Modifier.entrance(entrance, 0))
             Column(
                 Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
@@ -838,7 +841,7 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                                     },
                                 ),
                         ) {
-                            AppTile(app, viewModel, height, iconSize = if (compact) 52.dp else 56.dp, editing = editing, lifted = lifted || focused)
+                            AppTile(app, app.id in state.homeApps, viewModel, height, iconSize = if (compact) 52.dp else 56.dp, editing = editing, lifted = lifted || focused)
                             androidx.compose.animation.AnimatedVisibility(
                                 editing,
                                 modifier = Modifier.align(Alignment.TopEnd),
@@ -875,7 +878,8 @@ private fun QuickLaunch(state: AppState, viewModel: AppViewModel, modifier: Modi
                 if (others.isEmpty()) {
                     Text(stringResource(R.string.home_add_empty))
                 } else {
-                    Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    val scroll = rememberScrollState()
+                    Column(Modifier.fadingEdges(scroll).verticalScroll(scroll), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         others.forEach { app ->
                             Row(
                                 Modifier.fillMaxWidth().clip(RowShape).background(MaterialTheme.colorScheme.surfaceContainerLow)
@@ -915,7 +919,7 @@ private fun AllApps(state: AppState, viewModel: AppViewModel, modifier: Modifier
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                         row.forEach { app ->
                             key(app.id) {
-                                AppTile(app, viewModel, if (compact) 92.dp else 104.dp, iconSize = if (compact) 48.dp else 52.dp, modifier = Modifier.weight(1f))
+                                AppTile(app, app.id in state.homeApps, viewModel, if (compact) 92.dp else 104.dp, iconSize = if (compact) 48.dp else 52.dp, modifier = Modifier.weight(1f))
                             }
                         }
                         repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
@@ -979,7 +983,7 @@ private fun animateDpOffsetAsState(target: DpOffset, label: String): State<DpOff
     animateValueAsState(target, DpOffset.VectorConverter, spring(stiffness = Spring.StiffnessMediumLow), label = label)
 
 /** Opens the desktop growing out of [from] in [view] (the Home's picture), as a launcher opens an app. */
-private fun openDesktop(context: Context, view: View, from: Rect?) {
+internal fun openDesktop(context: Context, view: View, from: Rect?) {
     val options = from?.let {
         ActivityOptions.makeClipRevealAnimation(view, it.left.roundToInt(), it.top.roundToInt(), it.width.roundToInt(), it.height.roundToInt()).toBundle()
     }
@@ -1051,6 +1055,7 @@ private fun DockAction(
 @Composable
 private fun AppTile(
     app: LinuxApp,
+    inHome: Boolean,
     viewModel: AppViewModel,
     height: Dp,
     iconSize: Dp,
@@ -1102,7 +1107,6 @@ private fun AppTile(
             )
         }
         DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            val inHome = app.id in viewModel.state.value.homeApps
             DropdownMenuItem(
                 text = { Text(stringResource(if (inHome) R.string.apps_home_remove else R.string.apps_home_add)) },
                 onClick = {
@@ -1223,7 +1227,8 @@ private fun SettingsTab(
             ),
             horizontalArrangement = Arrangement.spacedBy(40.dp),
         ) {
-            Column(Modifier.width(320.dp).verticalScroll(rememberScrollState()).padding(bottom = bottom), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            val categories = rememberScrollState()
+            Column(Modifier.width(320.dp).fadingEdges(categories).verticalScroll(categories).padding(bottom = bottom), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
                     stringResource(R.string.tab_settings), fontSize = 28.sp, fontWeight = FontWeight.Medium,
                     modifier = Modifier.padding(start = 4.dp, bottom = 4.dp),
@@ -1239,7 +1244,8 @@ private fun SettingsTab(
                 label = "page",
                 modifier = Modifier.weight(1f),
             ) { page ->
-                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = bottom), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                val scroll = rememberScrollState()
+                Column(Modifier.fillMaxSize().fadingEdges(scroll).verticalScroll(scroll).padding(bottom = bottom), verticalArrangement = Arrangement.spacedBy(16.dp)) {
                     Text(stringResource(page.title), fontSize = 22.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp, top = 6.dp))
                     Box(Modifier.widthIn(max = 760.dp)) { pageContent(page) }
                 }
@@ -1295,9 +1301,10 @@ private fun ReachPage(
         }
     }
     // The page moves down by the pull: placed again each frame, never measured again.
+    val scroll = rememberScrollState()
     Column(
         Modifier.fillMaxSize().nestedScroll(connection).offset { IntOffset(0, reach.floatValue.roundToInt()) }
-            .verticalScroll(rememberScrollState()).padding(padding),
+            .fadingEdges(scroll).verticalScroll(scroll).padding(padding),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) { content(::open) }
 }
@@ -1386,7 +1393,7 @@ private fun CategoryRow(
 
 /** The theme color, as in MoonVibe: under its name a dot for each color, the chosen one bigger and with a check. */
 @Composable
-private fun ThemeColorRow(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
+internal fun ThemeColorRow(settings: DesktopSettings, save: ((DesktopSettings) -> DesktopSettings) -> Unit) {
     val context = LocalContext.current
     val chosen = ThemeColor.picked ?: ThemeColor.resolve(settings.themeColor)
     Column(
@@ -1397,26 +1404,10 @@ private fun ThemeColorRow(settings: DesktopSettings, save: ((DesktopSettings) ->
             Text(stringResource(R.string.theme_color), fontSize = 16.sp, fontWeight = FontWeight.Medium)
             Text(stringResource(themeColorName(chosen)), fontSize = 15.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        // One row: on a phone it scrolls sideways instead of taking a second line, its cut sides fading out.
+        // One row: on a phone it scrolls sideways instead of taking a second line.
         val scroll = rememberScrollState()
-        val fadeStart by animateFloatAsState(if (scroll.canScrollBackward) 1f else 0f, tween(150), label = "fadeStart")
-        val fadeEnd by animateFloatAsState(if (scroll.canScrollForward) 1f else 0f, tween(150), label = "fadeEnd")
         Row(
-            Modifier.padding(top = 4.dp).offset(x = (-8).dp)
-                .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
-                .drawWithContent {
-                    drawContent()
-                    val width = 32.dp.toPx()
-                    val edge = Size(width, size.height)
-                    drawRect(
-                        Brush.horizontalGradient(listOf(Color.Black.copy(alpha = 1f - fadeStart), Color.Black), endX = width),
-                        size = edge, blendMode = BlendMode.DstIn,
-                    )
-                    drawRect(
-                        Brush.horizontalGradient(listOf(Color.Black, Color.Black.copy(alpha = 1f - fadeEnd)), size.width - width, size.width),
-                        topLeft = Offset(size.width - width, 0f), size = edge, blendMode = BlendMode.DstIn,
-                    )
-                }
+            Modifier.padding(top = 4.dp).offset(x = (-8).dp).fadingEdges(scroll, vertical = false)
                 .horizontalScroll(scroll),
         ) {
             for (color in ThemeColor.choices) {
@@ -1450,7 +1441,7 @@ private fun ThemeColorRow(settings: DesktopSettings, save: ((DesktopSettings) ->
 
 /** A color's dot: its primary color, or the wallpaper's colors around the circle. */
 private fun themeSwatch(context: android.content.Context, color: String): Brush =
-    if (color == ThemeColor.DYNAMIC && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+    if (color == ThemeColor.DYNAMIC && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         val first = Color(context.getColor(android.R.color.system_accent1_300))
         Brush.sweepGradient(listOf(first, Color(context.getColor(android.R.color.system_accent2_300)), Color(context.getColor(android.R.color.system_accent3_300)), first))
     } else {
@@ -1513,12 +1504,12 @@ private fun AppPage(settings: DesktopSettings, save: ((DesktopSettings) -> Deskt
 
 /** A section's title in a settings page. */
 @Composable
-private fun PageSection(title: Int, first: Boolean = false) {
+internal fun PageSection(title: Int, first: Boolean = false) {
     SectionHeader(stringResource(title), Modifier.padding(start = 4.dp, top = if (first) 0.dp else 12.dp, bottom = 4.dp))
 }
 
 @Composable
-private fun SwitchRow(title: Int, checked: Boolean, text: Int? = null, onChange: (Boolean) -> Unit) {
+internal fun SwitchRow(title: Int, checked: Boolean, text: Int? = null, onChange: (Boolean) -> Unit) {
     InfoRow(stringResource(title), text = text?.let { stringResource(it) }, onClick = { onChange(!checked) }) {
         Switch(checked = checked, onCheckedChange = onChange)
     }
@@ -1526,7 +1517,7 @@ private fun SwitchRow(title: Int, checked: Boolean, text: Int? = null, onChange:
 
 /** Two choices side by side, [second] chosen when [value]. */
 @Composable
-private fun ChoiceRow(title: Int, value: Boolean, first: Int, second: Int, onChange: (Boolean) -> Unit) {
+internal fun ChoiceRow(title: Int, value: Boolean, first: Int, second: Int, onChange: (Boolean) -> Unit) {
     InfoRow(stringResource(title)) {
         SingleChoiceSegmentedButtonRow {
             listOf(false to first, true to second).forEachIndexed { index, (choice, label) ->
@@ -1744,13 +1735,14 @@ private fun AccountPage(settings: DesktopSettings, save: ((DesktopSettings) -> D
     var changingPassword by remember { mutableStateOf(false) }
     // The password in clear, after the fingerprint or the screen lock; hidden again when the app leaves the screen.
     var shown by remember { mutableStateOf<String?>(null) }
+    val showTitle = stringResource(R.string.settings_password_show)
     LifecycleResumeEffect(Unit) { onPauseOrDispose { shown = null } }
     InfoRow(stringResource(R.string.wizard_account_name), text = settings.user) {
         FilledTonalButton(onClick = { changingName = true }) { Text(stringResource(R.string.action_change)) }
     }
     InfoRow(stringResource(R.string.wizard_account_password), text = shown ?: "••••••••") {
         IconButton(onClick = {
-            if (shown != null) shown = null else unlock(context, context.getString(R.string.settings_password_show)) {
+            if (shown != null) shown = null else unlock(context, showTitle) {
                 shown = Account.password(context)
             }
         }) {
@@ -1770,13 +1762,9 @@ private fun AccountPage(settings: DesktopSettings, save: ((DesktopSettings) -> D
 /** Runs [onUnlocked] after the fingerprint, face or screen lock; at once on a device with no lock to ask for. */
 private fun unlock(context: Context, title: String, onUnlocked: () -> Unit) {
     if (!context.getSystemService(KeyguardManager::class.java).isDeviceSecure) return onUnlocked()
-    val prompt = BiometricPrompt.Builder(context).setTitle(title).apply {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-        } else {
-            @Suppress("DEPRECATION") setDeviceCredentialAllowed(true)
-        }
-    }.build()
+    val prompt = BiometricPrompt.Builder(context).setTitle(title)
+        .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG or BiometricManager.Authenticators.DEVICE_CREDENTIAL)
+        .build()
     prompt.authenticate(CancellationSignal(), context.mainExecutor, object : BiometricPrompt.AuthenticationCallback() {
         override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) = onUnlocked()
     })
@@ -1892,13 +1880,17 @@ private fun SliderRow(
 @Composable
 private fun ComponentsPage(state: AppState, viewModel: AppViewModel) {
     var confirmReinstall by remember { mutableStateOf(false) }
+    var keepHome by remember { mutableStateOf(true) }
     InfoRow(
         stringResource(R.string.distro_debian),
-        text = stringResource(R.string.install_rootfs_text),
+        // Not under a running desktop (AppViewModel.install).
+        text = if (state.sessionRunning) stringResource(R.string.rootfs_reinstall_running) else null,
         icon = Icons.Check,
         iconTint = MaterialTheme.colorScheme.primary,
     ) {
-        TextButton(onClick = { confirmReinstall = true }) { Text(stringResource(R.string.action_reinstall)) }
+        TextButton(onClick = { keepHome = true; confirmReinstall = true }, enabled = !state.sessionRunning) {
+            Text(stringResource(R.string.action_reinstall))
+        }
     }
     InfoRow(
         stringResource(R.string.desktop_name),
@@ -1929,11 +1921,24 @@ private fun ComponentsPage(state: AppState, viewModel: AppViewModel) {
         AlertDialog(
             onDismissRequest = { confirmReinstall = false },
             title = { Text(stringResource(R.string.rootfs_reinstall_title, stringResource(R.string.distro_debian))) },
-            text = { Text(stringResource(R.string.rootfs_reinstall_text)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.rootfs_reinstall_text))
+                    Row(
+                        Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RowShape)
+                            .toggleable(keepHome, role = Role.Checkbox, onValueChange = { keepHome = it }),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(checked = keepHome, onCheckedChange = null)
+                        Text(stringResource(R.string.rootfs_reinstall_keep_home), color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+            },
             confirmButton = {
                 TextButton(onClick = {
                     confirmReinstall = false
-                    viewModel.install()
+                    viewModel.install(keepHome)
                 }) { Text(stringResource(R.string.action_reinstall), color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { confirmReinstall = false }) { Text(stringResource(R.string.action_cancel)) } },

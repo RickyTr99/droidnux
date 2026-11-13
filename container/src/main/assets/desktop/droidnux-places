@@ -1,0 +1,53 @@
+#!/usr/bin/python3
+# Written by DroidNux: adds the XDG folders to Dolphin's places once,
+# as KDE does for a new user.
+# The desktop's first users were made without xdg-user-dirs, so KDE never added
+# them; once only, so a place the user removes stays removed.
+import os
+import subprocess
+import time
+import urllib.parse
+from xml.dom import minidom
+
+home = os.environ["HOME"]
+places = os.path.join(home, ".local/share/user-places.xbel")
+marker = os.path.join(home, ".local/share/droidnux/xdg-places")
+# KDE's own items in its order: English titles, which it translates (isSystemItem).
+ITEMS = [("DESKTOP", "Desktop", "user-desktop"), ("DOCUMENTS", "Documents", "folder-documents"),
+         ("DOWNLOAD", "Downloads", "folder-downloads"), ("MUSIC", "Music", "folder-music"),
+         ("PICTURES", "Pictures", "folder-pictures"), ("VIDEOS", "Videos", "folder-videos")]
+ITEM = ('<bookmark href="%s"><title>%s</title><info>'
+        '<metadata owner="http://freedesktop.org"><bookmark:icon name="%s"/></metadata>'
+        '<metadata owner="http://www.kde.org"><ID>%s</ID><isSystemItem>true</isSystemItem></metadata>'
+        '</info></bookmark>')
+NAMESPACES = 'xmlns:bookmark="http://www.freedesktop.org/standards/desktop-bookmarks"'
+
+
+def url(path):
+    return "file://" + urllib.parse.quote(path)
+
+
+# Without the file KDE makes its own, with these folders.
+if not os.path.exists(marker) and os.path.isfile(places) and not os.path.islink(places):
+    doc = minidom.parse(places)
+    root = doc.documentElement
+    bookmarks = root.getElementsByTagName("bookmark")
+    hrefs = {b.getAttribute("href") for b in bookmarks}
+    after = next((b for b in bookmarks if b.getAttribute("href") == url(home)), None)
+    stamp = int(time.time())
+    for n, (key, title, icon) in enumerate(ITEMS):
+        path = subprocess.run(["xdg-user-dir", key], capture_output=True, text=True).stdout.strip()
+        if not path or path == home or not os.path.isdir(path) or url(path) in hrefs:
+            continue
+        item = ITEM % (url(path), title, icon, "%d/%d" % (stamp, n))
+        node = minidom.parseString("<xbel %s>%s</xbel>" % (NAMESPACES, item)).documentElement.firstChild
+        node = doc.importNode(node, True)
+        root.insertBefore(node, after.nextSibling if after else None)
+        after = node
+    temporary = places + ".droidnux"
+    with open(temporary, "w", encoding="utf-8") as f:
+        doc.writexml(f, encoding="UTF-8")
+    os.replace(temporary, places)
+if os.path.isfile(places):
+    os.makedirs(os.path.dirname(marker), exist_ok=True)
+    open(marker, "w").close()

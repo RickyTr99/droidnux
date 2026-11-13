@@ -74,7 +74,10 @@ enum class StatsItem(val key: String, val label: Int, val icon: Int) {
     }
 }
 
-/** One reading, about once a second; null where it is not known (a GPU other than Adreno, no frame drawn). */
+/**
+ * One reading, about once a second; null where it is not known (a GPU other than Adreno, no frame drawn).
+ * The values of items that are not shown are not read (null or 0).
+ */
 data class StatsSample(
     val fps: Int,
     val frameMs: Float?,
@@ -109,43 +112,57 @@ class StatsSampler(private val context: Context) {
     private val clockTicks = Os.sysconf(OsConstants._SC_CLK_TCK).coerceAtLeast(1)
     private val cores = Runtime.getRuntime().availableProcessors()
 
-    fun sample(fps: Int, frameMs: Float?, frameMaxMs: Float?, refreshHz: Float, desktopWidth: Int, desktopHeight: Int): StatsSample {
-        val ticks = sessionTicks()
-        val at = android.os.SystemClock.elapsedRealtime()
-        // Ticks of processes that ended are gone from the sum.
-        val cpu = if (cpuTicks >= 0 && at > cpuAt) {
-            ((ticks - cpuTicks).coerceAtLeast(0) * 1000f / clockTicks / (at - cpuAt) / cores * 100).roundToInt().coerceIn(0, 100)
+    /**
+     * Reads only what [items] show, and their second values (clocks) only with [notes], the panel's:
+     * the statistics stay on for hours, and the rest is files and calls to Android every second.
+     */
+    fun sample(
+        fps: Int, frameMs: Float?, frameMaxMs: Float?, refreshHz: Float, desktopWidth: Int, desktopHeight: Int,
+        items: Collection<StatsItem>, notes: Boolean,
+    ): StatsSample {
+        var cpu: Int? = null
+        if (StatsItem.CPU in items) {
+            val ticks = SessionPause.cpuTicks(context)
+            val at = android.os.SystemClock.elapsedRealtime()
+            // Ticks of processes that ended are gone from the sum.
+            if (cpuTicks >= 0 && at > cpuAt) {
+                cpu = ((ticks - cpuTicks).coerceAtLeast(0) * 1000f / clockTicks / (at - cpuAt) / cores * 100).roundToInt().coerceIn(0, 100)
+            }
+            cpuTicks = ticks
+            cpuAt = at
+        } else {
+            cpuTicks = -1
+        }
+        val gpu = StatsItem.GPU in items
+        val memory = if (StatsItem.MEMORY in items) {
+            ActivityManager.MemoryInfo().also { context.getSystemService(ActivityManager::class.java).getMemoryInfo(it) }
         } else {
             null
         }
-        cpuTicks = ticks
-        cpuAt = at
-        val memory = ActivityManager.MemoryInfo().also { context.getSystemService(ActivityManager::class.java).getMemoryInfo(it) }
-        val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val battery = if (StatsItem.BATTERY in items) context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED)) else null
         return StatsSample(
             fps = fps, frameMs = frameMs, frameMaxMs = frameMaxMs, refreshHz = refreshHz,
             cpuPercent = cpu,
-            cpuGhz = (0 until cores).maxOfOrNull { read("/sys/devices/system/cpu/cpu$it/cpufreq/scaling_cur_freq") ?: 0L }
-                ?.takeIf { it > 0 }?.let { it / 1e6f },
+            cpuGhz = if (cpu != null && notes) {
+                (0 until cores).maxOfOrNull { read("/sys/devices/system/cpu/cpu$it/cpufreq/scaling_cur_freq") ?: 0L }
+                    ?.takeIf { it > 0 }?.let { it / 1e6f }
+            } else {
+                null
+            },
             // Adreno's: "52 %", and the clock in Hz.
-            gpuPercent = read("$KGSL/gpu_busy_percentage")?.toInt(),
-            gpuMhz = read("$KGSL/devfreq/cur_freq")?.let { (it / 1_000_000).toInt() },
-            memoryUsedGb = (memory.totalMem - memory.availMem) / GB,
-            memoryTotalGb = memory.totalMem / GB,
-            memoryLow = memory.lowMemory,
-            battery = context.getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY),
+            gpuPercent = if (gpu) read("$KGSL/gpu_busy_percentage")?.toInt() else null,
+            gpuMhz = if (gpu && notes) read("$KGSL/devfreq/cur_freq")?.let { (it / 1_000_000).toInt() } else null,
+            memoryUsedGb = memory?.let { (it.totalMem - it.availMem) / GB } ?: 0f,
+            memoryTotalGb = memory?.let { it.totalMem / GB } ?: 0f,
+            memoryLow = memory?.lowMemory == true,
+            battery = if (battery != null) {
+                context.getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            } else {
+                0
+            },
             batteryTempC = battery?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)?.takeIf { it != Int.MIN_VALUE }?.let { it / 10f },
             desktopWidth = desktopWidth, desktopHeight = desktopHeight,
         )
-    }
-
-    /** CPU time of the guest's processes and of this one (the display server), in clock ticks. */
-    private fun sessionTicks(): Long = (SessionPause.guestPids(context) + android.os.Process.myPid()).sumOf { pid ->
-        runCatching {
-            // After the name: state is the first field, utime and stime the 12th and 13th.
-            val fields = File("/proc/$pid/stat").readText().substringAfterLast(')').trim().split(' ')
-            fields[11].toLong() + fields[12].toLong()
-        }.getOrDefault(0L)
     }
 
     /** The first number in [path], if it can be read. */

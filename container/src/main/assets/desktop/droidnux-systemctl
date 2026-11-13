@@ -1,0 +1,41 @@
+#!/bin/sh
+# Written by DroidNux: systemctl without systemd, which Android cannot run.
+# docker-systemctl-replacement (@SYSTEMCTL_PY@) starts and stops the services
+# from their unit files; the session diverts the distro's /usr/bin/systemctl
+# here, so apt's scripts start what they install. It reads the units at each
+# call: daemon-reload has nothing to do (its own would check every unit and
+# list what this system lacks). systemd's links to systemctl (reboot, runlevel)
+# land here too: shutting down and restarting are droidnux-logind's.
+login1() {
+    exec gdbus call --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1 \
+        --method "org.freedesktop.login1.Manager.$1" false > /dev/null
+}
+case ${0##*/} in
+runlevel) echo "N 5"; exit 0 ;;
+reboot) login1 Reboot ;;
+poweroff | halt) login1 PowerOff ;;
+shutdown)
+    for a; do
+        case $a in
+        -c) exit 0 ;;
+        -r | --reboot) login1 Reboot ;;
+        esac
+    done
+    login1 PowerOff ;;
+telinit)
+    case $1 in
+    0) login1 PowerOff ;;
+    6) login1 Reboot ;;
+    esac
+    exit 0 ;;
+esac
+for a; do
+    case $a in
+    daemon-reload | daemon-reexec) exit 0 ;;
+    reboot) login1 Reboot ;;
+    poweroff | halt) login1 PowerOff ;;
+    -*) ;;
+    *) break ;;
+    esac
+done
+exec python3 @SYSTEMCTL_PY@ "$@"

@@ -1,0 +1,5 @@
+# Written by DroidNux: Android gives apps no user namespaces, so Chromium's
+# sandbox needs its set-user-ID helper (the chromium-sandbox package).
+[ -u /usr/lib/chromium/chrome-sandbox ] || export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox"
+# The device's cameras are PipeWire nodes (no V4L2 devices): through the Camera portal.
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --enable-features=WebRtcPipeWireCamera"

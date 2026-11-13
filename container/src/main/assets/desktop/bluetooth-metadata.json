@@ -1,0 +1,16 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Description": "Whether Android's Bluetooth is on",
+        "Description[it]": "Se il Bluetooth di Android è acceso",
+        "EnabledByDefault": true,
+        "Icon": "network-bluetooth-symbolic",
+        "Id": "org.droidnux.bluetooth",
+        "License": "GPL-3.0+",
+        "Name": "Bluetooth",
+        "Name[it]": "Bluetooth"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-NotificationArea": "true",
+    "X-Plasma-NotificationAreaCategory": "Hardware"
+}

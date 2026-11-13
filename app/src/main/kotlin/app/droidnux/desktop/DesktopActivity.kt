@@ -1,9 +1,13 @@
 package app.droidnux.desktop
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.database.ContentObserver
 import android.graphics.Color
@@ -41,6 +45,7 @@ import app.droidnux.container.DesktopEnvironment
 import app.droidnux.container.Distro
 import app.droidnux.display.AudioFocus
 import app.droidnux.display.AudioVolume
+import app.droidnux.display.CameraInput
 import app.droidnux.display.Presenter
 import app.droidnux.display.DisplayServer
 import java.io.File
@@ -80,12 +85,22 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private var uiScale = 1f
     private lateinit var menu: SessionMenu
     private lateinit var pcKeyboard: PcKeyboard
+    /** Android's camera dialog is open: another camera waits for the same answer. */
+    private var askingCamera = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         current = this
         AudioFocus.init(this)
         AudioVolume.init(this)
+        CameraInput.init(this)
+        // A Linux app opened a camera without Android's permission: the user answers over the desktop.
+        CameraInput.permissionAsker = {
+            if (!askingCamera) {
+                askingCamera = true
+                requestPermissions(arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA)
+            }
+        }
         DisplayServer.onClipboard = { text ->
             handler.post {
                 clipboardText = text
@@ -227,11 +242,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         val settings = DesktopSettings.load(this)
         prefs = settings
         menu.atBottom = settings.menuBottom
-        if (settings.keepScreenOn) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
+        applyKeepScreenOn()
         trackpadMode = settings.trackpad
         overlay?.apply(settings, animate = true)
         overlay?.visibility = if (settings.stats) View.VISIBLE else View.GONE
@@ -275,15 +286,18 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     // Plasma's brightness slider: powerdevil's helper writes the backlight's brightness (DesktopEnvironment.backlightDevice).
     private val backlight by lazy { DesktopEnvironment.backlightDevice(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)) }
     @Volatile private var backlightValue = -1
-    /** When the desktop last changed size: KWin then applies its saved output settings, an old brightness among them. */
-    @Volatile private var resizedAt = 0L
+    /**
+     * Until when a brightness from the session is its own setting coming back, not the user: powerdevil writes its
+     * own brightness while the session starts (seen: its minimum, and once the maximum). Android's stays.
+     */
+    @Volatile private var settleUntil = 0L
     private val backlightWatch by lazy {
         object : FileObserver(backlight, CLOSE_WRITE) {
             override fun onEvent(event: Int, path: String?) {
                 if (path != "brightness") return
                 val value = runCatching { File(backlight, path).readText().trim().toInt() }.getOrNull() ?: return
                 if (value == backlightValue) return
-                if (SystemClock.uptimeMillis() - resizedAt < RESIZE_SETTLE_MS) {
+                if (SystemClock.uptimeMillis() < settleUntil) {
                     runOnUiThread { writeBacklight(menuListener.brightness()) }
                     return
                 }
@@ -292,6 +306,69 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                 runOnUiThread { setBrightness(value.toFloat() / DesktopEnvironment.BACKLIGHT_MAX, ask = false) }
             }
         }
+    }
+
+    // Plasma's mouse settings that apply here, where Android's events become the pointer's: KWin renames the
+    // file into place (DesktopEnvironment.pointerSettingsFile).
+    private val pointerSettings by lazy {
+        DesktopEnvironment.pointerSettingsFile(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE))
+    }
+    @Volatile private var leftHanded = false
+    @Volatile private var pointerSpeed = 1f
+
+    // The orientation chosen in Plasma's display settings: Android turns the screen to it, the normal one
+    // follows Android's rotation (DesktopEnvironment.orientationFile).
+    private val orientationSetting by lazy {
+        DesktopEnvironment.orientationFile(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE))
+    }
+
+    // An app keeping the screen on (a video, a presentation): DesktopEnvironment.awakeFile.
+    private val awakeFile by lazy { DesktopEnvironment.awakeFile(Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)) }
+    private var awake = false
+
+    // The session's files above, all renamed into place in the guest's /tmp.
+    private val tmpWatch by lazy {
+        object : FileObserver(pointerSettings.parentFile!!, MOVED_TO) {
+            override fun onEvent(event: Int, path: String?) {
+                when (path) {
+                    pointerSettings.name -> readPointerSettings()
+                    orientationSetting.name -> runOnUiThread { readOrientation() }
+                    awakeFile.name -> runOnUiThread { readAwake() }
+                }
+            }
+        }
+    }
+
+    private fun readAwake() {
+        awake = DisplayServer.running && runCatching { awakeFile.readText().trim() == "1" }.getOrDefault(false)
+        applyKeepScreenOn()
+    }
+
+    private fun applyKeepScreenOn() {
+        if (prefs.keepScreenOn || awake) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    private fun readOrientation() {
+        // Before the session starts the file is the last session's: KWin writes it again when it turns.
+        val setting = if (DisplayServer.running) runCatching { orientationSetting.readText().trim() }.getOrNull() else null
+        requestedOrientation = when (setting) {
+            "1" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            "2" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+            "3" -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+            else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
+    private fun readPointerSettings() {
+        val values = runCatching { pointerSettings.readLines() }.getOrNull()
+            ?.associate { it.substringBefore('=') to it.substringAfter('=') } ?: return
+        leftHanded = values["leftHanded"] == "true"
+        // As libinput's flat profile turns its speed (-1 to 1) into a factor.
+        pointerSpeed = (1f + (values["pointerAcceleration"]?.toFloatOrNull() ?: 0f)).coerceAtLeast(0.005f)
     }
 
     /** The setting the desktop last gave Android: that change coming back is not a new one. */
@@ -319,6 +396,10 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         super.onResume()
         writeBacklight(menuListener.brightness())
         backlightWatch.startWatching()
+        readPointerSettings()
+        readOrientation()
+        readAwake()
+        tmpWatch.startWatching()
         contentResolver.registerContentObserver(Settings.System.getUriFor(Settings.System.SCREEN_BRIGHTNESS), false, brightnessObserver)
         // Back to a paused desktop: it continues.
         SessionPause.resume(this)
@@ -331,13 +412,18 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     override fun onPause() {
         backlightWatch.stopWatching()
+        tmpWatch.stopWatching()
         contentResolver.unregisterContentObserver(brightnessObserver)
-        saveThumbnail()
+        // The Home shows Plasma's wallpaper, and this picture only of a paused desktop (taken before the
+        // pause) or until a session copied the wallpaper: a full-size snapshot at every exit otherwise goes unseen.
+        val rootfs = Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)
+        if (!SessionPause.isPaused(this) && !DesktopEnvironment.wallpaperFile(rootfs).isFile) saveThumbnail()
         handler.removeCallbacks(overlayUpdater)
         clipboard.removePrimaryClipChangedListener(clipboardListener)
         super.onPause()
     }
 
+    @SuppressLint("GestureBackNavigation") // Android 13 and newer register an OnBackInvokedCallback in onCreate
     @Deprecated("Android 12 and older; newer versions use the OnBackInvokedCallback")
     override fun onBackPressed() = onBack()
 
@@ -356,8 +442,21 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             DisplayServer.onClipboard = null
             DisplayServer.onTextInput = null
             DisplayServer.onScale = null
+            CameraInput.permissionAsker = null
         }
         super.onDestroy()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CAMERA) return
+        askingCamera = false
+        // Cancelled (no answer): what Android has now.
+        val granted = (grantResults.firstOrNull() ?: checkSelfPermission(Manifest.permission.CAMERA)) ==
+            PackageManager.PERMISSION_GRANTED
+        // The session's service takes the camera type: apps keep filming with the desktop in the background.
+        if (granted) startForegroundService(Intent(this, DesktopSessionService::class.java))
+        CameraInput.setPermission(granted)
     }
 
     /**
@@ -420,12 +519,13 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
         if (!DisplayServer.running) {
             val rootfs = Container(this).installer.rootfsDir(Distro.DEBIAN_TRIXIE)
+            settleUntil = SystemClock.uptimeMillis() + START_SETTLE_MS
             val started = DisplayServer.start(rootfs, desktopWidth, desktopHeight)
             Log.i(TAG, "display server ${if (started) "started" else "failed to start"} at ${desktopWidth}x$desktopHeight")
+            applyUiScale()
             DesktopSessionService.start(this, DesktopSettings.load(this).xkbLayout())
             clipboardToDesktop()
         } else {
-            resizedAt = SystemClock.uptimeMillis()
             DisplayServer.resize(desktopWidth, desktopHeight)
         }
         DisplayServer.redraw()
@@ -588,7 +688,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         return true // also stops the right button from acting as Back
     }
 
-    /** Captured mouse: relative motion, accelerated by the desktop. */
+    /** Captured mouse: relative motion, at the speed set in Plasma. */
     private fun onCapturedPointer(event: MotionEvent): Boolean {
         if (!DisplayServer.running) return false
         showCursor(true)
@@ -608,7 +708,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
                     dx += event.getHistoricalX(i)
                     dy += event.getHistoricalY(i)
                 }
-                if (dx != 0f || dy != 0f) DisplayServer.pointerRelative(dx, dy)
+                if (dx != 0f || dy != 0f) DisplayServer.pointerRelative(dx * pointerSpeed, dy * pointerSpeed)
             }
             MotionEvent.ACTION_SCROLL -> DisplayServer.scroll(
                 event.getAxisValue(MotionEvent.AXIS_HSCROLL),
@@ -629,10 +729,11 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         Presenter.setCursorVisible(visible)
     }
 
+    /** A mouse's button; the left and right ones swapped when Plasma's setting is left-handed. */
     private fun xButton(androidButton: Int) = when (androidButton) {
-        MotionEvent.BUTTON_PRIMARY -> 1
+        MotionEvent.BUTTON_PRIMARY -> if (leftHanded) 3 else 1
         MotionEvent.BUTTON_TERTIARY -> 2
-        MotionEvent.BUTTON_SECONDARY -> 3
+        MotionEvent.BUTTON_SECONDARY -> if (leftHanded) 1 else 3
         MotionEvent.BUTTON_BACK -> 8
         MotionEvent.BUTTON_FORWARD -> 9
         else -> null
@@ -741,8 +842,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     /** Hides whichever keyboard shows, or shows the full one. */
     private fun toggleKeyboard() {
-        val androidShown = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
+        val androidShown = window.decorView.rootWindowInsets?.isVisible(WindowInsets.Type.ime()) == true
         when {
             androidShown -> getSystemService(InputMethodManager::class.java).hideSoftInputFromWindow(surfaceView.windowToken, 0)
             pcKeyboard.isShown -> pcKeyboard.hide()
@@ -895,8 +995,9 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
 
     private fun applyUiScale() {
         if (!DisplayServer.running) return
-        // KWin's output scale, in the 5% steps of Plasma's display settings. Only on a change:
-        // KWin keeps it across sessions, and the display settings may set it too.
+        // KWin's output scale, in the 5% steps of Plasma's display settings: on a change, and when
+        // the server starts, for a KWin that lost the one it keeps across sessions (killed while
+        // saving it). The display settings may set it too, and the app follows (followKWinScale).
         DisplayServer.setScale((dpi() * 20f / BASE_DPI).roundToInt() / 20f)
     }
 
@@ -926,8 +1027,12 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             val refresh = window.decorView.display?.refreshRate ?: 60f
             val width = (surfaceWidth * desktopScale).toInt() and 1.inv()
             val height = (surfaceHeight * desktopScale).toInt() and 1.inv()
+            val style = prefs.statsStyle
+            val items = prefs.statsItems(style)
             statsThread.execute {
-                val sample = statsSampler.sample(count, ms, if (count > 0) maxMs else null, refresh, width, height)
+                val sample = statsSampler.sample(
+                    count, ms, if (count > 0) maxMs else null, refresh, width, height, items, notes = style == StatsStyle.PANEL,
+                )
                 handler.post { overlay?.show(sample) }
             }
             handler.postDelayed(this, 1000)
@@ -938,8 +1043,9 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val TAG = "DroidNux.Desktop"
         /** How long after a finger leaves a focused text field its tap may still reach it. */
         private const val TAP_FOCUS_MS = 150L
-        /** How long after a resize a brightness from KWin counts as its saved setting coming back, not the user. */
-        private const val RESIZE_SETTLE_MS = 2000L
+        /** How long after the session starts a brightness from it counts as powerdevil's own (Plasma starts in ~20 s). */
+        private const val START_SETTLE_MS = 60_000L
+        private const val REQUEST_CAMERA = 1
 
         /** The desktop on screen, if any (main thread only). */
         private var current: DesktopActivity? = null

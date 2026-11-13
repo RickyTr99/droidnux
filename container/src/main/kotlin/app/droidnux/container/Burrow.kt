@@ -44,7 +44,9 @@ class Burrow(context: Context) {
             }
             // Android has no /dev/shm; glibc shm_open() needs one.
             add("-b"); add("${File(rootfs, SHM_DIR).apply { mkdirs() }.absolutePath}:/dev/shm")
-            // The desktop's own cgroup tree (DesktopEnvironment's APP_GROUPS): Android's is not readable.
+            // syslog()'s socket, as systemd links it: droidnux-journald listens there (Android's /dev has no room).
+            add("-b"); add("${File(rootfs, "run/systemd/journal/dev-log").absolutePath}:/dev/log")
+            // The desktop's own cgroup tree (DesktopEnvironment's droidnux-app-groups): Android's is not readable.
             val cgroups = File(rootfs, CGROUP_DIR).apply { mkdirs() }
             File(cgroups, CGROUP_MARKER).createNewFile()
             add("-b"); add("${cgroups.absolutePath}:/sys/fs/cgroup")
@@ -63,8 +65,9 @@ class Burrow(context: Context) {
             add("--")
             add("/usr/bin/env"); add("-i")
             addAll(GUEST_ENVIRONMENT.map { (k, v) -> "$k=$v" })
-            // Android's time zone (the guest's /etc/localtime says UTC).
-            add("TZ=${java.util.TimeZone.getDefault().id}")
+            // Android's time zone is in /etc/localtime (GuestSystem); in TZ when the guest has no data for it.
+            val zone = java.util.TimeZone.getDefault().id
+            if (!GuestSystem.hasZone(rootfs, zone)) add("TZ=$zone")
             addAll(command)
         }
 

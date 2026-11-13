@@ -4,9 +4,14 @@
 
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <!-- The microphone as the desktop's audio input, also while it is in the background. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- The cameras as the desktop's webcams, asked for when a Linux app first films. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <!-- The device's storage, mounted in the guest as /sdcard. -->
@@ -22,6 +27,13 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.DroidNux">
+
+        <!-- The desktop turns the screen to the orientation chosen in Plasma's
+             display settings, which Android 16 ignores on large screens without
+             this opt-out (API 36 only). -->
+        <property
+            android:name="android.window.PROPERTY_COMPAT_ALLOW_RESTRICTED_RESIZABILITY"
+            android:value="true" />
 
         <activity
             android:name=".MainActivity"
@@ -52,11 +64,17 @@
             android:name=".desktop.DesktopSessionService"
             android:exported="false"
             android:process=":desktop"
-            android:foregroundServiceType="specialUse|microphone">
+            android:foregroundServiceType="specialUse|microphone|camera">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs a Linux desktop session (display server and container) chosen by the user" />
         </service>
+
+        <!-- Keeps the app's process running while it installs (the distro, the desktop, the store's apps). -->
+        <service
+            android:name=".InstallService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <!-- The log a tester shares from Diagnostics (SessionLog). -->
         <provider
@@ -83,12 +101,6 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/desktop_keys_service" />
         </service>
-
-        <activity
-            android:name=".spike.BufferSpikeActivity"
-            android:exported="false"
-            android:screenOrientation="sensorLandscape"
-            android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen" />
     </application>
 
 </manifest>

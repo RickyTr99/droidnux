@@ -66,6 +66,10 @@ typedef void (*dnx_buffer_callback)(dnx_buffer_event event, void* data);
 bool dnx_presenter_present_buffer(AHardwareBuffer* buffer, uint32_t width, uint32_t height, dnx_buffer_callback callback,
                                   void* data);
 
+/* How frames are turned onto the surface (ANativeWindowTransform; identity at
+ * start). The cursor's framebuffer pixels are then the turned frame's. */
+void dnx_presenter_set_transform(int32_t transform);
+
 /* Cursor image in RGBA8888 (straight alpha), NULL or 0x0 hides it. Coordinates are framebuffer pixels. */
 void dnx_presenter_set_cursor(const uint32_t* rgba, uint32_t width, uint32_t height, int32_t xhot, int32_t yhot);
 void dnx_presenter_move_cursor(int32_t x, int32_t y);
