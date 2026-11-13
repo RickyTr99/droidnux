@@ -23,6 +23,7 @@
 
 #include "allocator.h"
 #include "audio_output.h"
+#include "camera_input.h"
 #include "dnx_wl.h"
 #include "private.h"
 #include "video_decoder.h"
@@ -492,8 +493,8 @@ bool dnx_wl_start(const dnx_wl_config* config) {
     dnx_wl_width = config->width;
     dnx_wl_height = config->height;
 
-    /* GPU clients' swapchain images (Mesa patch 0003), video decoding and
-     * sound. */
+    /* GPU clients' swapchain images (Mesa patch 0003), video decoding,
+     * sound and cameras. */
     char* path = NULL;
     asprintf(&path, "%s/.droidnux-ahb", config->tmp_dir);
     dnx_allocator_start(path);
@@ -503,6 +504,9 @@ bool dnx_wl_start(const dnx_wl_config* config) {
     free(path);
     asprintf(&path, "%s/.droidnux-audio", config->tmp_dir);
     dnx_audio_output_start(path);
+    free(path);
+    asprintf(&path, "%s/.droidnux-camera", config->tmp_dir);
+    dnx_camera_input_start(path);
     free(path);
     free(gpu_boost_path);
     asprintf(&gpu_boost_path, "%s/.droidnux-gpu-boost", config->tmp_dir);

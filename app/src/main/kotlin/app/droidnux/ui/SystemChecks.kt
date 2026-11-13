@@ -53,6 +53,7 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
     var phantomHelp by remember { mutableStateOf(false) }
     val notifications = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
     val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { refresh++ }
 
     val phantomOk = remember(refresh) { phantomProcessesUnlimited(context) }
     val batteryOk = remember(refresh) {
@@ -61,6 +62,9 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
     val filesOk = remember(refresh) { Environment.isExternalStorageManager() }
     val microphoneOk = remember(refresh) {
         ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    }
+    val cameraOk = remember(refresh) {
+        ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     }
     val notificationsOk = remember(refresh) {
         Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
@@ -81,6 +85,7 @@ fun SystemChecks(gpu: String?, modifier: Modifier = Modifier) {
             )
         }
         CheckRow(R.string.check_microphone, microphoneOk) { microphone.launch(Manifest.permission.RECORD_AUDIO) }
+        CheckRow(R.string.check_camera, cameraOk) { camera.launch(Manifest.permission.CAMERA) }
         CheckRow(R.string.check_notifications, notificationsOk) { notifications.launch(Manifest.permission.POST_NOTIFICATIONS) }
     }
 

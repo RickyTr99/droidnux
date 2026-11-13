@@ -52,14 +52,17 @@ class DesktopSessionService : Service() {
             endDesktop()
             return START_NOT_STICKY
         }
-        // The microphone type lets Linux apps record while the desktop is in the background;
-        // Android refuses it without the permission.
+        // The microphone and camera types let Linux apps record and film while the desktop is in the
+        // background; Android refuses each without its permission.
         val microphone = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        val camera = checkSelfPermission(android.Manifest.permission.CAMERA) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
         startForeground(
             NOTIFICATION_ID, notification(),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
-                (if (microphone) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0),
+                (if (microphone) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0) or
+                (if (camera) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0),
         )
         if (session == null) {
             startSession(intent?.getStringExtra(EXTRA_LAYOUT) ?: "us")

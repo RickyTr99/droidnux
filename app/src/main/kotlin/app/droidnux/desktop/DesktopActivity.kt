@@ -1,10 +1,12 @@
 package app.droidnux.desktop
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.database.ContentObserver
@@ -43,6 +45,7 @@ import app.droidnux.container.DesktopEnvironment
 import app.droidnux.container.Distro
 import app.droidnux.display.AudioFocus
 import app.droidnux.display.AudioVolume
+import app.droidnux.display.CameraInput
 import app.droidnux.display.Presenter
 import app.droidnux.display.DisplayServer
 import java.io.File
@@ -82,12 +85,22 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
     private var uiScale = 1f
     private lateinit var menu: SessionMenu
     private lateinit var pcKeyboard: PcKeyboard
+    /** Android's camera dialog is open: another camera waits for the same answer. */
+    private var askingCamera = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         current = this
         AudioFocus.init(this)
         AudioVolume.init(this)
+        CameraInput.init(this)
+        // A Linux app opened a camera without Android's permission: the user answers over the desktop.
+        CameraInput.permissionAsker = {
+            if (!askingCamera) {
+                askingCamera = true
+                requestPermissions(arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA)
+            }
+        }
         DisplayServer.onClipboard = { text ->
             handler.post {
                 clipboardText = text
@@ -429,8 +442,21 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
             DisplayServer.onClipboard = null
             DisplayServer.onTextInput = null
             DisplayServer.onScale = null
+            CameraInput.permissionAsker = null
         }
         super.onDestroy()
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_CAMERA) return
+        askingCamera = false
+        // Cancelled (no answer): what Android has now.
+        val granted = (grantResults.firstOrNull() ?: checkSelfPermission(Manifest.permission.CAMERA)) ==
+            PackageManager.PERMISSION_GRANTED
+        // The session's service takes the camera type: apps keep filming with the desktop in the background.
+        if (granted) startForegroundService(Intent(this, DesktopSessionService::class.java))
+        CameraInput.setPermission(granted)
     }
 
     /**
@@ -1019,6 +1045,7 @@ class DesktopActivity : Activity(), SurfaceHolder.Callback {
         private const val TAP_FOCUS_MS = 150L
         /** How long after the session starts a brightness from it counts as powerdevil's own (Plasma starts in ~20 s). */
         private const val START_SETTLE_MS = 60_000L
+        private const val REQUEST_CAMERA = 1
 
         /** The desktop on screen, if any (main thread only). */
         private var current: DesktopActivity? = null

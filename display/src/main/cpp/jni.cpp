@@ -88,6 +88,52 @@ Java_app_droidnux_display_AudioVolume_nativeSetVolume(JNIEnv*, jclass, jfloat vo
     dnx_audio_output_set_volume(volume, mute);
 }
 
+// -- Camera ------------------------------------------------------------------
+
+#include "camera_input.h"
+
+namespace {
+jclass cameraClass;
+jmethodID cameraPermissionMethod;
+
+// On a camera's thread, as onAudioPlaying.
+void onCameraPermission() {
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (audioVm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        if (audioVm->AttachCurrentThread(&env, nullptr) != JNI_OK) return;
+        attached = true;
+    }
+    env->CallStaticVoidMethod(cameraClass, cameraPermissionMethod);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (attached) audioVm->DetachCurrentThread();
+}
+}  // namespace
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_CameraInput_nativeInit(JNIEnv* env, jclass clazz) {
+    if (cameraClass != nullptr) return;
+    if (audioVm == nullptr) env->GetJavaVM(&audioVm);
+    cameraClass = static_cast<jclass>(env->NewGlobalRef(clazz));
+    cameraPermissionMethod = env->GetStaticMethodID(clazz, "onPermissionNeeded", "()V");
+    dnx_camera_input_set_permission_callback(onCameraPermission);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_CameraInput_nativeSetRotation(JNIEnv*, jclass, jint degrees) {
+    dnx_camera_input_set_rotation(degrees);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_CameraInput_nativeSetPermission(JNIEnv*, jclass, jboolean granted) {
+    dnx_camera_input_set_permission(granted);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_app_droidnux_display_CameraInput_nativeSetPaused(JNIEnv*, jclass, jboolean paused) {
+    dnx_camera_input_set_paused(paused);
+}
+
 // -- Presenter ---------------------------------------------------------------
 
 #include "presenter.h"
