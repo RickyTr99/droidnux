@@ -519,10 +519,11 @@ private:
         ring_ = nullptr;
     }
 
-    // Clockwise turn that makes this camera's picture upright on a screen turned `rotation` degrees.
+    // Clockwise turn that makes this camera's picture upright on a screen turned `rotation` degrees: Camera2's
+    // JPEG_ORIENTATION formula, as the reader's buffers are not mirrored.
     uint32_t turnFor(int rotation) const {
         int device = (360 - rotation) % 360;  // how far the device is turned clockwise
-        int turn = camera_->facing == DNX_CAMERA_FRONT ? camera_->orientation + device : camera_->orientation - device;
+        int turn = camera_->facing == DNX_CAMERA_FRONT ? camera_->orientation - device : camera_->orientation + device;
         return static_cast<uint32_t>((turn % 360 + 360) % 360);
     }
 
