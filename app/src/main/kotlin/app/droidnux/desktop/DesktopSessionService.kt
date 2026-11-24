@@ -17,6 +17,7 @@ import android.os.Looper
 import android.provider.Settings
 import android.util.Log
 import app.droidnux.BuildConfig
+import app.droidnux.MainActivity
 import app.droidnux.R
 import app.droidnux.container.Container
 import app.droidnux.container.DesktopEnvironment
@@ -41,6 +42,8 @@ class DesktopSessionService : Service() {
     private var battery: BroadcastReceiver? = null
     private var network: NetworkReporter? = null
     private var drives: RemovableDrives? = null
+    /** Plasma's Restart: the desktop opens again once this process is gone. */
+    @Volatile private var restart = false
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -49,14 +52,17 @@ class DesktopSessionService : Service() {
             endDesktop()
             return START_NOT_STICKY
         }
-        // The microphone type lets Linux apps record while the desktop is in the background;
-        // Android refuses it without the permission.
+        // The microphone and camera types let Linux apps record and film while the desktop is in the
+        // background; Android refuses each without its permission.
         val microphone = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        val camera = checkSelfPermission(android.Manifest.permission.CAMERA) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
         startForeground(
             NOTIFICATION_ID, notification(),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or
-                (if (microphone) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0),
+                (if (microphone) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0) or
+                (if (camera) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0),
         )
         if (session == null) {
             startSession(intent?.getStringExtra(EXTRA_LAYOUT) ?: "us")
@@ -77,7 +83,7 @@ class DesktopSessionService : Service() {
         val distro = Distro.DEBIAN_TRIXIE
         val container = Container(this)
         val rootfs = container.installer.rootfsDir(distro)
-        DesktopEnvironment.prepare(rootfs, java.io.File(applicationInfo.nativeLibraryDir))
+        DesktopEnvironment.prepare(this, rootfs)
         // Android's battery in the desktop (sticky: the first call comes at once).
         if (battery == null) {
             battery = object : BroadcastReceiver() {
@@ -103,12 +109,17 @@ class DesktopSessionService : Service() {
         }
         scope.launch {
             val log = SessionLog.Writer(this@DesktopSessionService)
+            var loggedOut = false
             try {
                 process.inputStream.bufferedReader().forEachLine {
                     if (verbose) Log.i(TAG_GUEST, it)
                     log.line(it)
                     // The desktop logged out; its services (PipeWire, D-Bus) would keep the runtime alive.
-                    if (it == DesktopEnvironment.SESSION_END_MARKER) process.destroy()
+                    if (it == DesktopEnvironment.SESSION_END_MARKER || it == DesktopEnvironment.SESSION_RESTART_MARKER) {
+                        loggedOut = true
+                        restart = it == DesktopEnvironment.SESSION_RESTART_MARKER
+                        process.destroy()
+                    }
                     if (it == DesktopEnvironment.WALLET_MOVED_MARKER) Account.walletMoved(this@DesktopSessionService, password)
                 }
             } catch (e: java.io.IOException) {
@@ -119,6 +130,12 @@ class DesktopSessionService : Service() {
             }
             val code = process.waitFor()
             Log.i(TAG, "session ended with $code")
+            // Not the logout's or stopSession's destroy(), which ends it with SIGTERM.
+            if (session === process && !loggedOut && code == SessionKill.EXIT_STATUS) {
+                Log.w(TAG, "session killed by Android")
+                runCatching { SessionKill.record(this@DesktopSessionService) }
+                getSystemService(NotificationManager::class.java).notify(KILLED_NOTIFICATION_ID, killedNotification())
+            }
             if (session === process) handler.post { endDesktop() }
         }
     }
@@ -129,6 +146,11 @@ class DesktopSessionService : Service() {
      */
     private fun endDesktop() {
         stopSession()
+        // While the desktop is still on screen: Android lets a visible app start an activity.
+        if (restart) {
+            startActivity(Intent(this, MainActivity::class.java)
+                .setAction(MainActivity.ACTION_RESTART_DESKTOP).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }
         DesktopActivity.finishCurrent()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -180,7 +202,22 @@ class DesktopSessionService : Service() {
             .build()
     }
 
+    /** Stays after this process: the Home, which it opens, says what to do. */
+    private fun killedNotification(): Notification {
+        val home = PendingIntent.getActivity(
+            this, 2, packageManager.getLaunchIntentForPackage(packageName), PendingIntent.FLAG_IMMUTABLE,
+        )
+        return Notification.Builder(this, CHANNEL)
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentTitle(getString(R.string.session_killed))
+            .setContentIntent(home)
+            .setAutoCancel(true)
+            .build()
+    }
+
     companion object {
+        /** The notification of a session Android killed; the Home removes it with its own notice. */
+        const val KILLED_NOTIFICATION_ID = 2
         private const val TAG = "DroidNux.Session"
         private const val TAG_GUEST = "DroidNux.Guest"
         private const val CHANNEL = "session"

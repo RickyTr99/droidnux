@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=@BACKLIGHT_HELPER@
+Exec=/usr/lib/kf6/kauth/libexec/backlighthelper
+User=root

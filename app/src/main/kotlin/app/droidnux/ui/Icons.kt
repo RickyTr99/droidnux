@@ -30,18 +30,8 @@ object Icons {
 
     // The selected tab's icons: the same shapes, filled.
     val DesktopFilled = solid("M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z", lines = "M8 21h8M12 17v4")
-    val AppsFilled = solid(
-        "M5.5 4h3A1.5 1.5 0 0 1 10 5.5v3A1.5 1.5 0 0 1 8.5 10h-3A1.5 1.5 0 0 1 4 8.5v-3A1.5 1.5 0 0 1 5.5 4z",
-        "M15.5 4h3A1.5 1.5 0 0 1 20 5.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 14 8.5v-3A1.5 1.5 0 0 1 15.5 4z",
-        "M5.5 14h3a1.5 1.5 0 0 1 1.5 1.5v3A1.5 1.5 0 0 1 8.5 20h-3A1.5 1.5 0 0 1 4 18.5v-3A1.5 1.5 0 0 1 5.5 14z",
-        "M15.5 14h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3a1.5 1.5 0 0 1-1.5-1.5v-3a1.5 1.5 0 0 1 1.5-1.5z",
-    )
     val StoreFilled = solid("M5 8h14l-1.2 12H6.2z", lines = "M9 8V6.5a3 3 0 0 1 6 0V8")
     val SettingsFilled = solid("M14 7a2 2 0 1 0 4 0a2 2 0 1 0-4 0", "M8 17a2 2 0 1 0 4 0a2 2 0 1 0-4 0", lines = "M4 7h10M18 7h2M4 17h4M12 17h8")
-    val SystemFilled = solid(
-        "M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z",
-        lines = "M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4",
-    )
     val Terminal = stroke("M5 4h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z", "M7 9l3 3-3 3M12 15h5")
     val Check = stroke("M3 12a9 9 0 1 0 18 0a9 9 0 1 0-18 0", "M8 12.5l3 3 5-6")
     val Warning = stroke("M12 3l9.5 17h-19z", "M12 10v4M12 17.5v.01")
@@ -61,6 +51,8 @@ object Icons {
     val Stop = solid("M8 6h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2z")
     val Back = stroke("M15 5l-7 7 7 7")
     val Chevron = stroke("M9 5l7 7-7 7")
+    val Update = stroke("M12 19V5M6 11l6-6 6 6")
+    val Refresh = stroke("M20 11a8 8 0 1 0-2.3 5.7", "M20 4v7h-7")
     val Open = stroke("M14 4h6v6M20 4l-9 9", "M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4")
     val Selected = stroke("M5 12.5l4.5 4.5L19 7.5", width = 2.2f)
     val Debian = stroke("M14 4.5a7.5 7.5 0 1 0 5 9.5", "M14.5 9a3 3 0 1 0 0 6")

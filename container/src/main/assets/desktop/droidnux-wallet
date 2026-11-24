@@ -1,0 +1,86 @@
+#!/usr/bin/python3
+# Written by DroidNux: moves KDE's wallet to the account's new password.
+#   droidnux-wallet <wallet dir>, with the new key and the key before on its
+#   input, one line each: "[b0, b1, ...]", pam_kwallet's PBKDF2 of the password.
+# Exits 0 once the wallet is open with the new key.
+# kwalletd only changes a password through its own dialog: the wallet opens
+# with the key of the password before, and its entries move to a wallet made
+# with the new key (same salt), which takes its place.
+import os
+import shutil
+import sys
+import time
+
+from gi.repository import Gio, GLib
+
+WALLET = "kdewallet"
+TEMP = "droidnux-moved"
+APP = "DroidNux"
+
+bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+
+
+def call(method, signature, args, reply):
+    result = bus.call_sync("org.kde.kwalletd6", "/modules/kwalletd6", "org.kde.KWallet", method,
+                           GLib.Variant(signature, args), GLib.VariantType(reply), 0, 30000, None)
+    return result.unpack()[0] if reply != "()" else None
+
+
+def key(line):
+    return bytes(int(b) for b in line.strip().strip("[]").split(","))
+
+
+def open_with(wallet, k):
+    # pamOpen does not say whether it opened the wallet, and kwalletd
+    # ignores it while it handles another request: try for a while.
+    for _ in range(15):
+        call("pamOpen", "(sayi)", (wallet, k, 0), "()")
+        if call("isOpen", "(s)", (wallet,), "(b)"):
+            return True
+        time.sleep(0.2)
+    return False
+
+
+def fail(message):
+    print(f"droidnux-wallet: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+directory = sys.argv[1]
+new, before = key(sys.stdin.readline()), key(sys.stdin.readline())
+# kwalletd starts on the first call.
+for _ in range(50):
+    try:
+        call("isOpen", "(s)", (WALLET,), "(b)")
+        break
+    except GLib.Error:
+        time.sleep(0.2)
+
+if open_with(WALLET, new):
+    sys.exit(0)
+if not open_with(WALLET, before):
+    fail("the wallet opens with neither password")
+for suffix in (".kwl", ".salt"):
+    if os.path.exists(f"{directory}/{TEMP}{suffix}"):
+        os.remove(f"{directory}/{TEMP}{suffix}")
+shutil.copyfile(f"{directory}/{WALLET}.salt", f"{directory}/{TEMP}.salt")
+if not open_with(TEMP, new):
+    fail("cannot make the new wallet")
+source = call("open", "(sxs)", (WALLET, 0, APP), "(i)")
+target = call("open", "(sxs)", (TEMP, 0, APP), "(i)")
+count = 0
+for folder in call("folderList", "(is)", (source, APP), "(as)"):
+    call("createFolder", "(iss)", (target, folder, APP), "(b)")
+    for name, value in call("entriesList", "(iss)", (source, folder, APP), "(a{sv})").items():
+        kind = call("entryType", "(isss)", (source, folder, name, APP), "(i)")
+        if call("writeEntry", "(issayis)", (target, folder, name, bytes(value), kind, APP), "(i)") != 0:
+            fail(f"cannot copy {folder}/{name}")
+        count += 1
+call("sync", "(is)", (target, APP), "()")
+call("close", "(sb)", (TEMP, True), "(i)")
+call("close", "(sb)", (WALLET, True), "(i)")
+os.replace(f"{directory}/{TEMP}.kwl", f"{directory}/{WALLET}.kwl")
+os.remove(f"{directory}/{TEMP}.salt")
+if not open_with(WALLET, new):
+    fail("the moved wallet does not open")
+print(f"droidnux-wallet: {count} entries moved to the new password")

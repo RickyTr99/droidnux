@@ -1,0 +1,390 @@
+#!/bin/sh
+# Written by DroidNux: starts Plasma, its KWin nested on the app's
+# Wayland compositor. Runs twice: first to set up and start D-Bus, then
+# inside it (--in-dbus).
+#
+# As root (the user part): the user the desktop runs as (some apps refuse root,
+# VLC among them), DROIDNUX_USER, made on first use with the settings root had
+# (or renamed from the account made before); the password the app sends on the
+# input line becomes its password and sudo's (when new to the account: one
+# changed in Linux stays), and the key of KDE's wallet, opened in --in-dbus as
+# pam_kwallet would at login (DROIDNUX_WALLET; DROIDNUX_WALLET_BEFORE when the
+# app also sends the password before, on a second line). Then the script again
+# with the user's ids (perl: setpriv needs capabilities Android refuses).
+if [ "$(id -u)" = 0 ] && [ "$1" != --in-dbus ]; then
+    user=${DROIDNUX_USER:-@DESKTOP_USER@}
+    pass= before=
+    IFS= read -r pass || true
+    IFS= read -r before || true
+    # Qt temporary files and directories (name.XXXXXX) of the last session, emptied
+    # but never removed: the session is killed, and /tmp is not cleared at boot.
+    find /tmp -mindepth 1 -maxdepth 1 -empty -name '*.??????' -delete 2> /dev/null
+    # The account made before this one, by DroidNux (its comment).
+    old=$(getent passwd | awk -F: '$5 == "DroidNux" { print $1; exit }')
+    if ! id -u "$user" > /dev/null 2>&1 && [ -n "$old" ]; then
+        oldhome=$(getent passwd "$old" | cut -d: -f6)
+        # Lines with \x escapes are binary values (Qt streams with length
+        # prefixes, Dolphin's session among them): rewriting breaks them,
+        # the link keeps their old paths working.
+        usermod -l "$user" -d "/home/$user" -m "$old" && groupmod -n "$user" "$old" &&
+            ln -s "/home/$user" "$oldhome" &&
+            grep -rlI --exclude-dir=mozilla -e "$oldhome/" "/home/$user/.config" 2> /dev/null |
+                xargs -r sed -i "/[\\]x/!s|$oldhome/|/home/$user/|g"
+    fi
+    if ! id -u "$user" > /dev/null 2>&1; then
+        useradd -m -s /bin/bash -c DroidNux "$user"
+        for g in sudo audio video render input; do
+            getent group $g > /dev/null && usermod -a -G $g "$user"
+        done
+        home=$(getent passwd "$user" | cut -d: -f6)
+        # The settings of the desktop that ran as root, once.
+        for f in .config .local .mozilla .thunderbird .ssh .gtkrc-2.0 .vscode; do
+            [ -e "/root/$f" ] && cp -a "/root/$f" "$home/"
+        done
+        [ -e "$home/.local" ] && chown -R "$user:" "$home/.local"
+        grep -rlI --exclude-dir=mozilla -e /root/ -e file:///root "$home/.config" "$home/.local/share/user-places.xbel" 2> /dev/null |
+            xargs -r sed -i "s|file:///root\b|file://$home|g; s|=/root/|=$home/|g; s|\"/root/|\"$home/|g"
+    fi
+    # USB drives (Burrow's GUEST_USB_DRIVES) are root:external_storage 0770, a group the app
+    # has: its members see them writable (Dolphin, access()).
+    getent group 1077 > /dev/null || groupadd -g 1077 external_storage
+    id -G "$user" | grep -qw 1077 || usermod -a -G "$(getent group 1077 | cut -d: -f1)" "$user"
+    home=$(getent passwd "$user" | cut -d: -f6)
+    unset DROIDNUX_WALLET DROIDNUX_WALLET_BEFORE
+    if [ -n "$pass" ]; then
+        # The app's password becomes the account's when it is new to it (first start, changed in the
+        # app): one changed in Linux (passwd, Plasma's settings) stays. The stamp is the hash the
+        # app's password got last; the password goes on perl's input, not its command line.
+        stamp=@PASSWORD_STAMP@
+        last=$(cat "$stamp" 2> /dev/null) || last=$(getent shadow "$user" | cut -d: -f2)
+        if ! printf '%s\n%s' "$last" "$pass" | perl -e 'chomp(my $h = <STDIN>); local $/; my $p = <STDIN>;
+                exit($h ne "" && crypt($p, $h) eq $h ? 0 : 1)'; then
+            printf '%s:%s\n' "$user" "$pass" | chpasswd || echo "chpasswd failed"
+            last=$(getent shadow "$user" | cut -d: -f2)
+        fi
+        mkdir -p "${stamp%/*}" && (umask 077 && printf '%s\n' "$last" > "$stamp")
+        sudo="ALL=(ALL:ALL) ALL"
+        # pam_kwallet's key: PBKDF2-HMAC-SHA512 of the password, 50000 rounds, the wallet's salt.
+        wallets=$home/.local/share/kwalletd
+        mkdir -p "$wallets"
+        [ -s "$wallets/kdewallet.salt" ] || head -c 56 /dev/urandom > "$wallets/kdewallet.salt"
+        # Only what mkdir made: ~/.local can hold a Flatpak repository of 100000 files.
+        chown "$user:" "$home/.local" "$home/.local/share" && chown -R "$user:" "$wallets"
+        walletkey() {
+            printf %s "$1" | perl -MDigest::SHA=hmac_sha512 -e '
+                local $/; my $key = <STDIN>; open my $f, "<", $ARGV[0] or die "salt: $!\n"; binmode $f;
+                my $salt = <$f>; my $u = hmac_sha512($salt . pack("N", 1), $key); my $t = $u;
+                for (2 .. 50000) { $u = hmac_sha512($u, $key); $t ^= $u }
+                print "[", join(", ", unpack("C56", $t)), "]";' "$wallets/kdewallet.salt"
+        }
+        DROIDNUX_WALLET=$(walletkey "$pass") && export DROIDNUX_WALLET
+        # The password changed in the app: the wallet still opens with the one before.
+        if [ -n "$before" ] && [ "$before" != "$pass" ]; then
+            DROIDNUX_WALLET_BEFORE=$(walletkey "$before") && export DROIDNUX_WALLET_BEFORE
+        fi
+    else
+        sudo="ALL=(ALL:ALL) NOPASSWD: ALL"
+    fi
+    unset pass before
+    if [ -d /etc/sudoers.d ]; then
+        echo "$user $sudo" > /etc/sudoers.d/droidnux && chmod 440 /etc/sudoers.d/droidnux
+    fi
+    # Flatpak runs "bwrap" from PATH, also outside the session (apt's triggers, sudo, adb):
+    # ours, with the distro's moved aside, as dpkg keeps it through bubblewrap's updates.
+    if [ "$(readlink /usr/bin/bwrap)" != @BWRAP_SCRIPT@ ]; then
+        dpkg-divert --local --rename --divert /usr/bin/bwrap.distrib --add /usr/bin/bwrap > /dev/null &&
+            ln -sf @BWRAP_SCRIPT@ /usr/bin/bwrap
+    fi
+    # systemctl without systemd, as for bwrap: apt's scripts start the services they install
+    # (deb-systemd-invoke), and loginctl, timedatectl and hostnamectl talk to droidnux-logind,
+    # once /run/systemd/system says systemd runs. journalctl -u reads the services' logs.
+    for tool in systemctl:@SYSTEMCTL_SCRIPT@ journalctl:@JOURNALCTL_SCRIPT@; do
+        if [ "$(readlink "/usr/bin/${tool%%:*}")" != "${tool#*:}" ]; then
+            dpkg-divert --local --rename --divert "/usr/bin/${tool%%:*}.distrib" --add "/usr/bin/${tool%%:*}" > /dev/null &&
+                ln -sf "${tool#*:}" "/usr/bin/${tool%%:*}"
+        fi
+    done
+    mkdir -p /run/systemd/system
+    # The journal, before anything logs (/dev/log is its dev-log, bound by Burrow).
+    rm -f /run/systemd/journal/stdout
+    @JOURNALD_SCRIPT@ &
+    for _ in 1 2 3 4 5 6 7 8 9 10; do [ -S /run/systemd/journal/stdout ] && break; sleep 0.1; done
+    # Docker's images refuse every service start to apt (exit 101): not this one's, unlike Docker's builds.
+    grep -qs "For most Docker users" /usr/sbin/policy-rc.d && rm -f /usr/sbin/policy-rc.d
+    # A system bus with UPower on it, as root: Plasma shows Android's battery.
+    mkdir -p "$(dirname @SYSTEM_BUS_SOCKET@)" && rm -f @SYSTEM_BUS_SOCKET@
+    if dbus-daemon --config-file=@SYSTEM_BUS_CONF@ --fork --nopidfile; then
+        export DBUS_SYSTEM_BUS_ADDRESS=unix:path=@SYSTEM_BUS_SOCKET@
+        @UPOWER_SCRIPT@ &
+        @POLKIT_SCRIPT@ &
+    fi
+    # The services enabled for multi-user.target (ssh, nginx...), on the system bus, as at boot:
+    # what systemctl.py knew of the last session's goes, as /run does with systemd.
+    rm -f /run/*.status /run/user/*/run/*.status /tmp/run-*/run/*.status
+    systemctl default > /dev/null 2>&1 &
+    # Burrow starts in /root: apps launched from Plasma (Konsole) inherit the directory.
+    cd "$home" || true
+    exec perl -e '$u = shift; @g = split / /, shift; $) = "$g[0] @g"; $( = $g[0]; $< = $> = $u;
+        die "cannot become $u\n" if $> != $u; exec @ARGV or die "exec: $!\n"' \
+        "$(id -u "$user")" "$(id -G "$user")" \
+        env HOME="$home" USER="$user" LOGNAME="$user" "$0" "$@"
+fi
+if [ "$1" != --in-dbus ]; then
+    export XDG_RUNTIME_DIR=/tmp/runtime-$(id -u)
+    # The app's compositor; KWin puts its own socket in XDG_RUNTIME_DIR.
+    export WAYLAND_DISPLAY=/tmp/wayland-@DISPLAY@
+    export XDG_SESSION_TYPE=wayland
+    export SHELL=/bin/bash
+    # Debian's games (/usr/games), on a user's PATH after a login; none happens here.
+    export PATH=$PATH:/usr/local/games:/usr/games
+    export XDG_CONFIG_DIRS=@PLASMA_DEFAULTS@:/etc/xdg
+    # Android's SELinux denies reopening a memfd through /proc/self/fd,
+    # so Firefox's parent process falls back to unsealed shm_open while
+    # its children still demand F_SEAL_SHRINK: every tab crashes with
+    # "Shared memory PlatformHandle is not safe to map" (Firefox 154+).
+    export MOZ_SHM_NO_SEALS=1
+    # Its crash reporter (and Thunderbird's) hangs on a futex writing the minidump
+    # under Burrow, which leaves the crashed app frozen: crashes just end it.
+    export MOZ_CRASHREPORTER_DISABLE=1
+    # Electron apps (VS Code, Discord, Obsidian): Chromium's sandbox needs user
+    # namespaces, which Android does not give, or its set-user-ID helper, which
+    # AppImages and archives carry without the bit (they would abort). Chromium's
+    # vendor builds (Brave, Chrome, Vivaldi) install the helper: their sandbox works.
+    export ELECTRON_DISABLE_SANDBOX=1
+    # AppImages mount themselves with FUSE, which Android does not give apps: their runtime
+    # extracts them to /tmp and runs them from there instead (a slower start, the same app).
+    export APPIMAGE_EXTRACT_AND_RUN=1
+    # Set by startplasma-wayland too, but xdg-desktop-portal starts on the bus before it
+    # (the session services below) and without it takes no backend: no file chooser, no settings.
+    export XDG_CURRENT_DESKTOP=KDE
+    # Their menu entries, as Flatpak's profile.d script would add after a login.
+    export XDG_DATA_DIRS=$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}
+    # The tray's network and Bluetooth applets read the app's state file with an XMLHttpRequest.
+    export QML_XHR_ALLOW_FILE_READ=1
+    # GPU: DroidNux's Mesa (Turnip, and Zink for OpenGL) when installed on
+    # an Adreno (KGSL), otherwise the distro's software rendering: on other
+    # GPUs Turnip finds no device, Zink fails and KWin gets no EGL.
+    MESA=@MESA_PREFIX@
+    if [ -f "$MESA/droidnux-mesa.version" ] && [ -e /dev/kgsl-3d0 ]; then
+        echo "GPU: DroidNux Mesa $(head -n 1 "$MESA/droidnux-mesa.version") on KGSL"
+        MESA_GPU=1
+        export LD_LIBRARY_PATH=$MESA/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+        export VK_DRIVER_FILES=$MESA/share/vulkan/icd.d/freedreno_icd.aarch64.json
+        export __GLX_VENDOR_LIBRARY_NAME=droidnux
+        export __EGL_VENDOR_LIBRARY_FILENAMES=$MESA/share/glvnd/egl_vendor.d/50_droidnux.json
+        export MESA_LOADER_DRIVER_OVERRIDE=zink
+        export GALLIUM_DRIVER=zink
+        # Samsung's KGSL (One UI) needs Turnip's UBWC flag hint: without
+        # it, whole frames flash while Firefox scrolls (WebRender on Zink).
+        export FD_DEV_FEATURES=enable_tp_ubwc_flag_hint=1
+        # Swapchain images in AHardwareBuffers from the app, which shows
+        # them without copying (Mesa patch 0003).
+        export DROIDNUX_AHB_SOCKET=/tmp/.droidnux-ahb
+        # Video decoding by the app's MediaCodec (guest/va), for players
+        # like mpv and ffmpeg; Firefox keeps software decoding (droidnux.js).
+        if [ -f "$MESA/lib/aarch64-linux-gnu/dri/droidnux_drv_video.so" ]; then
+            export LIBVA_DRIVERS_PATH=$MESA/lib/aarch64-linux-gnu/dri
+            export LIBVA_DRIVER_NAME=droidnux
+        fi
+    else
+        echo "GPU: software rendering (no KGSL device or no DroidNux Mesa)"
+        # With DRI3 but no device, Debian's GLX tries Zink; with no
+        # Vulkan driver Zink fails and Mesa 25.0 deadlocks on its own
+        # instance_lock in the error path (zink_destroy_screen): X11 apps
+        # on Xwayland would hang. Plain software GLX instead.
+        export LIBGL_DRI3_DISABLE=1
+    fi
+    if [ -n "$MESA_GPU" ]; then
+        # KWin renders into GBM buffers from the app (Mesa patch 0004).
+        export GBM_BACKENDS_PATH=$MESA/lib/aarch64-linux-gnu/gbm
+        # Flatpak's apps: our Mesa's extension where installed (droidnux-flatpak-gl), the runtime's for software.
+        export FLATPAK_GL_DRIVERS=droidnux:default
+    fi
+    if [ -n "$DROIDNUX_VERBOSE" ]; then
+        # Diagnostic builds: the GPU devices, and all KWin, Qt's platform, EGL and Mesa say.
+        uname -a
+        ls -l /dev/kgsl* /dev/mali* /dev/dri 2>&1
+        export QT_LOGGING_RULES='kwin_*.debug=true;qt.qpa.*.debug=true'
+        export EGL_LOG_LEVEL=debug LIBGL_DEBUG=verbose MESA_DEBUG=1 VK_LOADER_DEBUG=error,warn
+    fi
+    # KSvg and KIconThemes with DroidNux's patches (Plasma component),
+    # while the distro's are the versions they were built from (the
+    # "<package> <version>" lines after the component's version).
+    PLASMA=@PLASMA_PREFIX@
+    if [ -f "$PLASMA/droidnux-plasma.version" ] && [ "$(sed 1d "$PLASMA/droidnux-plasma.version")" = \
+        "$(sed 1d "$PLASMA/droidnux-plasma.version" | while read -r package version; do
+            echo "$package $(dpkg-query -W -f '${Version}' "$package" 2> /dev/null)"; done)" ]; then
+        export LD_LIBRARY_PATH=$PLASMA/lib/aarch64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+        # ksystemstats' GPU, disk and network plugins for Android, found before the distro's of the same name.
+        export QT_PLUGIN_PATH=$PLASMA/lib/aarch64-linux-gnu/qt6/plugins${QT_PLUGIN_PATH:+:$QT_PLUGIN_PATH}
+    fi
+    # Plasma's mouse settings the app applies (left-handed, speed): KWin writes them here (KWin patch 0003).
+    export DROIDNUX_POINTER_SETTINGS=@POINTER_FILE@
+    # The orientation chosen in Plasma's display settings, which the app gives Android (KWin patch 0004);
+    # KWin writes it when it changes, so last session's goes.
+    rm -f @ORIENTATION_FILE@
+    export DROIDNUX_ORIENTATION=@ORIENTATION_FILE@
+    # Turnip on KGSL has no calibrated timestamps: Zink answers
+    # GL_TIMESTAMP with a GPU round trip, which KWin asks every frame.
+    export KWIN_NO_TIMER_QUERY=1
+    # KWin's render time prediction and Qt's animation timer (guest/kwin-pacing): clients at the full refresh rate.
+    export LD_PRELOAD=/usr/local/lib/aarch64-linux-gnu/droidnux/@KWIN_LIBRARY@${LD_PRELOAD:+:$LD_PRELOAD}
+    mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+    # The wallet's key, from the environment (D-Bus would pass it to every service) to a private file.
+    if [ -n "$DROIDNUX_WALLET" ]; then
+        (umask 077 && printf '%s\n%s\n' "$DROIDNUX_WALLET" "$DROIDNUX_WALLET_BEFORE" > "$XDG_RUNTIME_DIR/.droidnux-wallet")
+        unset DROIDNUX_WALLET DROIDNUX_WALLET_BEFORE
+    fi
+    # Xwayland's sockets, made by KWin.
+    mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+
+    # The compositor starts with the app; wait for its socket.
+    i=0
+    while [ ! -S "$WAYLAND_DISPLAY" ] && [ $i -lt 100 ]; do sleep 0.1; i=$((i + 1)); done
+
+    # Android's language, once its locale is generated (about a second, the first time).
+    if [ -f /usr/share/i18n/locales/$DROIDNUX_LOCALE ]; then
+        locale -a | grep -qx "$DROIDNUX_LOCALE.utf8" ||
+            localedef -i "$DROIDNUX_LOCALE" -c -f UTF-8 "$DROIDNUX_LOCALE.UTF-8"
+        export LANG=$DROIDNUX_LOCALE.UTF-8
+    fi
+
+    # The keyboard layout: KWin's own (kxkbrc, unless the user set one), and
+    # the keymap the app's compositor sends, which it reads on first use.
+    config=${XDG_CONFIG_HOME:-$HOME/.config}
+    mkdir -p "$config"
+    layout=${DROIDNUX_XKB_LAYOUT:-us}
+    [ -f "$config/kxkbrc" ] || printf '[Layout]\nLayoutList=%s\nUse=true\n' "$layout" > "$config/kxkbrc"
+    printf 'xkb_keymap { xkb_keycodes { include "evdev+aliases(qwerty)" }; xkb_types { include "complete" };
+        xkb_compat { include "complete" }; xkb_symbols { include "pc+%s+inet(evdev)" }; };\n' "$layout" |
+        xkbcomp -w 0 -xkb - /tmp/.droidnux-keymap.xkb || echo "keymap for $layout failed"
+    # Without systemd: Plasma starts its services itself.
+    [ -f "$config/startkderc" ] || printf '[General]\nsystemdBoot=false\n' > "$config/startkderc"
+    # KWin applies the brightness it saved to the backlight, which is Android's: Android's instead.
+    if [ -n "$DROIDNUX_BRIGHTNESS" ] && [ -f "$config/kwinoutputconfig.json" ]; then
+        sed -i -E "s/(\"brightness\": *)[0-9.eE+-]+/\\1$DROIDNUX_BRIGHTNESS/" "$config/kwinoutputconfig.json"
+    fi
+
+    # The device's storage in the home folder (when the app may access it).
+    if [ -d @GUEST_SDCARD@ ] && [ ! -e "$HOME/Android" ] && [ ! -L "$HOME/Android" ]; then
+        ln -s @GUEST_SDCARD@ "$HOME/Android"
+    fi
+    if command -v xdg-user-dirs-update > /dev/null; then
+        # Firefox's downloads stay where they went before the package came.
+        [ -f "$config/user-dirs.dirs" ] || [ ! -d "$HOME/Downloads" ] ||
+            echo 'XDG_DOWNLOAD_DIR="$HOME/Downloads"' > "$config/user-dirs.dirs"
+        xdg-user-dirs-update && @PLACES_SCRIPT@
+    fi
+
+    exec dbus-run-session "$0" --in-dbus
+fi
+
+# KDE's wallet, opened with the account's password (the user part) as pam_kwallet does at login.
+# Once KWin is up: kwalletd and xdg-desktop-portal (which Qt asks for its settings) take the bus's
+# environment when they start, and before it they would show their windows outside KWin.
+rm -f "$XDG_RUNTIME_DIR/wayland-0"
+if [ -f "$XDG_RUNTIME_DIR/.droidnux-wallet" ]; then
+    key=$(sed -n 1p "$XDG_RUNTIME_DIR/.droidnux-wallet")
+    before=$(sed -n 2p "$XDG_RUNTIME_DIR/.droidnux-wallet")
+    rm -f "$XDG_RUNTIME_DIR/.droidnux-wallet"
+    (until [ -S "$XDG_RUNTIME_DIR/wayland-0" ]; do sleep 0.2; done
+    dbus-update-activation-environment WAYLAND_DISPLAY=wayland-0
+    if [ -n "$before" ]; then
+        # The keys on its input: the command line is visible to every process.
+        (printf '%s\n%s\n' "$key" "$before" | @WALLET_SCRIPT@ "$HOME/.local/share/kwalletd" &&
+            echo @WALLET_MOVED_MARKER@) &
+    else
+        gdbus call --session --dest org.kde.kwalletd6 --object-path /modules/kwalletd6 \
+            --method org.kde.KWallet.pamOpen kdewallet "$key" 0 > /dev/null 2>&1 &
+    fi) &
+    unset key before
+fi
+# logind for Plasma and systemd's tools (leaving, inhibitors, Lock), up before Plasma asks for it.
+if [ -n "$DBUS_SYSTEM_BUS_ADDRESS" ]; then
+    @LOGIND_SCRIPT@ &
+    gdbus wait --system --timeout 5 org.freedesktop.login1
+fi
+# The user's own services (systemctl --user enable): the distro's, enabled for every user
+# (PipeWire, DrKonqi, gpg-agent), are started below or not needed.
+for unit in "$HOME"/.config/systemd/user/sockets.target.wants/* "$HOME"/.config/systemd/user/timers.target.wants/* \
+    "$HOME"/.config/systemd/user/default.target.wants/*; do
+    [ -e "$unit" ] && systemctl --user start "${unit##*/}" > /dev/null 2>&1 &
+done
+# Session services without systemd start here, on the session bus.
+if command -v pipewire > /dev/null; then
+    # Its clients give up if its socket is not there yet: wait for it,
+    # not for the one the last session left behind.
+    rm -f "$XDG_RUNTIME_DIR/pipewire-0" "$XDG_RUNTIME_DIR/pipewire-0-manager"
+    pipewire &
+    i=0
+    while [ ! -S "$XDG_RUNTIME_DIR/pipewire-0" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    wireplumber &
+    pipewire-pulse &
+fi
+# The apps' processes for System Monitor.
+@APP_GROUPS_SCRIPT@ &
+@WALLPAPER_SCRIPT@ &
+[ -z "$FLATPAK_GL_DRIVERS" ] || @FLATPAK_GL_SCRIPT@ &
+# Flatpak's apps see the user's files: the portals take them for host apps (Burrow's chroot is not
+# in /proc/<pid>/root) and hand over real paths, which the document portal (FUSE) cannot export.
+# Without these, saving, opening and dropping files fail (Telegram).
+! command -v flatpak > /dev/null ||
+    flatpak override --user --filesystem=home --filesystem=/sdcard --filesystem=/mnt/media_rw &
+LAUNCH_AFTER=plasmashell
+# Apps the app starts (its app list, Android shortcuts), by desktop id: they
+# must run in this session, which a separate runtime would leave when it exits.
+rm -f @LAUNCH_FIFO@ && mkfifo -m 600 @LAUNCH_FIFO@
+# Apps started before the desktop shares its theme keep default icons.
+# They get LAUNCH_AFTER's environment, as the desktop's launchers do: under
+# Plasma, ours names the app's compositor instead of KWin.
+(until pgrep -x $LAUNCH_AFTER > /dev/null; do sleep 0.2; done; sleep 1
+while :; do
+    while read -r id; do
+        case "$id" in ''|*[!A-Za-z0-9._-]*) continue ;; esac
+        p=$(pgrep -x $LAUNCH_AFTER | head -1)
+        for d in /usr/local/share/applications /usr/share/applications \
+            "$HOME/.local/share/flatpak/exports/share/applications" /var/lib/flatpak/exports/share/applications; do
+            [ -f "$d/$id.desktop" ] || continue
+            # In a subshell that exits at once: the app is orphaned and reaped
+            # by the runtime, not left a zombie of this loop.
+            if [ -r "/proc/$p/environ" ]; then
+                (xargs -0 -a "/proc/$p/environ" sh -c 'exec env -i "$@" gio launch "$0"' "$d/$id.desktop" &)
+            else
+                (gio launch "$d/$id.desktop" &)
+            fi
+            break
+        done
+    done < @LAUNCH_FIFO@
+done) &
+# plasmashell back when it exits during the session. KWin drops a client on a
+# protocol error and Qt then exits instead of crashing, so KCrash does not
+# restart it and the desktop stays black. Waits with tail --pid (one syscall a
+# second) rather than polling pgrep.
+(until p=$(pgrep -x plasmashell | head -1) && [ -n "$p" ]; do sleep 1; done
+sleep 2
+env=$XDG_RUNTIME_DIR/.droidnux-plasmashell-environ
+# The copy keeps environ's mode (0400): the last session's cannot be overwritten.
+rm -f "$env" && cp /proc/$p/environ "$env" || exit
+n=0
+while [ $n -lt 20 ]; do
+    tail --pid="$p" -f /dev/null
+    # At logout ksmserver goes too: the session is over. Leaving (shutdown, restart)
+    # then asks logind (droidnux-logind), which tells the app, and startplasma-wayland stays.
+    sleep 2
+    if ! pgrep -x ksmserver > /dev/null; then
+        # Restart's marker comes from logind first, when plasma-shutdown asks.
+        i=0
+        while pgrep -x plasma-shutdown > /dev/null && [ $i -lt 25 ]; do sleep 0.2; i=$((i + 1)); done
+        echo @SESSION_END_MARKER@
+        exit
+    fi
+    p=$(pgrep -x plasmashell | head -1)
+    if [ -z "$p" ]; then
+        echo "plasmashell exited, restarting it"
+        xargs -0 -a "$env" sh -c 'exec env -i "$@" plasmashell' sh > /dev/null 2>&1 &
+        p=$!
+        n=$((n + 1))
+    fi
+done) &
+startplasma-wayland
+echo @SESSION_END_MARKER@

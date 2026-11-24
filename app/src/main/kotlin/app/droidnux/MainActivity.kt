@@ -1,7 +1,9 @@
 package app.droidnux
 
+import android.app.ActivityManager
 import android.content.Intent
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -49,6 +51,11 @@ class MainActivity : ComponentActivity() {
             finish()
             return
         }
+        // Plasma's Restart: the desktop again once its process is gone (a new one starts the display server).
+        if (intent.action == ACTION_RESTART_DESKTOP) {
+            reopenDesktop(SystemClock.uptimeMillis() + RESTART_TIMEOUT_MS)
+            return
+        }
         // Started from the launcher with the setting on: the desktop at once, the Home behind it.
         val settings = DesktopSettings.load(this)
         if (savedInstanceState == null && intent.action == Intent.ACTION_MAIN && settings.openAtStart &&
@@ -90,7 +97,22 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun reopenDesktop(until: Long) {
+        val desktop = "$packageName:desktop"
+        val running = getSystemService(ActivityManager::class.java).runningAppProcesses.orEmpty().any { it.processName == desktop }
+        if (running && SystemClock.uptimeMillis() < until) {
+            window.decorView.postDelayed({ reopenDesktop(until) }, RESTART_POLL_MS)
+            return
+        }
+        startActivity(Intent(this, DesktopActivity::class.java))
+        finish()
+    }
+
     companion object {
+        /** Intent action of the desktop's restart (DesktopSessionService). */
+        const val ACTION_RESTART_DESKTOP = "app.droidnux.action.RESTART_DESKTOP"
+        private const val RESTART_POLL_MS = 100L
+        private const val RESTART_TIMEOUT_MS = 5000L
         /** Intent action of the Linux apps' shortcuts, with [EXTRA_APP]. */
         const val ACTION_LAUNCH = "app.droidnux.action.LAUNCH_APP"
         /** String extra: the app's desktop id. */

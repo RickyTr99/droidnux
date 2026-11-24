@@ -150,6 +150,24 @@ class AppCatalogTest {
         assertEquals("photo", gimp.keywords)
     }
 
+    @Test
+    fun theIndexGivesBackWhatWasFetched() {
+        val dir = java.nio.file.Files.createTempDirectory("catalog").toFile()
+        try {
+            val index = File(dir, "catalog.tsv")
+            val apps = AppCatalog.parse(sample.byteInputStream(), "it")
+            assertEquals(apps, AppCatalog.loadIndex(index, "it") { apps })
+            // Fresh and in the same language: read from the file, nothing fetched.
+            assertEquals(apps, AppCatalog.loadIndex(index, "it") { error("fetched again") })
+            // Another language: fetched again. Too old: fetched again, and kept if that fails.
+            assertEquals(emptyList<AppCatalog.App>(), AppCatalog.loadIndex(index, "de") { emptyList() })
+            index.setLastModified(0)
+            assertEquals(emptyList<AppCatalog.App>(), AppCatalog.loadIndex(index, "de") { throw java.io.IOException("offline") })
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     /** Debian's real catalog, when its path is given: DN_DEP11=.../Components-arm64.yml.gz */
     @Test
     fun parsesDebiansCatalog() {

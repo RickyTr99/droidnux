@@ -1,0 +1,42 @@
+#!/usr/bin/python3
+# Written by DroidNux: org.freedesktop.PolicyKit1 on the system bus, for powerdevil's backlight helper.
+# Says yes to the helper's actions only: KAuth asks before calling the helper, and
+# the helper again. No polkitd: without logind it would see no active session,
+# and its own rules ask for a password.
+from gi.repository import Gio, GLib
+
+ALLOWED = "@BACKLIGHT_HELPER@."
+NODE = Gio.DBusNodeInfo.new_for_xml(
+    '<node><interface name="org.freedesktop.PolicyKit1.Authority">'
+    '<method name="CheckAuthorization"><arg type="(sa{sv})" direction="in"/><arg type="s" direction="in"/>'
+    '<arg type="a{ss}" direction="in"/><arg type="u" direction="in"/><arg type="s" direction="in"/>'
+    '<arg type="(bba{ss})" direction="out"/></method>'
+    '<method name="CancelCheckAuthorization"><arg type="s" direction="in"/></method>'
+    '<method name="EnumerateActions"><arg type="s" direction="in"/>'
+    '<arg type="a(ssssssuuua{ss})" direction="out"/></method>'
+    '<signal name="Changed"/>'
+    '<property name="BackendName" type="s" access="read"/>'
+    '<property name="BackendVersion" type="s" access="read"/>'
+    '<property name="BackendFeatures" type="u" access="read"/>'
+    '</interface></node>')
+
+
+def method_call(connection, sender, path, interface, method, parameters, invocation):
+    if method == "CheckAuthorization":
+        allowed = parameters[1].startswith(ALLOWED)
+        invocation.return_value(GLib.Variant("((bba{ss}))", ((allowed, False, {}),)))
+    elif method == "EnumerateActions":
+        invocation.return_value(GLib.Variant("(a(ssssssuuua{ss}))", ([],)))
+    else:
+        invocation.return_value(None)
+
+
+def get_property(connection, sender, path, interface, name):
+    return {"BackendName": GLib.Variant("s", "droidnux"), "BackendVersion": GLib.Variant("s", "126"),
+            "BackendFeatures": GLib.Variant("u", 0)}[name]
+
+
+bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+bus.register_object("/org/freedesktop/PolicyKit1/Authority", NODE.interfaces[0], method_call, get_property, None)
+Gio.bus_own_name_on_connection(bus, "org.freedesktop.PolicyKit1", Gio.BusNameOwnerFlags.NONE, None, None)
+GLib.MainLoop().run()

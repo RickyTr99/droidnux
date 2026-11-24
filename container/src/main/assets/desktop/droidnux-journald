@@ -1,0 +1,215 @@
+#!/usr/bin/python3
+# Written by DroidNux: a journal without systemd-journald, which Android cannot
+# run. It takes what systemd's takes: syslog() on /dev/log (Burrow binds it to
+# dev-log here), sd_journal_send() on socket, and the services' output, which
+# systemctl.py connects to stdout as systemd does. Each message goes to
+# /var/log/syslog and, from a service, to the service's log of systemctl.py,
+# which journalctl -u shows.
+import array
+import glob
+import os
+import pwd
+import re
+import selectors
+import socket
+import struct
+import time
+import traceback
+
+JOURNAL = "/run/systemd/journal"
+SYSLOG = "/var/log/syslog"
+LIMIT = 8 << 20  # shortcut: one old syslog.1 past this size, no logrotate
+HOST = socket.gethostname()
+UCRED = struct.Struct("3i")  # pid, uid, gid
+SYSLOG_LINE = re.compile(r"<\d+>(?:\w{3} [ \d]\d \d\d:\d\d:\d\d )?([^\[:\s]+)(?:\[(\d+)\])?: ?(.*)", re.S)
+
+
+def unit_log(unit, uid):
+    """ systemctl.py's log of a unit (an instance's is its template's) """
+    name = re.sub(r"@[^.]*\.", "@.", unit)
+    folder = "/var/log/journal" if uid == 0 else os.path.join(pwd.getpwuid(uid).pw_dir, ".config/log/journal")
+    return os.path.join(folder, name + ".log")
+
+
+def main_pids():
+    """ MainPID: (unit, uid), from systemctl.py's status files """
+    found = {}
+    for path in glob.glob("/run/*.status") + glob.glob("/run/user/*/run/*.status") + glob.glob("/tmp/run-*/run/*.status"):
+        owner = re.match(r"/run/user/(\d+)/|/tmp/run-(\d+)/", path)
+        uid = int(owner.group(1) or owner.group(2)) if owner else 0
+        try:
+            with open(path) as status:
+                for line in status:
+                    if line.startswith("MainPID="):
+                        found[int(line[8:])] = (os.path.basename(path)[:-len(".status")], uid)
+        except (OSError, ValueError):
+            pass
+    return found
+
+
+STREAMS = {}  # pid that opened a service's output stream: (unit, uid)
+
+
+def unit_of(pid):
+    """ the service whose main process is @pid or one of its parents """
+    mains = main_pids()
+    mains.update(STREAMS)
+    while pid and pid > 1:
+        if pid in mains:
+            return mains[pid]
+        try:
+            with open("/proc/%d/stat" % pid) as stat:
+                text = stat.read()
+            pid = int(text[text.rindex(")") + 2:].split()[1])
+        except (OSError, ValueError):
+            return None
+    return None
+
+
+def append(path, text, uid):
+    try:
+        if path == SYSLOG and os.path.exists(path) and os.path.getsize(path) > LIMIT:
+            os.replace(path, path + ".1")
+        new = not os.path.exists(path)
+        if new:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "a") as log:
+            log.write(text)
+        if new and uid:
+            os.chown(path, uid, -1)
+    except (OSError, KeyError):
+        pass
+
+
+def write(ident, pid, message, unit):
+    stamp = "%s %s %s%s: " % (time.strftime("%b %d %H:%M:%S"), HOST, ident or "unknown", "[%d]" % pid if pid else "")
+    text = "".join(stamp + line + "\n" for line in message.rstrip("\n").split("\n"))
+    append(SYSLOG, text, 0)
+    if unit:
+        append(unit_log(*unit), text, unit[1])
+
+
+def native_fields(data):
+    """ the journal's native protocol: KEY=value lines, or KEY, a 64-bit size, the value """
+    fields, at = {}, 0
+    while at < len(data):
+        end = data.find(b"\n", at)
+        end = len(data) if end < 0 else end
+        line = data[at:end]
+        if b"=" in line:
+            key, _, value = line.partition(b"=")
+            at = end + 1
+        else:
+            size = struct.unpack_from("<Q", data, end + 1)[0]
+            key, value = line, data[end + 9:end + 9 + size]
+            at = end + 9 + size + 1
+        fields[key.decode(errors="replace")] = value.decode(errors="replace")
+    return fields
+
+
+def datagram(sock, native):
+    data, ancillary, _, _ = sock.recvmsg(256 * 1024, socket.CMSG_SPACE(UCRED.size) + socket.CMSG_SPACE(4 * 4))
+    pid = 0
+    for level, kind, value in ancillary:
+        if level == socket.SOL_SOCKET and kind == socket.SCM_CREDENTIALS:
+            pid = UCRED.unpack_from(value)[0]
+        elif level == socket.SOL_SOCKET and kind == socket.SCM_RIGHTS:
+            fds = array.array("i", value[:len(value) - len(value) % 4])
+            for fd in fds:  # a big entry comes in a memfd
+                if not data:
+                    data = os.pread(fd, 1 << 24, 0)
+                os.close(fd)
+    unit = unit_of(pid)
+    if pid and not unit:  # a service's first message, before its stream is read or its MainPID written
+        serve(0, streams_only=True)
+        unit = unit_of(pid)
+    if native:
+        fields = native_fields(data)
+        sender = int(fields.get("SYSLOG_PID", "0") or 0) or pid
+        write(fields.get("SYSLOG_IDENTIFIER", ""), sender, fields.get("MESSAGE", ""), unit)
+        return
+    text = data.decode(errors="replace")
+    match = SYSLOG_LINE.match(text)
+    if match:
+        ident, sender, message = match.group(1), int(match.group(2) or 0) or pid, match.group(3)
+    else:
+        ident, sender, message = "", pid, re.sub(r"^<\d+>", "", text)
+    write(ident, sender, message, unit)
+
+
+class Stream:
+    """ a service's stdout and stderr: systemd's header (identifier, unit, priority,
+        level prefix and three forwards, a line each), then the lines """
+
+    def __init__(self, conn):
+        self.conn, self.buffer, self.header, self.unit = conn, b"", None, None
+        self.pid, self.uid, _ = UCRED.unpack(conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, UCRED.size))
+
+    def read(self):
+        data = self.conn.recv(65536)
+        self.buffer += data
+        *lines, self.buffer = self.buffer.split(b"\n")
+        if not data and self.buffer:
+            lines, self.buffer = lines + [self.buffer], b""
+        for line in lines:
+            text = line.decode(errors="replace")
+            if self.header is None or len(self.header) < 7:
+                self.header = (self.header or []) + [text]
+                if len(self.header) == 7:
+                    self.unit = (self.header[1], self.uid) if self.header[1] else unit_of(self.pid)
+                    if self.header[1]:
+                        STREAMS[self.pid] = self.unit
+                continue
+            if self.header[3] == "1":
+                text = re.sub(r"^<\d>", "", text)
+            write(self.header[0], self.pid, text, self.unit)
+        return bool(data)
+
+
+def listen(name, kind):
+    path = os.path.join(JOURNAL, name)
+    if os.path.lexists(path):
+        os.unlink(path)
+    sock = socket.socket(socket.AF_UNIX, kind)
+    sock.bind(path)
+    os.chmod(path, 0o666)
+    if kind == socket.SOCK_DGRAM:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
+    else:
+        sock.listen(64)
+    return sock
+
+
+def close(key):
+    events.unregister(key.fileobj)
+    key.fileobj.close()
+    if STREAMS.get(key.data.pid) == key.data.unit:
+        del STREAMS[key.data.pid]
+
+
+def serve(timeout, streams_only=False):
+    for key, _ in events.select(timeout):
+        try:
+            if key.fileobj is streams:
+                conn, _ = streams.accept()
+                events.register(conn, selectors.EVENT_READ, Stream(conn))
+            elif isinstance(key.data, Stream):
+                if not key.data.read():
+                    close(key)
+            elif not streams_only:
+                datagram(key.fileobj, key.data)
+        except Exception:  # pylint: disable=broad-exception-caught
+            traceback.print_exc()  # one message lost, never the journal
+            if isinstance(key.data, Stream):
+                close(key)
+
+
+os.makedirs(JOURNAL, exist_ok=True)
+events = selectors.DefaultSelector()
+events.register(listen("dev-log", socket.SOCK_DGRAM), selectors.EVENT_READ, False)
+events.register(listen("socket", socket.SOCK_DGRAM), selectors.EVENT_READ, True)
+streams = listen("stdout", socket.SOCK_STREAM)
+events.register(streams, selectors.EVENT_READ, None)
+while True:
+    serve(None)

@@ -2,7 +2,8 @@
  * PipeWire module for the container: an Audio/Sink that plays through the
  * app's AAudio output and an Audio/Source that records the device's
  * microphone (display/src/main/cpp/core/audio_output.cpp), protocol in
- * audio_protocol.h. Each node has its own connection and ring.
+ * audio_protocol.h. Each node has its own connection and ring. The cameras'
+ * nodes are in camera.c.
  *
  * A node drives the guest's graph with a timer, as a sound card does with its
  * interrupt. The AAudio callback drains (fills) the shared ring at the
@@ -20,7 +21,7 @@
  * there: bionic's __errno (see below), fortify, the stack protector and libm
  * (the DLL avoids exp()). For quick tests it also builds in the container:
  *   gcc -O2 -shared -fPIC -I<dir of audio_protocol.h> -I/usr/include/pipewire-0.3 \
- *       -I/usr/include/spa-0.2 module-droidnux.c -o libpipewire-module-droidnux.so
+ *       -I/usr/include/spa-0.2 module-droidnux.c camera.c -o libpipewire-module-droidnux.so
  *
  * Loaded by the pipewire.conf.d file that DesktopEnvironment writes.
  */
@@ -787,13 +788,17 @@ error:
     return res;
 }
 
+/* camera.c: a Video/Source for each of the device's cameras. */
+int dnx_camera_nodes(struct pw_impl_module* module);
+
 SPA_EXPORT int pipewire__module_init(struct pw_impl_module* module, const char* args) {
     (void) args;
     PW_LOG_TOPIC_INIT(mod_topic);
     int sink = create_node(module, false);
     /* Without the microphone the sink still plays, and the other way round. */
     int source = create_node(module, true);
-    if (sink < 0 && source < 0) return sink;
+    int cameras = dnx_camera_nodes(module);
+    if (sink < 0 && source < 0 && cameras < 0) return sink;
     pw_impl_module_update_properties(module, &SPA_DICT_INIT_ARRAY(module_props));
     return 0;
 }

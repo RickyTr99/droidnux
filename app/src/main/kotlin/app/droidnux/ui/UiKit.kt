@@ -1,5 +1,17 @@
 package app.droidnux.ui
 
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.composed
+import androidx.compose.foundation.gestures.ScrollableState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.Image
@@ -95,6 +107,35 @@ fun InfoRow(
         if (!compact && action != null) action()
         trailing()
     }
+}
+
+/**
+ * Fades the content out at the edges it can still scroll past, instead of cutting it there: put it before the
+ * scroll modifier (or on the lazy list) with the same [state]. [vertical] false for rows that scroll sideways.
+ */
+fun Modifier.fadingEdges(state: ScrollableState, vertical: Boolean = true, length: Dp = if (vertical) 56.dp else 32.dp): Modifier = composed {
+    val start by animateFloatAsState(if (state.canScrollBackward) 1f else 0f, tween(150), label = "fadeStart")
+    val end by animateFloatAsState(if (state.canScrollForward) 1f else 0f, tween(150), label = "fadeEnd")
+    graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+        // The gradients are made again only when the size or an edge's fade changes, not at every scrolled frame.
+        .drawWithCache {
+            val edge = length.toPx()
+            val full = if (vertical) size.height else size.width
+            val band = if (vertical) Size(size.width, edge) else Size(edge, size.height)
+            val far = if (vertical) Offset(0f, full - edge) else Offset(full - edge, 0f)
+            val opaque = Color.Black
+            fun gradient(from: Float, to: Float, startAlpha: Float, endAlpha: Float) =
+                listOf(opaque.copy(alpha = startAlpha), opaque.copy(alpha = endAlpha)).let {
+                    if (vertical) Brush.verticalGradient(it, from, to) else Brush.horizontalGradient(it, from, to)
+                }
+            val startFade = gradient(0f, edge, 1f - start, 1f)
+            val endFade = gradient(full - edge, full, 1f, 1f - end)
+            onDrawWithContent {
+                drawContent()
+                drawRect(startFade, size = band, blendMode = BlendMode.DstIn)
+                drawRect(endFade, topLeft = far, size = band, blendMode = BlendMode.DstIn)
+            }
+        }
 }
 
 /** Page dots of the first-run steps: the current one is a longer bar. */

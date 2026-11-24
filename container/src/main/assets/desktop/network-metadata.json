@@ -1,0 +1,16 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Description": "Android's network",
+        "Description[it]": "La rete di Android",
+        "EnabledByDefault": true,
+        "Icon": "network-wireless-signal-excellent-symbolic",
+        "Id": "org.droidnux.network",
+        "License": "GPL-3.0+",
+        "Name": "Network",
+        "Name[it]": "Rete"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0",
+    "X-Plasma-NotificationArea": "true",
+    "X-Plasma-NotificationAreaCategory": "Hardware"
+}

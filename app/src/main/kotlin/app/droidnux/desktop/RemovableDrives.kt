@@ -2,7 +2,6 @@ package app.droidnux.desktop
 
 import android.content.Context
 import android.net.Uri
-import android.os.Build
 import android.os.Environment
 import android.os.storage.StorageManager
 import android.os.storage.StorageVolume
@@ -44,14 +43,13 @@ class RemovableDrives(
         }
     }
 
-    // shortcut: Android 10 has no volume callback, its drives are those of the session's start.
     fun start() {
         update()
-        if (Build.VERSION.SDK_INT >= 30) storage.registerStorageVolumeCallback(context.mainExecutor, callback)
+        storage.registerStorageVolumeCallback(context.mainExecutor, callback)
     }
 
     fun stop() {
-        if (Build.VERSION.SDK_INT >= 30) storage.unregisterStorageVolumeCallback(callback)
+        storage.unregisterStorageVolumeCallback(callback)
     }
 
     private fun update() {

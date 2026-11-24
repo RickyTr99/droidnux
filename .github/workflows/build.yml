@@ -2,7 +2,7 @@ name: Build
 
 on:
   push:
-    branches: [main, phase*, wayland]
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 
@@ -60,7 +60,7 @@ jobs:
           CCACHE_MAXSIZE: 2G
           CCACHE_BASEDIR: ${{ github.workspace }}
         run: |
-          ./gradlew assembleDebug --console=plain
+          ./gradlew assembleDebug :container:testDebugUnitTest lintDebug --console=plain
           ccache -s
 
       - uses: actions/upload-artifact@v4

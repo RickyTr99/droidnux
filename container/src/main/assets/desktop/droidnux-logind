@@ -1,0 +1,438 @@
+#!/usr/bin/python3
+# Written by DroidNux: systemd's logind, timedated and hostnamed on the session's system bus,
+# as far as a desktop in an Android app has them. One user, one seat, one session (this one):
+# - Plasma's Shut Down ends the session and Restart starts it again (markers on the session's output);
+# - inhibitors (systemd-inhibit, powerdevil) work; an idle one, or an app keeping the screen on through
+#   powerdevil (video players, browsers, presentations), keeps Android's screen on (@AWAKE_FILE@);
+# - Lock reaches the screen locker; loginctl, timedatectl and hostnamectl answer (no setting: Android's).
+# No sleep: Android suspends the device, not this session.
+import json
+import os
+import platform
+import pwd
+import time
+
+from gi.repository import Gio, GLib
+
+BASE = "/org/freedesktop/login1"
+SESSION_ID = "1"
+SESSION = BASE + "/session/_31"
+SEAT = BASE + "/seat/seat0"
+UID = os.getuid()
+USER = pwd.getpwuid(UID).pw_name
+USER_PATH = "%s/user/_%d" % (BASE, UID)
+STARTED = int(time.time() * 1e6)
+STARTED_MONOTONIC = int(time.monotonic() * 1e6)
+SCREEN_POLICY = 4  # powerdevil's ChangeScreenSettings
+NOT_SUPPORTED = "org.freedesktop.DBus.Error.NotSupported"
+ANDROID = "Android sets this"
+
+
+def methods(spec):
+    """'Name(in)out' items, as D-Bus signatures, to introspection XML."""
+    xml = ""
+    for item in spec.split():
+        name, _, rest = item.partition("(")
+        args, _, out = rest.partition(")")
+        xml += '<method name="%s">' % name
+        for t in split_signature(args):
+            xml += '<arg type="%s" direction="in"/>' % t
+        for t in split_signature(out):
+            xml += '<arg type="%s" direction="out"/>' % t
+        xml += "</method>"
+    return xml
+
+
+def split_signature(signature):
+    return list(GLib.Variant.split_signature("(%s)" % signature)) if signature else []
+
+
+def interface(name, method_spec="", signals="", props=None):
+    xml = '<interface name="%s">%s' % (name, methods(method_spec))
+    for item in signals.split():
+        signal, _, args = item.partition("(")
+        xml += '<signal name="%s">%s</signal>' % (
+            signal, "".join('<arg type="%s"/>' % t for t in split_signature(args.rstrip(")"))))
+    for prop, (signature, _) in (props or {}).items():
+        xml += '<property name="%s" type="%s" access="read"/>' % (prop, signature)
+    return xml + "</interface>"
+
+
+def os_release(key):
+    try:
+        with open("/etc/os-release") as f:
+            for line in f:
+                k, _, v = line.strip().partition("=")
+                if k == key:
+                    return v.strip('"')
+    except OSError:
+        pass
+    return ""
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def zones():
+    try:
+        with open("/usr/share/zoneinfo/tzdata.zi") as f:
+            return sorted(line.split()[1] for line in f if line[:2] in ("Z ", "L "))
+    except OSError:
+        return []
+
+
+def now_usec():
+    return int(time.time() * 1e6)
+
+
+inhibitors = {}  # read end of the pipe -> (what, who, why, mode, uid, pid)
+locked = False
+screen_wanted = False  # by an app, through powerdevil
+awake_written = None
+
+
+def inhibited(mode):
+    return ":".join(sorted({w for i in inhibitors.values() if i[3] == mode for w in i[0].split(":")}))
+
+
+MANAGER_PROPS = {
+    "BlockInhibited": ("s", lambda: inhibited("block")),
+    "DelayInhibited": ("s", lambda: inhibited("delay")),
+    "InhibitDelayMaxUSec": ("t", lambda: 5000000),
+    "IdleHint": ("b", lambda: False),
+    "IdleSinceHint": ("t", lambda: 0),
+    "IdleSinceHintMonotonic": ("t", lambda: 0),
+    "PreparingForShutdown": ("b", lambda: False),
+    "PreparingForSleep": ("b", lambda: False),
+    "Docked": ("b", lambda: False),
+    "LidClosed": ("b", lambda: False),
+    "NAutoVTs": ("u", lambda: 0),
+    # Unset, as systemd says it: Plasma's leave dialog announces a boot menu otherwise.
+    "RebootToBootLoaderMenu": ("t", lambda: 2 ** 64 - 1),
+    "RebootToBootLoaderEntry": ("s", lambda: ""),
+    "RebootToFirmwareSetup": ("b", lambda: False),
+}
+SESSION_PROPS = {
+    "Id": ("s", lambda: SESSION_ID),
+    "User": ("(uo)", lambda: (UID, USER_PATH)),
+    "Name": ("s", lambda: USER),
+    "Timestamp": ("t", lambda: STARTED),
+    "TimestampMonotonic": ("t", lambda: STARTED_MONOTONIC),
+    "VTNr": ("u", lambda: 0),
+    "Seat": ("(so)", lambda: ("seat0", SEAT)),
+    "TTY": ("s", lambda: ""),
+    "Display": ("s", lambda: ""),
+    "Remote": ("b", lambda: False),
+    "RemoteHost": ("s", lambda: ""),
+    "RemoteUser": ("s", lambda: ""),
+    "Service": ("s", lambda: "droidnux"),
+    "Desktop": ("s", lambda: "KDE"),
+    "Scope": ("s", lambda: ""),
+    "Leader": ("u", lambda: os.getppid()),
+    "Audit": ("u", lambda: 0),
+    "Type": ("s", lambda: "wayland"),
+    "Class": ("s", lambda: "user"),
+    "Active": ("b", lambda: True),
+    "State": ("s", lambda: "active"),
+    "IdleHint": ("b", lambda: False),
+    "IdleSinceHint": ("t", lambda: 0),
+    "IdleSinceHintMonotonic": ("t", lambda: 0),
+    "CanIdle": ("b", lambda: True),
+    "CanLock": ("b", lambda: True),
+    "LockedHint": ("b", lambda: locked),
+}
+SEAT_PROPS = {
+    "Id": ("s", lambda: "seat0"),
+    "ActiveSession": ("(so)", lambda: (SESSION_ID, SESSION)),
+    "CanMultiSession": ("b", lambda: False),
+    "CanTTY": ("b", lambda: False),
+    "CanGraphical": ("b", lambda: True),
+    "Sessions": ("a(so)", lambda: [(SESSION_ID, SESSION)]),
+    "IdleHint": ("b", lambda: False),
+    "IdleSinceHint": ("t", lambda: 0),
+    "IdleSinceHintMonotonic": ("t", lambda: 0),
+}
+USER_PROPS = {
+    "UID": ("u", lambda: UID),
+    "GID": ("u", lambda: os.getgid()),
+    "Name": ("s", lambda: USER),
+    "Timestamp": ("t", lambda: STARTED),
+    "TimestampMonotonic": ("t", lambda: STARTED_MONOTONIC),
+    "RuntimePath": ("s", lambda: os.environ.get("XDG_RUNTIME_DIR", "")),
+    "Service": ("s", lambda: ""),
+    "Slice": ("s", lambda: ""),
+    "Display": ("(so)", lambda: (SESSION_ID, SESSION)),
+    "State": ("s", lambda: "active"),
+    "Sessions": ("a(so)", lambda: [(SESSION_ID, SESSION)]),
+    "IdleHint": ("b", lambda: False),
+    "IdleSinceHint": ("t", lambda: 0),
+    "IdleSinceHintMonotonic": ("t", lambda: 0),
+    "Linger": ("b", lambda: False),
+}
+TIMEDATE_PROPS = {
+    "Timezone": ("s", lambda: read("/etc/timezone") or "UTC"),
+    "LocalRTC": ("b", lambda: False),
+    "CanNTP": ("b", lambda: False),
+    "NTP": ("b", lambda: True),
+    "NTPSynchronized": ("b", lambda: True),
+    "TimeUSec": ("t", now_usec),
+    "RTCTimeUSec": ("t", now_usec),
+}
+HOSTNAME_PROPS = {
+    "Hostname": ("s", platform.node),
+    "StaticHostname": ("s", lambda: read("/etc/hostname")),
+    "PrettyHostname": ("s", lambda: ""),
+    "DefaultHostname": ("s", lambda: "droidnux"),
+    "HostnameSource": ("s", lambda: "static"),
+    "IconName": ("s", lambda: "computer-tablet"),
+    "Chassis": ("s", lambda: "tablet"),
+    "Deployment": ("s", lambda: ""),
+    "Location": ("s", lambda: ""),
+    "KernelName": ("s", platform.system),
+    "KernelRelease": ("s", platform.release),
+    "KernelVersion": ("s", lambda: platform.uname().version),
+    "OperatingSystemPrettyName": ("s", lambda: os_release("PRETTY_NAME")),
+    "OperatingSystemCPEName": ("s", lambda: os_release("CPE_NAME")),
+    "OperatingSystemHomeURL": ("s", lambda: os_release("HOME_URL")),
+    "HardwareVendor": ("s", lambda: ""),
+    "HardwareModel": ("s", lambda: ""),
+}
+
+# hostnamectl asks systemd for these too, and gives up without them. Nothing else of systemd's
+# manager: its methods are unknown, as from a manager that has none of them.
+SYSTEMD_PROPS = {
+    "Virtualization": ("s", lambda: ""),
+    "Architecture": ("s", lambda: "arm64"),
+}
+
+CAN = ("CanPowerOff CanReboot CanHalt CanSuspend CanHibernate CanHybridSleep CanSuspendThenHibernate "
+       "CanRebootToFirmwareSetup CanRebootToBootLoaderMenu").split()
+SLEEP = "Suspend Hibernate HybridSleep SuspendThenHibernate".split()
+NODE = Gio.DBusNodeInfo.new_for_xml("<node>%s</node>" % "".join([
+    interface("org.freedesktop.login1.Manager",
+              "GetSession(s)o GetSessionByPID(u)o GetSeat(s)o GetUser(u)o GetUserByPID(u)o "
+              "ListSessions()a(susso) ListSeats()a(so) ListUsers()a(uso) ListInhibitors()a(ssssuu) "
+              "Inhibit(ssss)h PowerOff(b) Reboot(b) Halt(b) " + " ".join(s + "(b)" for s in SLEEP) + " "
+              + " ".join(c + "()s" for c in CAN) + " "
+              "LockSession(s) UnlockSession(s) LockSessions() UnlockSessions() ActivateSession(s) "
+              "TerminateSession(s) TerminateUser(u)",
+              "PrepareForShutdown(b) PrepareForSleep(b) SessionNew(so) SessionRemoved(so) "
+              "UserNew(uo) UserRemoved(uo) SeatNew(so) SeatRemoved(so)", MANAGER_PROPS),
+    interface("org.freedesktop.login1.Session",
+              "Terminate() Activate() Lock() Unlock() SetIdleHint(b) SetLockedHint(b) Kill(si) "
+              "TakeControl(b) ReleaseControl() SetType(s) SetDisplay(s) SetTTY(h) SetBrightness(ssu)",
+              "Lock Unlock", SESSION_PROPS),
+    interface("org.freedesktop.login1.Seat", "SwitchTo(u) ActivateSession(s)", "", SEAT_PROPS),
+    interface("org.freedesktop.login1.User", "Terminate() Kill(i)", "", USER_PROPS),
+    interface("org.freedesktop.timedate1",
+              "SetTime(xbb) SetTimezone(sb) SetLocalRTC(bbb) SetNTP(bb) ListTimezones()as", "", TIMEDATE_PROPS),
+    interface("org.freedesktop.hostname1",
+              "SetHostname(sb) SetStaticHostname(sb) SetPrettyHostname(sb) SetIconName(sb) SetChassis(sb) "
+              "SetDeployment(sb) SetLocation(sb) Describe()s", "", HOSTNAME_PROPS),
+    interface("org.freedesktop.systemd1.Manager", "", "", SYSTEMD_PROPS),
+]))
+MANAGER, SESSION_IFACE, SEAT_IFACE, USER_IFACE, TIMEDATE, HOSTNAME, SYSTEMD = NODE.interfaces
+PROPS = {MANAGER.name: MANAGER_PROPS, SESSION_IFACE.name: SESSION_PROPS, SEAT_IFACE.name: SEAT_PROPS,
+         USER_IFACE.name: USER_PROPS, TIMEDATE.name: TIMEDATE_PROPS, HOSTNAME.name: HOSTNAME_PROPS,
+         SYSTEMD.name: SYSTEMD_PROPS}
+
+bus = Gio.bus_get_sync(Gio.BusType.SYSTEM)
+
+
+def changed(path, iface, *names):
+    props = PROPS[iface]
+    bus.emit_signal(None, path, "org.freedesktop.DBus.Properties", "PropertiesChanged", GLib.Variant(
+        "(sa{sv}as)", (iface, {n: GLib.Variant(props[n][0], props[n][1]()) for n in names}, [])))
+
+
+def write_awake():
+    global awake_written
+    awake = screen_wanted or any("idle" in i[0].split(":") for i in inhibitors.values())
+    if awake == awake_written:
+        return
+    awake_written = awake
+    try:
+        with open("@AWAKE_FILE@.new", "w") as f:
+            f.write("1\n" if awake else "0\n")
+        os.replace("@AWAKE_FILE@.new", "@AWAKE_FILE@")
+    except OSError as e:
+        print("logind: cannot write @AWAKE_FILE@: %s" % e, flush=True)
+
+
+def inhibit(invocation, what, who, why, mode):
+    if mode not in ("block", "delay", "block-weak"):
+        invocation.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs", "Invalid mode " + mode)
+        return
+    keep, give = os.pipe2(os.O_CLOEXEC)
+    sender = invocation.get_sender()
+    pid = uid = 0
+    try:
+        creds = bus.call_sync("org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                              "GetConnectionUnixProcessID", GLib.Variant("(s)", (sender,)), None,
+                              Gio.DBusCallFlags.NONE, -1, None)
+        pid = creds.unpack()[0]
+        uid = UID
+    except GLib.Error:
+        pass
+    inhibitors[keep] = (what, who, why, "block" if mode == "block-weak" else mode, uid, pid)
+    fds = Gio.UnixFDList.new()
+    fds.append(give)
+    os.close(give)
+    invocation.return_value_with_unix_fd_list(GLib.Variant("(h)", (0,)), fds)
+    GLib.unix_fd_add_full(GLib.PRIORITY_DEFAULT, keep, GLib.IOCondition.HUP | GLib.IOCondition.ERR, released)
+    changed(BASE, MANAGER.name, "BlockInhibited", "DelayInhibited")
+    write_awake()
+
+
+def released(fd, condition):
+    inhibitors.pop(fd, None)
+    os.close(fd)
+    changed(BASE, MANAGER.name, "BlockInhibited", "DelayInhibited")
+    write_awake()
+    return False
+
+
+def leave(marker):
+    bus.emit_signal(None, BASE, MANAGER.name, "PrepareForShutdown", GLib.Variant("(b)", (True,)))
+    # The app ends (or restarts) the session when it reads this.
+    print(marker, flush=True)
+
+
+def lock(lock_it):
+    bus.emit_signal(None, SESSION, SESSION_IFACE.name, "Lock" if lock_it else "Unlock", None)
+
+
+def method_call(connection, sender, path, iface, method, parameters, invocation):
+    global locked
+    args = parameters.unpack()
+    reply = None
+    if iface == MANAGER.name:
+        if method in ("GetSession", "GetSessionByPID"):
+            if method == "GetSession" and args[0] not in (SESSION_ID, "auto", "self", ""):
+                invocation.return_dbus_error("org.freedesktop.login1.NoSuchSession", "No session " + args[0])
+                return
+            reply = (SESSION,)
+        elif method == "GetSeat":
+            reply = (SEAT,)
+        elif method in ("GetUser", "GetUserByPID"):
+            reply = (USER_PATH,)
+        elif method == "ListSessions":
+            reply = ([(SESSION_ID, UID, USER, "seat0", SESSION)],)
+        elif method == "ListSeats":
+            reply = ([("seat0", SEAT)],)
+        elif method == "ListUsers":
+            reply = ([(UID, USER, USER_PATH)],)
+        elif method == "ListInhibitors":
+            reply = (list(inhibitors.values()),)
+        elif method == "Inhibit":
+            inhibit(invocation, *args)
+            return
+        elif method == "PowerOff" or method == "Halt":
+            leave("@SESSION_END_MARKER@")
+        elif method == "Reboot":
+            leave("@SESSION_RESTART_MARKER@")
+        elif method in CAN:
+            reply = ("yes" if method in ("CanPowerOff", "CanReboot", "CanHalt") else "na",)
+        elif method in ("LockSession", "LockSessions", "UnlockSession", "UnlockSessions"):
+            lock(method.startswith("Lock"))
+        elif method in SLEEP or method.startswith("Terminate"):
+            invocation.return_dbus_error(NOT_SUPPORTED, "Android manages this")
+            return
+    elif iface == SESSION_IFACE.name:
+        if method in ("Lock", "Unlock"):
+            lock(method == "Lock")
+        elif method == "SetLockedHint" and args[0] != locked:
+            locked = args[0]
+            changed(SESSION, SESSION_IFACE.name, "LockedHint")
+        elif method in ("Terminate", "Kill"):
+            invocation.return_dbus_error(NOT_SUPPORTED, "Use Log Out")
+            return
+    elif iface == TIMEDATE.name:
+        if method == "ListTimezones":
+            reply = (zones(),)
+        else:
+            invocation.return_dbus_error(NOT_SUPPORTED, ANDROID)
+            return
+    elif iface == HOSTNAME.name:
+        if method == "Describe":
+            reply = (json.dumps({n: p[1]() for n, p in HOSTNAME_PROPS.items()}),)
+        else:
+            invocation.return_dbus_error(NOT_SUPPORTED, "The host name is set in /etc/hostname")
+            return
+    invocation.return_value(GLib.Variant("(%s)" % "".join(
+        a.signature for a in NODE.lookup_interface(iface).lookup_method(method).out_args), reply)
+        if reply is not None else None)
+
+
+def get_property(connection, sender, path, iface, name):
+    signature, value = PROPS[iface][name]
+    return GLib.Variant(signature, value())
+
+
+OBJECTS = {
+    BASE: [MANAGER], SESSION: [SESSION_IFACE], BASE + "/session/auto": [SESSION_IFACE],
+    BASE + "/session/self": [SESSION_IFACE], SEAT: [SEAT_IFACE], BASE + "/seat/auto": [SEAT_IFACE],
+    BASE + "/seat/self": [SEAT_IFACE], USER_PATH: [USER_IFACE], BASE + "/user/self": [USER_IFACE],
+    "/org/freedesktop/timedate1": [TIMEDATE], "/org/freedesktop/hostname1": [HOSTNAME],
+    "/org/freedesktop/systemd1": [SYSTEMD],
+}
+for path, ifaces in OBJECTS.items():
+    for iface in ifaces:
+        bus.register_object(path, iface, method_call, get_property, None)
+
+
+# systemd's tools (loginctl, hostnamectl, timedatectl) ask GetAll("") for every interface at
+# once, which GDBus refuses: answered here, before it, from a filter (its own thread).
+def all_properties(connection, message, incoming):
+    if (not incoming or message.get_message_type() != Gio.DBusMessageType.METHOD_CALL
+            or message.get_interface() != "org.freedesktop.DBus.Properties" or message.get_member() != "GetAll"
+            or message.get_path() not in OBJECTS or message.get_signature() != "s"
+            or message.get_body().unpack()[0] != ""):
+        return message
+    props = {name: GLib.Variant(signature, value())
+             for iface in OBJECTS[message.get_path()] for name, (signature, value) in PROPS[iface.name].items()}
+    reply = message.new_method_reply()
+    reply.set_body(GLib.Variant("(a{sv})", (props,)))
+    connection.send_message(reply, Gio.DBusSendMessageFlags.NONE)
+    return None
+
+
+bus.add_filter(all_properties)
+for name in ("org.freedesktop.login1", "org.freedesktop.timedate1", "org.freedesktop.hostname1",
+             "org.freedesktop.systemd1"):
+    Gio.bus_own_name_on_connection(bus, name, Gio.BusNameOwnerFlags.NONE, None, None)
+
+
+# Apps keep the screen on through powerdevil (org.freedesktop.ScreenSaver, the portal's Inhibit).
+def screen_policy(*_):
+    def done(source, result):
+        global screen_wanted
+        try:
+            screen_wanted = source.call_finish(result).unpack()[0]
+        except GLib.Error:
+            screen_wanted = False
+        write_awake()
+    session_bus.call("org.kde.Solid.PowerManagement.PolicyAgent", "/org/kde/Solid/PowerManagement/PolicyAgent",
+                     "org.kde.Solid.PowerManagement.PolicyAgent", "HasInhibition",
+                     GLib.Variant("(u)", (SCREEN_POLICY,)), None, Gio.DBusCallFlags.NONE, -1, None, done)
+
+
+def policy_agent_gone(*_):
+    global screen_wanted
+    screen_wanted = False
+    write_awake()
+
+
+session_bus = Gio.bus_get_sync(Gio.BusType.SESSION)
+session_bus.signal_subscribe(None, "org.kde.Solid.PowerManagement.PolicyAgent", "InhibitionsChanged",
+                             "/org/kde/Solid/PowerManagement/PolicyAgent", None, Gio.DBusSignalFlags.NONE,
+                             screen_policy)
+Gio.bus_watch_name_on_connection(session_bus, "org.kde.Solid.PowerManagement.PolicyAgent",
+                                 Gio.BusNameWatcherFlags.NONE, screen_policy, policy_agent_gone)
+write_awake()
+GLib.MainLoop().run()

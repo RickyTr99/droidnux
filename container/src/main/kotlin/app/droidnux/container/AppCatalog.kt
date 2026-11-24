@@ -42,7 +42,7 @@ object AppCatalog {
 
     /** The screenshot width the store wants, and how many of an app it keeps. */
     private const val SCREENSHOT_WIDTH = 752
-    private const val MAX_SCREENSHOTS = 6
+    internal const val MAX_SCREENSHOTS = 6
 
     /** Stands for a line break inside an index field. */
     private const val NEWLINE = '\u001E'
@@ -52,15 +52,22 @@ object AppCatalog {
      * missing, older than a week or in another language. Blocking. An old index is
      * kept when the download fails; with none, throws.
      */
-    fun load(dir: File, language: String): List<App> {
-        val index = File(dir, "catalog.tsv")
+    fun load(dir: File, language: String): List<App> = loadIndex(File(dir, "catalog.tsv"), language) {
+        AppStore.open(COMPONENTS_URL).use { parse(XZInputStream(it.buffered()), language) }
+    }
+
+    /**
+     * The apps of [index] when it is in [language] and under a week old; else what [fetch] reads
+     * (a download), written as the new index. An old index is kept when [fetch] fails; with none, throws.
+     */
+    internal fun loadIndex(index: File, language: String, fetch: () -> List<App>): List<App> {
         val header = "$FORMAT\t$language"
         val current = index.isFile && index.bufferedReader().use { it.readLine() } == header
         if (!current || System.currentTimeMillis() - index.lastModified() > MAX_AGE_MS) {
             try {
-                val apps = AppStore.open(COMPONENTS_URL).use { parse(XZInputStream(it.buffered()), language) }
-                dir.mkdirs()
-                val temp = File(dir, "catalog.tsv.part")
+                val apps = fetch()
+                index.parentFile?.mkdirs()
+                val temp = File(index.path + ".part")
                 temp.bufferedWriter().use { out ->
                     out.write(header)
                     out.newLine()
@@ -75,7 +82,7 @@ object AppCatalog {
                         out.newLine()
                     }
                 }
-                if (!temp.renameTo(index)) throw IOException("cannot write $index")
+                java.nio.file.Files.move(temp.toPath(), index.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
                 return apps
             } catch (e: IOException) {
                 if (!current) throw e
@@ -213,12 +220,6 @@ object AppCatalog {
             return scalar(parts.joinToString(" "))
         }
 
-        private fun closer(width: Int, than: Int): Boolean {
-            val d = kotlin.math.abs(width - SCREENSHOT_WIDTH)
-            val e = kotlin.math.abs(than - SCREENSHOT_WIDTH)
-            return d < e || (d == e && width > than)
-        }
-
         fun app(language: String): App? {
             if (type != "desktop-application" || pkg.isEmpty() || extends || id.isEmpty()) return null
             val name = pick(names, language) ?: return null
@@ -230,20 +231,34 @@ object AppCatalog {
             )
         }
 
-        private fun pick(texts: Map<String, String>, language: String): String? =
-            texts[language] ?: texts["C"] ?: texts["en"]
-
-        private fun clean(text: String) = text.replace('\t', ' ').replace('\n', ' ').replace(NEWLINE, ' ').trim()
     }
+
+    /** Whether a thumbnail [width] is closer than [than] to the width the store wants: the bigger one on a tie. */
+    internal fun closer(width: Int, than: Int): Boolean {
+        val d = kotlin.math.abs(width - SCREENSHOT_WIDTH)
+        val e = kotlin.math.abs(than - SCREENSHOT_WIDTH)
+        return d < e || (d == e && width > than)
+    }
+
+    /** The text in [language], else the untranslated one. */
+    internal fun pick(texts: Map<String, String>, language: String): String? =
+        texts[language] ?: texts["C"] ?: texts["en"]
+
+    /** [text] as one field of the index. */
+    internal fun clean(text: String) = text.replace('\t', ' ').replace('\n', ' ').replace(NEWLINE, ' ').trim()
+
+    private val BLOCK_TAGS = Regex("</?(p|ul|ol)>|</li>")
+    private val TAGS = Regex("<[^>]*>")
+    private val SPACES = Regex("\\s+")
 
     /** AppStream's description markup (p, ul, ol, li, em, code) as plain text: a line per paragraph or item. */
     internal fun plain(html: String): String = html
-        .replace(Regex("<li>"), "\n• ")
-        .replace(Regex("</?(p|ul|ol)>|</li>"), "\n")
-        .replace(Regex("<[^>]*>"), "")
+        .replace("<li>", "\n• ")
+        .replace(BLOCK_TAGS, "\n")
+        .replace(TAGS, "")
         .let(::unescape)
         .lineSequence()
-        .map { it.replace(Regex("\\s+"), " ").replace('\t', ' ').replace(NEWLINE, ' ').trim() }
+        .map { it.replace(SPACES, " ").replace(NEWLINE, ' ').trim() }
         .filter { it.isNotEmpty() && it != "•" }
         .joinToString("\n")
 

@@ -1,0 +1,103 @@
+turnip/kgsl: highest GPU clock while the user interacts
+
+KGSL's governor keeps a nested desktop's frames at the lowest clock: the
+GPU is about 60% busy there, too little to ramp up, and frames miss the
+120 Hz vsync (a desktop drag ran at 74 fps instead of 107). DroidNux's
+compositor moves the mtime of /tmp/.droidnux-gpu-boost a second past the
+user's latest input; until then each queue sets KGSL's per-context power
+constraint to the highest level, and drops it afterwards. Boosting all the
+time cost 46% more power on a page animating by itself.
+
+--- a/src/freedreno/vulkan/tu_knl_kgsl.cc
++++ b/src/freedreno/vulkan/tu_knl_kgsl.cc
+@@ -10,6 +10,7 @@
+ #include <stdint.h>
+ #include <sys/ioctl.h>
+ #include <sys/mman.h>
++#include <sys/stat.h>
+ 
+ #define __user
+ #include "ion/ion.h"
+@@ -53,7 +54,8 @@
+    struct kgsl_drawctxt_create req = {
+       .flags = KGSL_CONTEXT_SAVE_GMEM |
+               KGSL_CONTEXT_NO_GMEM_ALLOC |
+-              KGSL_CONTEXT_PREAMBLE,
++              KGSL_CONTEXT_PREAMBLE |
++              KGSL_CONTEXT_PWR_CONSTRAINT,
+    };
+ 
+    int ret = safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_CREATE, &req);
+@@ -75,6 +77,50 @@
+    safe_ioctl(dev->physical_device->local_fd, IOCTL_KGSL_DRAWCTXT_DESTROY, &req);
+ }
+ 
++/* DroidNux: the app moves this file's mtime a second past the user's latest
++ * input, and until then the queue asks KGSL for the GPU's highest clock.
++ * KGSL's governor alone keeps a desktop's frames at the lowest one (the GPU
++ * is about 60% busy there, too little to ramp up) and they miss the vsync;
++ * boosting outside input costs a lot of power for animations nobody drives.
++ */
++#define KGSL_BOOST_FILE "/tmp/.droidnux-gpu-boost"
++
++static void
++kgsl_queue_update_boost(struct tu_queue *queue)
++{
++   struct timespec now;
++   clock_gettime(CLOCK_REALTIME, &now);
++   int64_t now_ns = timespec_to_nsec(&now);
++   /* A stat per submit would be wasted work. */
++   if (now_ns - queue->kgsl_boost_checked < 10000000)
++      return;
++   queue->kgsl_boost_checked = now_ns;
++
++   struct stat st;
++   bool boost = stat(KGSL_BOOST_FILE, &st) == 0 &&
++                (int64_t) timespec_to_nsec(&st.st_mtim) > now_ns;
++   if (boost == queue->kgsl_boosted)
++      return;
++   queue->kgsl_boosted = boost;
++
++   struct kgsl_device_constraint_pwrlevel level = {
++      .level = KGSL_CONSTRAINT_PWR_MAX,
++   };
++   struct kgsl_device_constraint constraint = {
++      .type = boost ? KGSL_CONSTRAINT_PWRLEVEL : KGSL_CONSTRAINT_NONE,
++      .context_id = queue->msm_queue_id,
++      .data = &level,
++      .size = sizeof(level),
++   };
++   struct kgsl_device_getproperty prop = {
++      .type = KGSL_PROP_PWR_CONSTRAINT,
++      .value = &constraint,
++      .sizebytes = sizeof(constraint),
++   };
++   safe_ioctl(queue->device->physical_device->local_fd,
++              IOCTL_KGSL_SETPROPERTY, &prop);
++}
++
+ static void kgsl_bo_finish(struct tu_device *dev, struct tu_bo *bo);
+ 
+ static VkResult
+@@ -1559,6 +1605,8 @@
+    uint32_t timestamp = 0;
+    uint64_t gpu_offset = 0;
+ 
++   kgsl_queue_update_boost(queue);
++
+    if (submit->bind_cmds.size == 0) {
+       struct kgsl_gpu_command req = {
+          .flags = KGSL_CMDBATCH_SUBMIT_IB_LIST,
+--- a/src/freedreno/vulkan/tu_queue.h
++++ b/src/freedreno/vulkan/tu_queue.h
+@@ -36,6 +36,10 @@
+    unsigned render_pass_idx;
+ 
+    int fence;           /* timestamp/fence of the last queue submission */
++
++   /* kgsl: GPU boost while the user interacts (kgsl_queue_update_boost) */
++   int64_t kgsl_boost_checked;
++   bool kgsl_boosted;
+ };
+ VK_DEFINE_HANDLE_CASTS(tu_queue, vk.base, VkQueue, VK_OBJECT_TYPE_QUEUE)
+ 

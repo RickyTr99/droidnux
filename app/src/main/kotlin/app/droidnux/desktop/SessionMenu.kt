@@ -33,7 +33,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import app.droidnux.R
-import java.io.File
 import java.util.Locale
 import java.util.concurrent.Executors
 import kotlin.math.abs
@@ -462,7 +461,7 @@ class SessionMenu(
     private val sampler: Runnable = object : Runnable {
         override fun run() {
             statsThread.execute {
-                val ticks = sessionTicks()
+                val ticks = SessionPause.cpuTicks(context)
                 val at = android.os.SystemClock.elapsedRealtime()
                 val memoryInfo = ActivityManager.MemoryInfo().also { context.getSystemService(ActivityManager::class.java).getMemoryInfo(it) }
                 val level = context.getSystemService(BatteryManager::class.java).getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
@@ -483,15 +482,6 @@ class SessionMenu(
             }
             handler.postDelayed(this, STATS_MS)
         }
-    }
-
-    /** CPU time of the guest's processes and of this one (the display server), in clock ticks. */
-    private fun sessionTicks(): Long = (SessionPause.guestPids(context) + android.os.Process.myPid()).sumOf { pid ->
-        runCatching {
-            // After the name: state is the first field, utime and stime the 12th and 13th.
-            val fields = File("/proc/$pid/stat").readText().substringAfterLast(')').trim().split(' ')
-            fields[11].toLong() + fields[12].toLong()
-        }.getOrDefault(0L)
     }
 
     /** A gauge in the bar: Material 3's circular indicator around [icon], its value and [name] beside it. */

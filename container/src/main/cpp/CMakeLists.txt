@@ -19,6 +19,7 @@ add_executable(burrow
     burrow/src/elf.c
     burrow/src/l2s.c
     burrow/src/main.c
+    burrow/src/netlink.c
     burrow/src/path.c
     burrow/src/procfs.c
     burrow/src/sysv.c

@@ -44,6 +44,8 @@ struct dnx_wl_surface {
 
     /* wl_surface.set_buffer_scale. */
     int32_t pending_scale, scale;
+    /* wl_surface.set_buffer_transform (wl_output_transform). */
+    int32_t pending_transform, transform;
 
     /* Cursor role: hotspot set by wl_pointer.set_cursor. */
     int32_t hotspot_x, hotspot_y;
@@ -97,8 +99,6 @@ void dnx_wl_nested_set_clipboard_callback(void (*callback)(const char* utf8));
 
 /* -- surface.c -- */
 void dnx_wl_surface_init(struct wl_display* display);
-/* The surface shown as the desktop, or NULL. */
-struct dnx_wl_surface* dnx_wl_shown_surface(void);
 /* Vsync: frame callbacks done, damage the presenter could not take retried. */
 void dnx_wl_surface_on_frame(void);
 /* Android latched the last frame: a held one goes now. */
